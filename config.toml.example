@@ -1,0 +1,126 @@
+# ==============================================================================
+# Project UndineD - Configuration File (Go Daemon)
+# ==============================================================================
+
+[general]
+# Web UI binding
+host = "127.0.0.1"
+port = 8080
+debug = false
+
+# Storage paths
+data_dir = "~/.local/share/undined"
+maildir_path = "~/.local/share/undined/maildir"
+db_path = "~/.local/share/undined/undined.db"
+
+# External Editor command (e.g. terminal editor or GUI editor)
+# {file} is replaced with temp .eml path, {line} with target cursor line.
+# Examples:
+#   editor_cmd = "foot -e nvim +{line} {file}"
+#   editor_cmd = "alacritty -e vim +{line} {file}"
+editor_cmd = "foot -e nvim +{line} {file}"
+
+# Whether to use external editor for Reply (default: false, opens built-in internal editor)
+# If true, clicking Reply or pressing 'r' launches editor_cmd / terminal_cmd.
+reply_use_external_editor = false
+
+# Local kernel git tree for `git am` operations
+kernel_git_dir = "~/linux"
+
+# Logging configuration (captures application and protocol logs: IMAP, SMTP)
+log_file = "~/.cache/undined/undined.log"
+log_level = "DEBUG"
+
+# ==============================================================================
+# IMAP Configuration (IMAP Backend)
+# ==============================================================================
+[imap]
+host = "imap.example.com"
+port = 993
+use_ssl = true
+verify_cert = true
+username = "mhiramat@kernel.org"
+
+# Password options:
+# 1. secret-tool (Recommended on Linux desktops / GNOME Keyring):
+password_cmd = "secret-tool lookup service undined-imap user mhiramat@kernel.org"
+# 2. pass (Unix standard password manager):
+# password_cmd = "pass show mail/imap-undined"
+# 3. Plaintext (Not recommended for production):
+# password = "xxxx-xxxx-xxxx-xxxx"
+
+# Selective Sync: Only monitor these specific folders/labels
+# Massive LKML folders are strictly ignored to maintain zero sync latency.
+# Example: sync_folders = ["Kernel", "Reviews"]
+sync_folders = []
+
+# Polling interval in seconds (if IDLE is not maintained)
+poll_interval_seconds = 60
+
+# ==============================================================================
+# SMTP Configuration (SMTP Backend)
+# ==============================================================================
+[smtp]
+host = "smtp.example.com"
+port = 587
+use_ssl = false
+use_starttls = true
+verify_cert = true
+
+username = "mhiramat@kernel.org"
+password_cmd = "secret-tool lookup service undined-smtp user mhiramat@kernel.org"
+
+# Identity headers
+from_name = "Masami Hiramatsu"
+from_email = "mhiramat@kernel.org"
+signature_file = "~/.signature"
+
+# Strict Plaintext Enforcement:
+# - No HTML, No format=flowed, No word-wrap
+content_type = "text/plain; charset=utf-8"
+transfer_encoding = "8bit"
+
+# ==============================================================================
+# b4 & LKML Integration
+# ==============================================================================
+[lkml]
+b4_cmd = "b4"
+lore_url = "https://lore.kernel.org/all"
+auto_hydrate_missing_parents = false
+
+# ==============================================================================
+# Model Context Protocol (MCP) Server
+# ==============================================================================
+[mcp]
+enabled = true
+# Transport mode: "stdio" (for local agents like Antigravity) or "sse"
+transport = "stdio"
+sse_port = 8081
+
+# ==============================================================================
+# AI Review Runner
+# ==============================================================================
+[review]
+# Command to execute for patch review (executed asynchronously in background).
+command = "agy --print"
+# prompt_file = "~/.config/undined/review_prompt.txt"
+
+# ==============================================================================
+# Patchwork Integration (patchwork.kernel.org)
+# ==============================================================================
+[patchwork]
+enabled = true
+url = "https://patchwork.kernel.org"
+api_version = "1.4"
+username = "mhiramat"
+email = "mhiramat@kernel.org"
+# token_cmd = "secret-tool lookup service undined-patchwork user mhiramat@kernel.org"
+preferred_archives = ["linux-trace"]
+timeout_seconds = 10.0
+
+# ==============================================================================
+# Message Color Tags (IMAP Custom Flags / Thunderbird Compatible)
+# ==============================================================================
+# Built-in defaults:
+#   $cl_1..$cl_10: Red, Blue, Green, Gray, Purple, Light green, Orange, Pink, Light blue, Yellow
+#   $label1..$label5: Important, Work, Personal, To Do, Later
