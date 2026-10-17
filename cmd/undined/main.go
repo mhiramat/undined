@@ -59,6 +59,28 @@ func findFrontendDir(extraCandidates ...string) string {
 	return ""
 }
 
+func setupLogging(cfg *config.Config, mcpStdio bool) *os.File {
+	if cfg == nil || cfg.General.LogFile == "" {
+		return nil
+	}
+	logFilePath := cfg.General.LogFile
+	if err := os.MkdirAll(filepath.Dir(logFilePath), 0755); err != nil {
+		log.Printf("Warning: failed to create log directory for %s: %v", logFilePath, err)
+		return nil
+	}
+	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Printf("Warning: failed to open log file %s: %v", logFilePath, err)
+		return nil
+	}
+	if mcpStdio {
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
+	}
+	return f
+}
+
 func main() {
 	var configPath string
 	var host string
@@ -106,7 +128,19 @@ func main() {
 		cfg.General.LogLevel = logLevel
 	}
 
-	// 2. Initialize common storage and components
+	// 2. Set up logging to file and display log file path immediately
+	logFileHandle := setupLogging(cfg, mcpStdio)
+	if logFileHandle != nil {
+		defer logFileHandle.Close()
+	}
+
+	if mcpStdio {
+		fmt.Fprintf(os.Stderr, "UndineD MCP running. Log file: %s\n", cfg.General.LogFile)
+	} else {
+		log.Printf("UndineD log file: %s", cfg.General.LogFile)
+	}
+
+	// 3. Initialize common storage and components
 	store := maildir.NewMaildirStore(cfg.General.MaildirPath)
 	db, err := database.NewDatabase(cfg.General.DBPath)
 	if err != nil {
@@ -158,6 +192,7 @@ func main() {
 	fmt.Printf("🤖 MCP Server tool:   undined --mcp-stdio\n")
 	fmt.Printf("🔑 Auth Token file:   %s\n", sec.TokenPath)
 	fmt.Printf("🔑 Authentication Token: %s\n", sec.Token)
+	fmt.Printf("📝 Log file:          %s\n", cfg.General.LogFile)
 	fmt.Println("=================================================================")
 	fmt.Println()
 

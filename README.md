@@ -192,6 +192,7 @@ On startup, UndineD generates (or loads) a secure 256-bit token with POSIX `0600
 🤖 MCP Server tool:   undined --mcp-stdio
 🔑 Auth Token file:   ~/.local/share/undined/auth_token
 🔑 Authentication Token: 404dfcf8f602b9e672f23fc8e64c20f1...
+📝 Log file:          ~/.cache/undined/undined.log
 =================================================================
 ```
 
