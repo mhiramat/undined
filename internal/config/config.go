@@ -182,6 +182,89 @@ type PatchworkConfig struct {
 	TimeoutSeconds    float64  `toml:"timeout_seconds" json:"timeout_seconds"`
 }
 
+// GetToken returns Token, or executes TokenCmd if Token is empty.
+func (p *PatchworkConfig) GetToken() string {
+	if p.Token != "" {
+		return p.Token
+	}
+	if p.TokenCmd != "" {
+		out, err := ExecuteSecretCommand(p.TokenCmd)
+		if err == nil {
+			return out
+		}
+	}
+	return ""
+}
+
+// GetMyUsername returns configured username or user from email.
+func (p *PatchworkConfig) GetMyUsername(fallbackEmail string) string {
+	if p.Username != "" {
+		return p.Username
+	}
+	e := p.GetMyEmail(fallbackEmail)
+	if idx := strings.Index(e, "@"); idx > 0 {
+		return e[:idx]
+	}
+	return e
+}
+
+// GetMyEmail returns configured email or fallbackEmail.
+func (p *PatchworkConfig) GetMyEmail(fallbackEmail string) string {
+	if p.Email != "" {
+		return p.Email
+	}
+	return fallbackEmail
+}
+
+// IsMe checks if a delegate username or email corresponds to the current user.
+func (p *PatchworkConfig) IsMe(delegate any, fallbackEmail string) bool {
+	if delegate == nil {
+		return false
+	}
+	myUser := strings.ToLower(p.GetMyUsername(fallbackEmail))
+	myEmail := strings.ToLower(p.GetMyEmail(fallbackEmail))
+
+	var candidates []string
+	switch v := delegate.(type) {
+	case string:
+		candidates = append(candidates, strings.ToLower(v))
+	case map[string]any:
+		if u, ok := v["username"].(string); ok {
+			candidates = append(candidates, strings.ToLower(u))
+		}
+		if em, ok := v["email"].(string); ok {
+			candidates = append(candidates, strings.ToLower(em))
+		}
+	}
+
+	for _, d := range p.DelegateUsers {
+		candidates = append(candidates, strings.ToLower(d))
+	}
+
+	for _, c := range candidates {
+		if c != "" && (c == myUser || c == myEmail) {
+			return true
+		}
+	}
+	return false
+}
+
+// GetPreferredArchives returns preferred archive list or default project.
+func (p *PatchworkConfig) GetPreferredArchives() []string {
+	if len(p.PreferredArchives) > 0 {
+		return p.PreferredArchives
+	}
+	if p.DefaultProject != "" {
+		return []string{p.DefaultProject}
+	}
+	return nil
+}
+
+// GetTodoStates returns default patchwork states synced to TODO mailbox.
+func (p *PatchworkConfig) GetTodoStates() []string {
+	return []string{"new", "under-review"}
+}
+
 // Config represents the complete UndineD configuration tree.
 type Config struct {
 	General   GeneralConfig            `toml:"general" json:"general"`
