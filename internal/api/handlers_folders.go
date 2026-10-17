@@ -10,12 +10,28 @@ import (
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	editorCmd := s.Config.General.GetExternalEditorCmd()
+	var reviewPromptFile any
+	if s.Config.Review.PromptFile != "" {
+		reviewPromptFile = s.Config.Review.PromptFile
+	}
+
 	res := map[string]any{
 		"host":                      s.Config.General.Host,
 		"port":                      s.Config.General.Port,
 		"editor_cmd":                editorCmd,
 		"has_external_editor":       editorCmd != "",
 		"reply_use_external_editor": s.Config.General.ReplyUseExternalEditor,
+		"kernel_git_dir":            s.Config.General.KernelGitDir,
+		"from_name":                 s.Config.SMTP.FromName,
+		"from_email":                s.Config.SMTP.FromEmail,
+		"signature":                 s.Config.SMTP.EffectiveSignature(),
+		"patchwork_enabled":         s.Config.Patchwork.Enabled,
+		"patchwork_url":             s.Config.Patchwork.URL,
+		"patchwork_my_username":     s.Config.Patchwork.GetMyUsername(s.Config.SMTP.FromEmail),
+		"patchwork_delegate_users":  s.Config.Patchwork.GetDelegateUsers(),
+		"patchwork_can_update":      s.Config.Patchwork.GetToken() != "",
+		"review_cmd":                s.Config.Review.Command,
+		"review_prompt_file":        reviewPromptFile,
 		"tags":                      s.Config.Tags,
 		"patchwork": map[string]any{
 			"enabled":         s.Config.Patchwork.Enabled,
@@ -99,6 +115,12 @@ func (s *Server) handleGetFolderSyncStatus(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	folder, err := s.DB.GetFolderByID(folderID)
+	if err != nil || folder == nil {
+		http.Error(w, "Folder not found", http.StatusNotFound)
+		return
+	}
+
 	if s.IMAP == nil {
 		http.Error(w, "IMAP not configured", http.StatusInternalServerError)
 		return
@@ -114,6 +136,12 @@ func (s *Server) handleCancelFolderSync(w http.ResponseWriter, r *http.Request) 
 	folderID, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		http.Error(w, "Invalid folder ID", http.StatusBadRequest)
+		return
+	}
+
+	folder, err := s.DB.GetFolderByID(folderID)
+	if err != nil || folder == nil {
+		http.Error(w, "Folder not found", http.StatusNotFound)
 		return
 	}
 

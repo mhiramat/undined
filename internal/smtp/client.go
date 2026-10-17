@@ -269,7 +269,7 @@ func (c *Client) SendMessage(
 					_ = c.DB.SetMessageFilePath(orig.ID, newPath)
 				}
 			}
-			_ = c.DB.DiscardDraftComments(orig.MessageID)
+			_, _ = c.DB.DiscardDraftComments(orig.MessageID)
 		}
 	}
 

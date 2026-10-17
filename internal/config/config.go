@@ -272,6 +272,25 @@ func (p *PatchworkConfig) GetTodoStates() []string {
 	return []string{"new", "under-review"}
 }
 
+// GetDelegateUsers returns cleaned list of configured delegate usernames.
+func (p *PatchworkConfig) GetDelegateUsers() []string {
+	var res []string
+	seen := make(map[string]bool)
+	for _, u := range p.DelegateUsers {
+		for _, part := range strings.Split(u, ",") {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" && !seen[trimmed] {
+				seen[trimmed] = true
+				res = append(res, trimmed)
+			}
+		}
+	}
+	if res == nil {
+		return []string{}
+	}
+	return res
+}
+
 // Config represents the complete UndineD configuration tree.
 type Config struct {
 	General   GeneralConfig            `toml:"general" json:"general"`
