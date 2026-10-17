@@ -68,12 +68,15 @@ func (s *Server) handleB4Abort(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		TargetGitRepo string `json:"target_git_repo"`
-		BranchName    string `json:"branch_name"`
+		TargetGitRepo  string `json:"target_git_repo"`
+		BranchName     string `json:"branch_name"`
+		BaseCommit     string `json:"base_commit"`
+		OriginalBranch string `json:"original_branch"`
+		HeadBefore     string `json:"head_before"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	res, err := s.B4.AbortApply(body.TargetGitRepo, body.BranchName)
+	res, err := s.B4.AbortApply(body.TargetGitRepo, body.BranchName, body.BaseCommit, body.OriginalBranch, body.HeadBefore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

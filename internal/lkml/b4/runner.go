@@ -169,6 +169,8 @@ type ApplyResult struct {
 	Stderr         string   `json:"stderr"`
 	Branch         string   `json:"branch,omitempty"`
 	BaseCommit     string   `json:"base_commit,omitempty"`
+	OriginalBranch string   `json:"original_branch,omitempty"`
+	HeadBefore     string   `json:"head_before,omitempty"`
 	TargetGitRepo  string   `json:"target_git_repo"`
 	CommitID       string   `json:"commit_id,omitempty"`
 	ReviewCommitID string   `json:"review_commit_id,omitempty"`
@@ -201,6 +203,16 @@ func (b *B4Runner) ApplyPatch(
 		}, nil
 	}
 
+	// Capture original branch and HEAD before checkout/am
+	var originalBranch string
+	if out, err := exec.Command("git", "-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		originalBranch = strings.TrimSpace(string(out))
+	}
+	var headBefore string
+	if out, err := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD").Output(); err == nil {
+		headBefore = strings.TrimSpace(string(out))
+	}
+
 	// 1. Create and checkout branch if specified
 	var branchLogs []string
 	if strings.TrimSpace(branchName) != "" || strings.TrimSpace(baseCommit) != "" {
@@ -217,12 +229,15 @@ func (b *B4Runner) ApplyPatch(
 		branchLogs = append(branchLogs, string(out))
 		if err != nil {
 			return &ApplyResult{
-				Success:       false,
-				ExitCode:      1,
-				Stdout:        strings.Join(branchLogs, "\n"),
-				Stderr:        fmt.Sprintf("failed to checkout branch: %s", string(out)),
-				TargetGitRepo: repoPath,
-				Branch:        branchName,
+				Success:        false,
+				ExitCode:       1,
+				Stdout:         strings.Join(branchLogs, "\n"),
+				Stderr:         fmt.Sprintf("failed to checkout branch: %s", string(out)),
+				TargetGitRepo:  repoPath,
+				Branch:         branchName,
+				BaseCommit:     baseCommit,
+				OriginalBranch: originalBranch,
+				HeadBefore:     headBefore,
 			}, nil
 		}
 	}
@@ -243,18 +258,23 @@ func (b *B4Runner) ApplyPatch(
 
 	if err := b4Exec.Run(); err != nil {
 		return &ApplyResult{
-			Success:       false,
-			ExitCode:      1,
-			Stdout:        b4Out.String(),
-			Stderr:        b4Err.String(),
-			TargetGitRepo: repoPath,
+			Success:        false,
+			ExitCode:       1,
+			Stdout:         b4Out.String(),
+			Stderr:         b4Err.String(),
+			TargetGitRepo:  repoPath,
+			Branch:         branchName,
+			BaseCommit:     baseCommit,
+			OriginalBranch: originalBranch,
+			HeadBefore:     headBefore,
 		}, nil
 	}
 
-	// Capture HEAD before git am
-	headBefore := ""
-	if out, err := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD").Output(); err == nil {
-		headBefore = strings.TrimSpace(string(out))
+	// Capture HEAD before git am if not captured yet
+	if headBefore == "" {
+		if out, err := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD").Output(); err == nil {
+			headBefore = strings.TrimSpace(string(out))
+		}
 	}
 
 	// 3. Pipe into git am
@@ -272,13 +292,16 @@ func (b *B4Runner) ApplyPatch(
 		rebaseApply := filepath.Join(gitDir, "rebase-apply")
 		_, inProgress := os.Stat(rebaseApply)
 		return &ApplyResult{
-			Success:       false,
-			ExitCode:      1,
-			Stdout:        combinedStdout,
-			Stderr:        combinedStderr,
-			TargetGitRepo: repoPath,
-			Branch:        branchName,
-			AMInProgress:  inProgress == nil,
+			Success:        false,
+			ExitCode:       1,
+			Stdout:         combinedStdout,
+			Stderr:         combinedStderr,
+			TargetGitRepo:  repoPath,
+			Branch:         branchName,
+			BaseCommit:     baseCommit,
+			OriginalBranch: originalBranch,
+			HeadBefore:     headBefore,
+			AMInProgress:   inProgress == nil,
 		}, nil
 	}
 
@@ -312,6 +335,8 @@ func (b *B4Runner) ApplyPatch(
 		Stderr:         combinedStderr,
 		Branch:         branchName,
 		BaseCommit:     baseCommit,
+		OriginalBranch: originalBranch,
+		HeadBefore:     headBefore,
 		TargetGitRepo:  repoPath,
 		CommitID:       primaryCommit,
 		ReviewCommitID: primaryCommit,
@@ -326,25 +351,62 @@ type AbortResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
-// AbortApply runs git am --abort and cleans up review branches if specified.
-func (b *B4Runner) AbortApply(targetGitRepo, branchName string) (*AbortResult, error) {
+// AbortApply runs git am --abort, checks out base commit or original branch, and cleans up review branches.
+func (b *B4Runner) AbortApply(targetGitRepo, branchName, baseCommit, originalBranch, headBefore string) (*AbortResult, error) {
 	repoPath := targetGitRepo
 	if repoPath == "" {
 		repoPath = b.Config.General.KernelGitDir
 	}
 	repoPath = config.ExpandPath(repoPath)
 
-	out, err := exec.Command("git", "-C", repoPath, "am", "--abort").CombinedOutput()
-	logs := string(out)
+	gitDir := filepath.Join(repoPath, ".git")
+	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+		return &AbortResult{
+			Success: false,
+			Error:   fmt.Sprintf("target directory is not a git repository: %s", repoPath),
+		}, nil
+	}
 
-	if branchName != "" {
-		_ = exec.Command("git", "-C", repoPath, "checkout", "HEAD~0").Run()
-		delOut, _ := exec.Command("git", "-C", repoPath, "branch", "-D", branchName).CombinedOutput()
-		logs += "\n" + string(delOut)
+	var logs []string
+
+	// 1. Abort git am session if in progress
+	out, err := exec.Command("git", "-C", repoPath, "am", "--abort").CombinedOutput()
+	if len(out) > 0 {
+		logs = append(logs, strings.TrimSpace(string(out)))
+	}
+
+	// 2. Checkout base commit or original ref away from branchName, and delete review branch
+	cleanBranch := strings.TrimSpace(branchName)
+	cleanBase := strings.TrimSpace(baseCommit)
+	checkoutRef := ""
+
+	if cleanBranch != "" {
+		if cleanBase != "" && strings.ToUpper(cleanBase) != "HEAD" && cleanBase != cleanBranch {
+			checkoutRef = cleanBase
+		} else if originalBranch != "" && originalBranch != cleanBranch {
+			checkoutRef = originalBranch
+		} else if headBefore != "" {
+			checkoutRef = headBefore
+		} else {
+			checkoutRef = "HEAD~0"
+		}
+
+		if checkoutRef != "" {
+			coOut, _ := exec.Command("git", "-C", repoPath, "checkout", checkoutRef).CombinedOutput()
+			if len(coOut) > 0 {
+				logs = append(logs, strings.TrimSpace(string(coOut)))
+			}
+		}
+
+		// 3. Delete the review branch
+		delOut, _ := exec.Command("git", "-C", repoPath, "branch", "-D", cleanBranch).CombinedOutput()
+		if len(delOut) > 0 {
+			logs = append(logs, strings.TrimSpace(string(delOut)))
+		}
 	}
 
 	return &AbortResult{
 		Success: err == nil,
-		Logs:    strings.TrimSpace(logs),
+		Logs:    strings.Join(logs, "\n"),
 	}, nil
 }

@@ -218,8 +218,12 @@ func TestPatchComments(t *testing.T) {
 	}
 
 	// Discard draft comments
-	if err := db.DiscardDraftComments("test-patch-1@kernel.org"); err != nil {
+	discarded, err := db.DiscardDraftComments("test-patch-1@kernel.org")
+	if err != nil {
 		t.Fatalf("failed to discard drafts: %v", err)
+	}
+	if discarded != 1 {
+		t.Fatalf("expected 1 discarded draft comment, got %d", discarded)
 	}
 
 	commentsAfter, _ := db.GetMessageComments("test-patch-1@kernel.org")

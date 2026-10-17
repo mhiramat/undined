@@ -105,22 +105,28 @@ func (d *Database) SavePatchComment(c *PatchComment) (*PatchComment, error) {
 	return c, nil
 }
 
-// GetMessageComments retrieves all review comments for a message.
-func (d *Database) GetMessageComments(msgID string) ([]*PatchComment, error) {
+// GetMessageComments retrieves review comments for a message, optionally filtered by state (e.g. 'draft' or 'submitted').
+func (d *Database) GetMessageComments(msgID string, state ...string) ([]*PatchComment, error) {
 	cleanMsgID := parser.CleanMsgID(msgID)
 	query := `
 	SELECT id, message_id, message_db_id, file_path, line_no, side, text, state, author, created_at, updated_at
 	FROM patch_comments
 	WHERE message_id = ?
-	ORDER BY file_path ASC, line_no ASC, id ASC;
-	`
-	rows, err := d.DB.Query(query, cleanMsgID)
+`
+	args := []any{cleanMsgID}
+	if len(state) > 0 && strings.TrimSpace(state[0]) != "" {
+		query += " AND state = ?"
+		args = append(args, strings.TrimSpace(state[0]))
+	}
+	query += " ORDER BY file_path ASC, line_no ASC, id ASC;"
+
+	rows, err := d.DB.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var comments []*PatchComment
+	comments := make([]*PatchComment, 0)
 	for rows.Next() {
 		var c PatchComment
 		var dbID sql.NullInt64
@@ -138,23 +144,24 @@ func (d *Database) GetMessageComments(msgID string) ([]*PatchComment, error) {
 	return comments, nil
 }
 
-// DiscardDraftComments removes all comments in 'draft' state for the message.
-func (d *Database) DiscardDraftComments(msgID string) error {
+// DiscardDraftComments removes all comments in 'draft' state for the message and returns the discarded count.
+func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 	cleanMsgID := parser.CleanMsgID(msgID)
-	_, err := d.DB.Exec("DELETE FROM patch_comments WHERE message_id = ? AND state = 'draft';", cleanMsgID)
+	res, err := d.DB.Exec("DELETE FROM patch_comments WHERE message_id = ? AND state = 'draft';", cleanMsgID)
 	if err != nil {
-		return err
+		return 0, err
 	}
+	count, _ := res.RowsAffected()
 
 	// Update has_notes flag if no comments remain
-	var count int
-	_ = d.DB.QueryRow("SELECT COUNT(*) FROM patch_comments WHERE message_id = ?;", cleanMsgID).Scan(&count)
+	var remaining int
+	_ = d.DB.QueryRow("SELECT COUNT(*) FROM patch_comments WHERE message_id = ?;", cleanMsgID).Scan(&remaining)
 	hasNotes := 0
-	if count > 0 {
+	if remaining > 0 {
 		hasNotes = 1
 	}
 	_, _ = d.DB.Exec("UPDATE messages SET has_notes = ? WHERE message_id = ?;", hasNotes, cleanMsgID)
-	return nil
+	return count, nil
 }
 
 // DeleteComment deletes a single comment by ID.
