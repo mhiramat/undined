@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -40,6 +42,9 @@ type Server struct {
 	Launcher     *bridge.Launcher
 	FrontendDir  string
 	router       *chi.Mux
+
+	logMu        sync.Mutex
+	logWriter    io.Writer
 }
 
 // NewServer initializes the HTTP API Server.
@@ -83,6 +88,7 @@ func (s *Server) setupRoutes() {
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
+	r.Use(s.AccessLogMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(s.SecurityMiddleware)
 	r.Use(s.CacheControlMiddleware)

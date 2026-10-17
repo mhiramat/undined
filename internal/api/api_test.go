@@ -670,3 +670,90 @@ func TestAIReviewMessageDetailAndLinks(t *testing.T) {
 	}
 }
 
+func TestRESTAPIAccessLogging(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	logFile := filepath.Join(tmpDir, "api_access.log")
+	server.Config.General.LogFile = logFile
+
+	logBuf := &bytes.Buffer{}
+	server.SetLogWriter(logBuf)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := ts.Client()
+
+	// 1. Valid API call: GET /api/folders
+	req1, err := http.NewRequest("GET", ts.URL+"/api/folders", nil)
+	if err != nil {
+		t.Fatalf("failed to create req1: %v", err)
+	}
+	req1.Header.Set("Authorization", "Bearer "+token)
+	resp1, err := client.Do(req1)
+	if err != nil {
+		t.Fatalf("req1 failed: %v", err)
+	}
+	_ = resp1.Body.Close()
+	if resp1.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp1.StatusCode)
+	}
+
+	// 2. Unauthorized API call: GET /api/messages
+	req2, err := http.NewRequest("GET", ts.URL+"/api/messages", nil)
+	if err != nil {
+		t.Fatalf("failed to create req2: %v", err)
+	}
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("req2 failed: %v", err)
+	}
+	_ = resp2.Body.Close()
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized, got %d", resp2.StatusCode)
+	}
+
+	// 3. Static asset call: GET /favicon.svg
+	_ = os.WriteFile(filepath.Join(server.FrontendDir, "favicon.svg"), []byte("<svg></svg>"), 0644)
+	req3, err := http.NewRequest("GET", ts.URL+"/favicon.svg", nil)
+	if err != nil {
+		t.Fatalf("failed to create req3: %v", err)
+	}
+	resp3, err := client.Do(req3)
+	if err != nil {
+		t.Fatalf("req3 failed: %v", err)
+	}
+	_ = resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp3.StatusCode)
+	}
+
+	// Verify log writer output
+	bufStr := logBuf.String()
+	if !strings.Contains(bufStr, "[INFO] [undine.api] REST API access: GET /api/folders - 200 OK") {
+		t.Errorf("expected 200 log in buffer, got:\n%s", bufStr)
+	}
+	if !strings.Contains(bufStr, "[WARN] [undine.api] REST API access: GET /api/messages - 401 Unauthorized") {
+		t.Errorf("expected 401 log in buffer, got:\n%s", bufStr)
+	}
+	if strings.Contains(bufStr, "favicon.svg") {
+		t.Errorf("did not expect static /favicon.svg to be logged in REST API access log, got:\n%s", bufStr)
+	}
+
+	// Verify log file output
+	fileData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("failed to read log file %s: %v", logFile, err)
+	}
+	fileStr := string(fileData)
+	if !strings.Contains(fileStr, "[INFO] [undine.api] REST API access: GET /api/folders - 200 OK") {
+		t.Errorf("expected 200 log in log file, got:\n%s", fileStr)
+	}
+	if !strings.Contains(fileStr, "[WARN] [undine.api] REST API access: GET /api/messages - 401 Unauthorized") {
+		t.Errorf("expected 401 log in log file, got:\n%s", fileStr)
+	}
+}
+
+
