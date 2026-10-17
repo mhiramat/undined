@@ -68,6 +68,20 @@ type IMAPConfig struct {
 	PollIntervalSeconds int      `toml:"poll_interval_seconds" json:"poll_interval_seconds"`
 }
 
+// GetPassword returns Password, or executes PasswordCmd if Password is empty.
+func (i *IMAPConfig) GetPassword() string {
+	if i.Password != "" {
+		return i.Password
+	}
+	if i.PasswordCmd != "" {
+		out, err := ExecuteSecretCommand(i.PasswordCmd)
+		if err == nil {
+			return out
+		}
+	}
+	return ""
+}
+
 // SMTPConfig holds settings for strict plain-text SMTP transport.
 type SMTPConfig struct {
 	Host             string `toml:"host" json:"host"`
@@ -84,6 +98,20 @@ type SMTPConfig struct {
 	SignatureFile    string `toml:"signature_file" json:"signature_file"`
 	ContentType      string `toml:"content_type" json:"content_type"`
 	TransferEncoding string `toml:"transfer_encoding" json:"transfer_encoding"`
+}
+
+// GetPassword returns Password, or executes PasswordCmd if Password is empty.
+func (s *SMTPConfig) GetPassword() string {
+	if s.Password != "" {
+		return s.Password
+	}
+	if s.PasswordCmd != "" {
+		out, err := ExecuteSecretCommand(s.PasswordCmd)
+		if err == nil {
+			return out
+		}
+	}
+	return ""
 }
 
 // GetSignature reads the signature from SignatureFile if available.

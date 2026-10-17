@@ -1,0 +1,277 @@
+// Package smtp implements strict plain-text SMTP delivery conforming to LKML requirements.
+package smtp
+
+import (
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"fmt"
+	"net"
+	"net/smtp"
+	"os"
+	"strings"
+	"time"
+
+	"undined-go/internal/config"
+	"undined-go/internal/constants"
+	"undined-go/internal/storage/database"
+	"undined-go/internal/storage/maildir"
+	"undined-go/internal/storage/parser"
+)
+
+// Client handles outgoing email delivery via strict plaintext SMTP.
+type Client struct {
+	Config  *config.Config
+	Maildir *maildir.MaildirStore
+	DB      *database.Database
+}
+
+// NewClient creates a new SMTP Client.
+func NewClient(cfg *config.Config, store *maildir.MaildirStore, db *database.Database) *Client {
+	return &Client{
+		Config:  cfg,
+		Maildir: store,
+		DB:      db,
+	}
+}
+
+// BuildMessage constructs an RFC822 email enforcing LKML plaintext rules and project identity.
+func (c *Client) BuildMessage(
+	toAddr, subject, bodyText string,
+	ccAddr, inReplyTo, references, customFrom string,
+) string {
+	fromHdr := customFrom
+	if fromHdr == "" {
+		fromName := c.Config.SMTP.FromName
+		fromEmail := c.Config.SMTP.FromEmail
+		if fromName != "" {
+			fromHdr = fmt.Sprintf("%s <%s>", fromName, fromEmail)
+		} else {
+			fromHdr = fromEmail
+		}
+	}
+
+	dateStr := time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700")
+
+	// Generate unique Message-ID if not provided
+	rnd := make([]byte, 8)
+	_, _ = rand.Read(rnd)
+	host := c.Config.General.Host
+	if host == "" || host == "127.0.0.1" || host == "localhost" {
+		host = "undined.local"
+	}
+	msgID := fmt.Sprintf("<undine-%d-%s@%s>", time.Now().UnixNano(), hex.EncodeToString(rnd), host)
+
+	var lines []string
+	lines = append(lines,
+		fmt.Sprintf("From: %s", fromHdr),
+		fmt.Sprintf("To: %s", toAddr),
+	)
+	if strings.TrimSpace(ccAddr) != "" {
+		lines = append(lines, fmt.Sprintf("Cc: %s", ccAddr))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Subject: %s", subject),
+		fmt.Sprintf("Date: %s", dateStr),
+		fmt.Sprintf("Message-ID: %s", msgID),
+		fmt.Sprintf("X-Mailer: %s", constants.DefaultXMailer),
+	)
+
+	if strings.TrimSpace(inReplyTo) != "" {
+		cleanedInReply := parser.CleanMsgID(inReplyTo)
+		if cleanedInReply != "" {
+			lines = append(lines, fmt.Sprintf("In-Reply-To: <%s>", cleanedInReply))
+		}
+	}
+	if strings.TrimSpace(references) != "" {
+		lines = append(lines, fmt.Sprintf("References: %s", strings.TrimSpace(references)))
+	}
+
+	lines = append(lines,
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+		bodyText,
+	)
+
+	return strings.Join(lines, "\r\n") + "\r\n"
+}
+
+func (c *Client) getTLSConfig() *tls.Config {
+	cfg := c.Config.SMTP
+	tlsConf := &tls.Config{
+		ServerName:         cfg.Host,
+		InsecureSkipVerify: !cfg.VerifyCert,
+	}
+
+	if cfg.VerifyCert && cfg.CACertPath != "" {
+		caPath := config.ExpandPath(cfg.CACertPath)
+		caCert, err := os.ReadFile(caPath)
+		if err == nil {
+			caCertPool := x509.NewCertPool()
+			caCertPool.AppendCertsFromPEM(caCert)
+			tlsConf.RootCAs = caCertPool
+		}
+	}
+
+	return tlsConf
+}
+
+// SendRawMessage sends raw RFC822 bytes to SMTP recipients and saves a copy into Sent.
+func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, string, error) {
+	cfg := c.Config.SMTP
+	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	tlsConf := c.getTLSConfig()
+	password := cfg.GetPassword()
+
+	var smtpClient *smtp.Client
+	var err error
+
+	useSSL := cfg.UseSSL || (cfg.Port == 465 && !cfg.UseSTARTTLS)
+	if useSSL {
+		conn, dialErr := tls.Dial("tcp", addr, tlsConf)
+		if dialErr != nil {
+			return false, "", fmt.Errorf("TLS connection to %s failed: %w", addr, dialErr)
+		}
+		smtpClient, err = smtp.NewClient(conn, cfg.Host)
+		if err != nil {
+			conn.Close()
+			return false, "", fmt.Errorf("SMTP handshake failed: %w", err)
+		}
+	} else {
+		conn, dialErr := net.DialTimeout("tcp", addr, 15*time.Second)
+		if dialErr != nil {
+			return false, "", fmt.Errorf("connection to %s failed: %w", addr, dialErr)
+		}
+		smtpClient, err = smtp.NewClient(conn, cfg.Host)
+		if err != nil {
+			conn.Close()
+			return false, "", fmt.Errorf("SMTP client initialization failed: %w", err)
+		}
+
+		if cfg.UseSTARTTLS {
+			if ok, _ := smtpClient.Extension("STARTTLS"); ok {
+				if err := smtpClient.StartTLS(tlsConf); err != nil {
+					smtpClient.Close()
+					return false, "", fmt.Errorf("STARTTLS negotiation failed: %w", err)
+				}
+			}
+		}
+	}
+	defer smtpClient.Close()
+
+	// Authenticate if credentials provided
+	if cfg.Username != "" && password != "" {
+		auth := smtp.PlainAuth("", cfg.Username, password, cfg.Host)
+		if err := smtpClient.Auth(auth); err != nil {
+			return false, "", fmt.Errorf("SMTP authentication failed for user %s: %w", cfg.Username, err)
+		}
+	}
+
+	// Set From
+	fromAddr := cfg.FromEmail
+	if err := smtpClient.Mail(fromAddr); err != nil {
+		return false, "", fmt.Errorf("SMTP MAIL FROM failed: %w", err)
+	}
+
+	// Set Recipients
+	for _, rcpt := range recipients {
+		cleanRcpt := strings.TrimSpace(rcpt)
+		if cleanRcpt != "" {
+			if err := smtpClient.Rcpt(cleanRcpt); err != nil {
+				return false, "", fmt.Errorf("SMTP RCPT TO failed for %s: %w", cleanRcpt, err)
+			}
+		}
+	}
+
+	// Send Data
+	w, err := smtpClient.Data()
+	if err != nil {
+		return false, "", fmt.Errorf("SMTP DATA command failed: %w", err)
+	}
+
+	// Ensure CRLF endings for network wire transmission
+	normalized := strings.ReplaceAll(rawEmail, "\r\n", "\n")
+	crlfBody := strings.ReplaceAll(normalized, "\n", "\r\n")
+
+	if _, err := w.Write([]byte(crlfBody)); err != nil {
+		_ = w.Close()
+		return false, "", fmt.Errorf("failed to write email body to SMTP: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return false, "", fmt.Errorf("failed to close SMTP data stream: %w", err)
+	}
+
+	_ = smtpClient.Quit()
+
+	// Save copy to Sent mailbox
+	if c.Maildir != nil && c.DB != nil {
+		_ = c.Maildir.EnsureFolder(constants.FolderSent)
+		sentFolder, err := c.DB.GetOrCreateFolder(constants.FolderSent, false)
+		if err == nil {
+			path, err := c.Maildir.AddMessage(constants.FolderSent, []byte(crlfBody), constants.FlagSeen)
+			if err == nil {
+				_, _ = c.DB.IndexEmailFile(sentFolder.ID, path)
+			}
+		}
+	}
+
+	return true, "Email sent successfully", nil
+}
+
+// SendMessage builds and sends an email.
+func (c *Client) SendMessage(
+	toAddr, subject, bodyText string,
+	ccAddr, inReplyTo, references string,
+) (bool, string, error) {
+	raw := c.BuildMessage(toAddr, subject, bodyText, ccAddr, inReplyTo, references, "")
+
+	var recipients []string
+	for _, a := range strings.Split(toAddr, ",") {
+		addr := parser.ExtractMsgIDs(a)
+		if len(addr) > 0 {
+			recipients = append(recipients, addr[0])
+		} else {
+			cleaned := strings.TrimSpace(a)
+			if cleaned != "" {
+				recipients = append(recipients, cleaned)
+			}
+		}
+	}
+	for _, a := range strings.Split(ccAddr, ",") {
+		addr := parser.ExtractMsgIDs(a)
+		if len(addr) > 0 {
+			recipients = append(recipients, addr[0])
+		} else {
+			cleaned := strings.TrimSpace(a)
+			if cleaned != "" {
+				recipients = append(recipients, cleaned)
+			}
+		}
+	}
+
+	ok, msg, err := c.SendRawMessage(raw, recipients)
+	if err != nil {
+		return false, msg, err
+	}
+
+	// If this was a reply to an existing message, mark it replied and discard draft comments
+	if inReplyTo != "" && c.DB != nil {
+		cleanInReply := parser.CleanMsgID(inReplyTo)
+		orig, _ := c.DB.GetMessageByMsgID(cleanInReply)
+		if orig != nil {
+			_ = c.DB.SetMessageReplied(orig.ID, true)
+			if c.Maildir != nil && orig.FilePath != "" {
+				newPath, flagErr := c.Maildir.AddFlag(orig.FilePath, constants.FlagReplied)
+				if flagErr == nil && newPath != orig.FilePath {
+					_ = c.DB.SetMessageFilePath(orig.ID, newPath)
+				}
+			}
+			_ = c.DB.DiscardDraftComments(orig.MessageID)
+		}
+	}
+
+	return ok, msg, nil
+}

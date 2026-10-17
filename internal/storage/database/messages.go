@@ -400,3 +400,144 @@ func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
 	}
 	return results, nil
 }
+
+// InsertHeaderSummary inserts or updates a message row using lightweight header bytes without a body or file.
+func (d *Database) InsertHeaderSummary(
+	folderID int64,
+	imapUID uint32,
+	headersBytes []byte,
+	isRead bool,
+	flags string,
+) (int64, error) {
+	parsed, err := parser.ParseEmail(headersBytes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse email headers: %w", err)
+	}
+
+	msgID := parser.CleanMsgID(parsed.MessageID)
+	if msgID == "" {
+		msgID = fmt.Sprintf("gen-imap-%d-%d", folderID, imapUID)
+	}
+
+	isReplied := strings.Contains(flags, "R") ||
+		strings.Contains(flags, `\Answered`) ||
+		strings.Contains(flags, "Answered")
+
+	// Check Review-Commit-ID
+	revCommit, _ := d.GetReviewCommit(msgID)
+
+	readVal := 0
+	if isRead {
+		readVal = 1
+	}
+	repliedVal := 0
+	if isReplied {
+		repliedVal = 1
+	}
+
+	query := `
+	INSERT INTO messages (
+		message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr,
+		to_addr, cc_addr, date, epoch_timestamp, in_reply_to, references_header,
+		body_plain, is_patch, is_read, is_replied, has_notes, flags, review_commit_id
+	) VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0, ?, ?, 0, ?, ?)
+	ON CONFLICT(folder_id, message_id) DO UPDATE SET
+		imap_uid = COALESCE(excluded.imap_uid, messages.imap_uid),
+		subject = excluded.subject,
+		from_name = excluded.from_name,
+		from_addr = excluded.from_addr,
+		to_addr = excluded.to_addr,
+		cc_addr = excluded.cc_addr,
+		date = excluded.date,
+		epoch_timestamp = excluded.epoch_timestamp,
+		in_reply_to = excluded.in_reply_to,
+		references_header = excluded.references_header,
+		is_read = excluded.is_read,
+		is_replied = excluded.is_replied,
+		flags = excluded.flags,
+		review_commit_id = COALESCE(excluded.review_commit_id, messages.review_commit_id);
+	`
+
+	res, err := d.DB.Exec(
+		query,
+		msgID, folderID, imapUID, parsed.Subject, parsed.FromName, parsed.FromAddr,
+		parsed.ToAddr, parsed.CcAddr, parsed.Date, parsed.EpochTimestamp, parsed.InReplyTo,
+		parsed.ReferencesHeader, readVal, repliedVal, flags, revCommit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to insert header summary: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil || id == 0 {
+		var existingID int64
+		_ = d.DB.QueryRow("SELECT id FROM messages WHERE folder_id = ? AND message_id = ?;", folderID, msgID).Scan(&existingID)
+		return existingID, nil
+	}
+	return id, nil
+}
+
+// HydrateMessageBody updates a message row with its downloaded file path, plain body text, and patch status.
+func (d *Database) HydrateMessageBody(id int64, filePath, bodyPlain string, isPatch bool) error {
+	patchVal := 0
+	if isPatch {
+		patchVal = 1
+	}
+	_, err := d.DB.Exec(
+		"UPDATE messages SET file_path = ?, body_plain = ?, is_patch = ? WHERE id = ?;",
+		filePath, bodyPlain, patchVal, id,
+	)
+	return err
+}
+
+// GetFolderIMAPUIDs retrieves all known IMAP UIDs for a folder.
+func (d *Database) GetFolderIMAPUIDs(folderID int64) ([]uint32, error) {
+	rows, err := d.DB.Query("SELECT imap_uid FROM messages WHERE folder_id = ? AND imap_uid IS NOT NULL;", folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var uids []uint32
+	for rows.Next() {
+		var uid uint32
+		if err := rows.Scan(&uid); err == nil {
+			uids = append(uids, uid)
+		}
+	}
+	return uids, nil
+}
+
+// DeleteMessagesByIMAPUIDs removes messages from the database matching the given IMAP UIDs, returning the deleted records.
+func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*Message, error) {
+	if len(uids) == 0 {
+		return nil, nil
+	}
+
+	var deleted []*Message
+	for _, uid := range uids {
+		var m Message
+		var isPatch, isRead, isReplied, hasNotes any
+		row := d.DB.QueryRow(`
+			SELECT id, message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr,
+				   to_addr, cc_addr, date, epoch_timestamp, in_reply_to, references_header,
+				   body_plain, is_patch, is_read, is_replied, has_notes, flags, review_commit_id, created_at
+			FROM messages WHERE folder_id = ? AND imap_uid = ?;
+		`, folderID, uid)
+		err := row.Scan(
+			&m.ID, &m.MessageID, &m.FolderID, &m.IMAPUID, &m.FilePath, &m.Subject, &m.FromName, &m.FromAddr,
+			&m.ToAddr, &m.CcAddr, &m.Date, &m.EpochTimestamp, &m.InReplyTo, &m.ReferencesHeader,
+			&m.BodyPlain, &isPatch, &isRead, &isReplied, &hasNotes, &m.Flags, &m.ReviewCommitID, &m.CreatedAt,
+		)
+		if err == nil {
+			m.IsPatch = toBool(isPatch)
+			m.IsRead = toBool(isRead)
+			m.IsReplied = toBool(isReplied)
+			m.HasNotes = toBool(hasNotes)
+			deleted = append(deleted, &m)
+			_, _ = d.DB.Exec("DELETE FROM messages WHERE id = ?;", m.ID)
+		}
+	}
+	return deleted, nil
+}
+
