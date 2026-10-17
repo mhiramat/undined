@@ -1,0 +1,243 @@
+package database
+
+import (
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	"undined-go/internal/constants"
+	"undined-go/internal/storage/maildir"
+)
+
+// TestLegacySchemaMigration verifies Rule 2:
+// Starts with a legacy database schema lacking new columns and single UNIQUE(message_id) constraint,
+// and verifies clean upgrade without error.
+func TestLegacySchemaMigration(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "legacy_undined.db")
+
+	// 1. Create a legacy database without imap_uid, flags, review_commit_id, has_notes, is_replied
+	// and with single-column UNIQUE(message_id)
+	rawDB, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open raw sqlite: %v", err)
+	}
+
+	legacyDDL := `
+	CREATE TABLE folders (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		name TEXT UNIQUE NOT NULL,
+		last_synced_uid INTEGER DEFAULT 0,
+		sync_enabled BOOLEAN DEFAULT 1
+	);
+
+	CREATE TABLE messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		message_id TEXT UNIQUE NOT NULL,
+		folder_id INTEGER NOT NULL REFERENCES folders(id),
+		file_path TEXT NOT NULL,
+		subject TEXT,
+		from_name TEXT,
+		from_addr TEXT,
+		to_addr TEXT,
+		cc_addr TEXT,
+		date TEXT,
+		epoch_timestamp INTEGER,
+		in_reply_to TEXT,
+		references_header TEXT,
+		body_plain TEXT,
+		is_patch BOOLEAN DEFAULT 0,
+		is_read BOOLEAN DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	INSERT INTO folders (id, name) VALUES (1, 'INBOX'), (2, 'Outbox');
+	INSERT INTO messages (id, message_id, folder_id, file_path, subject, from_addr, body_plain)
+	VALUES (1, 'legacy-1@kernel.org', 1, '/tmp/legacy-1.eml', 'Legacy Subject', 'dev@kernel.org', 'Legacy body content');
+	`
+	if _, err := rawDB.Exec(legacyDDL); err != nil {
+		t.Fatalf("failed to initialize legacy schema: %v", err)
+	}
+	rawDB.Close()
+
+	// 2. Open via NewDatabase, which runs safe migrations
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase failed on legacy database: %v", err)
+	}
+	defer db.Close()
+
+	// 3. Verify legacy message was migrated
+	m, err := db.GetMessageByID(1)
+	if err != nil {
+		t.Fatalf("failed to fetch migrated message: %v", err)
+	}
+	if m.MessageID != "legacy-1@kernel.org" {
+		t.Errorf("unexpected message_id: %s", m.MessageID)
+	}
+	if m.Subject != "Legacy Subject" {
+		t.Errorf("unexpected subject: %s", m.Subject)
+	}
+
+	// 4. Verify new columns exist and can be updated
+	if err := db.SetMessageFlags(1, "S"); err != nil {
+		t.Errorf("failed to set flags on migrated table: %v", err)
+	}
+	if err := db.SetMessageReplied(1, true); err != nil {
+		t.Errorf("failed to set is_replied on migrated table: %v", err)
+	}
+	if err := db.SetMessageNotes(1, true); err != nil {
+		t.Errorf("failed to set has_notes on migrated table: %v", err)
+	}
+	if err := db.SetMessageReviewCommit("legacy-1@kernel.org", "abcdef123456"); err != nil {
+		t.Errorf("failed to set review commit: %v", err)
+	}
+
+	// 5. Verify Outbox migrated to TODO
+	outboxFolder, _ := db.GetFolderByName(constants.FolderOutbox)
+	if outboxFolder != nil {
+		t.Errorf("expected Outbox to be migrated, but still found")
+	}
+	todoFolder, err := db.GetFolderByName(constants.FolderTODO)
+	if err != nil || todoFolder == nil {
+		t.Errorf("expected TODO folder to exist after Outbox migration")
+	}
+
+	// 6. Verify composite unique constraint allows same message_id in a different folder
+	folder2, _ := db.GetOrCreateFolder("b4-imports", false)
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, file_path, subject, from_addr, body_plain)
+		VALUES ('legacy-1@kernel.org', ?, '/tmp/legacy-copy.eml', 'Copy in b4', 'dev@kernel.org', 'Copy');
+	`, folder2.ID)
+	if err != nil {
+		t.Errorf("expected composite unique constraint to allow same message_id in different folder: %v", err)
+	}
+}
+
+func TestDatabaseIndexingAndSearch(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_undined.db")
+
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Create a test email in maildir
+	store := maildir.NewMaildirStore(tmpDir)
+	raw := `From: "Masami Hiramatsu" <mhiramat@kernel.org>
+To: linux-trace-kernel@vger.kernel.org
+Subject: [PATCH] ftrace: tracepoint kprobe optimization
+Date: Mon, 12 Oct 2026 10:00:00 +0900
+Message-ID: <patch-1234@kernel.org>
+Content-Type: text/plain; charset=utf-8
+
+This patch optimizes tracepoint handling for kprobes.
+It significantly reduces instruction cache misses.
+---
+diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c
+`
+	msgPath, err := store.AddMessage("b4-imports", []byte(raw), constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("failed to add message to maildir: %v", err)
+	}
+
+	folder, err := db.GetFolderByName("b4-imports")
+	if err != nil {
+		t.Fatalf("failed to get folder: %v", err)
+	}
+
+	// 2. Index file
+	id, err := db.IndexEmailFile(folder.ID, msgPath)
+	if err != nil {
+		t.Fatalf("failed to index email file: %v", err)
+	}
+
+	msg, err := db.GetMessageByID(id)
+	if err != nil {
+		t.Fatalf("failed to get message by id: %v", err)
+	}
+	if msg.Subject != "[PATCH] ftrace: tracepoint kprobe optimization" {
+		t.Errorf("unexpected subject: %s", msg.Subject)
+	}
+	if !msg.IsRead {
+		t.Errorf("expected message to be read")
+	}
+	if !msg.IsPatch {
+		t.Errorf("expected message to be detected as patch")
+	}
+
+	// 3. FTS5 Search
+	results, err := db.Search("tracepoint kprobe", 10)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if len(results) == 0 {
+		t.Fatalf("expected at least 1 search match, got 0")
+	}
+	if results[0].MessageID != "patch-1234@kernel.org" {
+		t.Errorf("unexpected match message_id: %s", results[0].MessageID)
+	}
+}
+
+func TestPatchComments(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "comments.db"))
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	// Save comment
+	comment := &PatchComment{
+		MessageID: "test-patch-1@kernel.org",
+		FilePath:  "kernel/trace/ftrace.c",
+		LineNo:    42,
+		Side:      "new",
+		Text:      "Check return code",
+		State:     "draft",
+		Author:    "user",
+	}
+
+	saved, err := db.SavePatchComment(comment)
+	if err != nil {
+		t.Fatalf("failed to save comment: %v", err)
+	}
+	if saved.ID == 0 {
+		t.Fatalf("expected positive comment ID")
+	}
+
+	// Fetch comments
+	comments, err := db.GetMessageComments("test-patch-1@kernel.org")
+	if err != nil {
+		t.Fatalf("failed to fetch comments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].LineNo != 42 {
+		t.Fatalf("unexpected comments: %v", comments)
+	}
+
+	// Discard draft comments
+	if err := db.DiscardDraftComments("test-patch-1@kernel.org"); err != nil {
+		t.Fatalf("failed to discard drafts: %v", err)
+	}
+
+	commentsAfter, _ := db.GetMessageComments("test-patch-1@kernel.org")
+	if len(commentsAfter) != 0 {
+		t.Fatalf("expected 0 comments after discard, got %d", len(commentsAfter))
+	}
+}
+
+func TestThreadingCycleDetection(t *testing.T) {
+	m1 := &Message{ID: 1, MessageID: "msg-1@kernel.org", EpochTimestamp: 100}
+	m2 := &Message{ID: 2, MessageID: "msg-2@kernel.org", InReplyTo: "<msg-1@kernel.org>", EpochTimestamp: 200}
+	m3 := &Message{ID: 3, MessageID: "msg-3@kernel.org", InReplyTo: "<msg-2@kernel.org>", EpochTimestamp: 300}
+	// Create cycle: m1 replies to m3
+	m1.InReplyTo = "<msg-3@kernel.org>"
+
+	messages := []*Message{m1, m2, m3}
+	threaded := ThreadMessages(messages, "date", "desc")
+	if len(threaded) != 3 {
+		t.Fatalf("expected 3 threaded messages, got %d", len(threaded))
+	}
+}
