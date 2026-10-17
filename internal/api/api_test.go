@@ -423,3 +423,137 @@ func TestFolderSyncAndThreadedMessagesEndpoints(t *testing.T) {
 	}
 }
 
+func TestAPIConsistencyAndReturnValues(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "undined-api-consistency-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "undined.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	maildirPath := filepath.Join(tempDir, "maildir")
+	store := maildir.NewMaildirStore(maildirPath)
+
+	cfg := config.NewDefaultConfig()
+	cfg.General.DataDir = tempDir
+	cfg.General.MaildirPath = maildirPath
+	cfg.General.DBPath = dbPath
+	cfg.General.KernelGitDir = tempDir
+	cfg.SMTP.FromName = "Masami Hiramatsu"
+	cfg.SMTP.FromEmail = "mhiramat@kernel.org"
+	cfg.Patchwork.Enabled = true
+	cfg.Patchwork.DelegateUsers = []string{"mhiramat", "rostedt"}
+	cfg.Patchwork.Token = "test-token"
+	cfg.Tags = map[string]config.TagDefinition{
+		"$cl_1": {Tag: "Red", Color: "#ff0000"},
+	}
+
+	sec, err := security.NewSecurityManager("127.0.0.1", 8080, tempDir)
+	if err != nil {
+		t.Fatalf("failed to init security manager: %v", err)
+	}
+	server := NewServer(cfg, db, store, sec, nil, nil, nil, nil, nil, nil, "")
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	token := sec.Token
+	client := &http.Client{}
+
+	// 1. Test GET /api/config returns flat fields for frontend compatibility
+	req, _ := http.NewRequest("GET", ts.URL+"/api/config", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/config failed: %v", err)
+	}
+	var configRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&configRes)
+	if configRes["from_name"] != "Masami Hiramatsu" || configRes["from_email"] != "mhiramat@kernel.org" {
+		t.Errorf("expected flat from_name/from_email in config, got %v", configRes)
+	}
+	if configRes["patchwork_can_update"] != true || configRes["patchwork_enabled"] != true {
+		t.Errorf("expected patchwork_can_update=true and patchwork_enabled=true, got %v", configRes)
+	}
+
+	// 2. Test 404 for non-existent folders on sync status and cancel
+	req, _ = http.NewRequest("GET", ts.URL+"/api/folders/99999/sync-status", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for non-existent folder sync status, got %d", resp.StatusCode)
+	}
+
+	req, _ = http.NewRequest("POST", ts.URL+"/api/folders/99999/sync-cancel", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = client.Do(req)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for non-existent folder sync cancel, got %d", resp.StatusCode)
+	}
+
+	// 3. Setup a message in inbox
+	f, _ := db.GetOrCreateFolder("INBOX", true)
+	msgFile, _ := store.AddMessage("INBOX", []byte("Subject: Test Patch\r\nMessage-ID: <patch-1@kernel.org>\r\nFrom: Alice <alice@example.com>\r\nDate: Mon, 12 Oct 2026 10:00:00 +0000\r\n\r\n--- a/file.c\n+++ b/file.c\n@@ -1,1 +1,1 @@\n-old\n+new\n"), "")
+	msgID, _ := db.IndexEmailFile(f.ID, msgFile)
+
+	// Test POST /api/messages/{id}/read with {"is_read": true}
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/read", ts.URL, msgID), strings.NewReader(`{"is_read": true}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = client.Do(req)
+	var readRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&readRes)
+	if readRes["is_read"] != true || readRes["status"] != "ok" || readRes["message_db_id"] == nil {
+		t.Errorf("unexpected read response: %v", readRes)
+	}
+
+	// Test POST /api/messages/{id}/replied with {"is_replied": true}
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/replied", ts.URL, msgID), strings.NewReader(`{"is_replied": true}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = client.Do(req)
+	var repliedRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&repliedRes)
+	if repliedRes["is_replied"] != true || repliedRes["status"] != "ok" || repliedRes["message_db_id"] == nil {
+		t.Errorf("unexpected replied response: %v", repliedRes)
+	}
+
+	// Test POST /api/messages/{id}/tag with {"tag": "$cl_1"}
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/tag", ts.URL, msgID), strings.NewReader(`{"tag": "$cl_1"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = client.Do(req)
+	var tagRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&tagRes)
+	if tagRes["tag_key"] != "$cl_1" || tagRes["tag_name"] != "Red" || tagRes["tag_color"] != "#ff0000" {
+		t.Errorf("unexpected tag response: %v", tagRes)
+	}
+
+	// Test POST /api/composer/preview-quote returns quote_text and body
+	previewPayload := fmt.Sprintf(`{"message_id": "%d", "general_comment": "Looks good"}`, msgID)
+	req, _ = http.NewRequest("POST", ts.URL+"/api/composer/preview-quote", strings.NewReader(previewPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ = client.Do(req)
+	var previewRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&previewRes)
+	if previewRes["quote_text"] == nil || previewRes["body"] == nil || !strings.Contains(previewRes["quote_text"].(string), "Looks good") {
+		t.Errorf("unexpected preview quote response: %v", previewRes)
+	}
+
+	// Test DELETE /api/messages/{id} returns deleted_id and status
+	req, _ = http.NewRequest("DELETE", fmt.Sprintf("%s/api/messages/%d", ts.URL, msgID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, _ = client.Do(req)
+	var delRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&delRes)
+	if delRes["status"] != "ok" || delRes["deleted_id"] == nil {
+		t.Errorf("unexpected delete response: %v", delRes)
+	}
+}
+
