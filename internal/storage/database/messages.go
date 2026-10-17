@@ -313,6 +313,12 @@ func (d *Database) SetMessageFilePath(id int64, path string) error {
 	return err
 }
 
+// UpdateMessageSubjectAndBody updates subject and body_plain for a message (used by review updates).
+func (d *Database) UpdateMessageSubjectAndBody(id int64, subject, body string) error {
+	_, err := d.DB.Exec("UPDATE messages SET subject = ?, body_plain = ? WHERE id = ?;", subject, body, id)
+	return err
+}
+
 // SetMessageReviewCommit associates a git review commit ID with a message ID.
 func (d *Database) SetMessageReviewCommit(msgID, commitID string) error {
 	cleaned := parser.CleanMsgID(msgID)

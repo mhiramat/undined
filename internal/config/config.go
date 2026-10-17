@@ -46,6 +46,14 @@ func (g *GeneralConfig) EffectiveEditorCmd() string {
 	return constants.DefaultTerminalCmd
 }
 
+// GetExternalEditorCmd returns the external editor command, preferring editor_cmd if set, otherwise terminal_cmd.
+func (g *GeneralConfig) GetExternalEditorCmd() string {
+	if strings.TrimSpace(g.EditorCmd) != "" {
+		return strings.TrimSpace(g.EditorCmd)
+	}
+	return strings.TrimSpace(g.TerminalCmd)
+}
+
 // IMAPConfig holds settings for selective IMAP sync.
 type IMAPConfig struct {
 	Host                string   `toml:"host" json:"host"`
@@ -89,6 +97,11 @@ func (s *SMTPConfig) GetSignature() string {
 		return ""
 	}
 	return strings.TrimRight(string(content), "\r\n")
+}
+
+// EffectiveSignature returns the signature from SignatureFile if available.
+func (s *SMTPConfig) EffectiveSignature() string {
+	return s.GetSignature()
 }
 
 // LKMLConfig holds b4 and lore settings.

@@ -208,3 +208,113 @@ func (d *Database) GetThreadHierarchy(msgID string) ([]*Message, error) {
 
 	return thread, nil
 }
+
+// ParentInfo describes the detected parent message context.
+type ParentInfo struct {
+	ID           int64  `json:"id"`
+	MessageID    string `json:"message_id"`
+	FolderID     int64  `json:"folder_id"`
+	FolderName   string `json:"folder_name"`
+	Subject      string `json:"subject"`
+	IsInB4       bool   `json:"is_in_b4"`
+	IsSameFolder bool   `json:"is_same_folder"`
+}
+
+// FindParentInfo finds parent message context across all folders including b4-imports.
+func (d *Database) FindParentInfo(
+	inReplyTo, referencesHeader string,
+	currentFolderID *int64,
+	currentMsgID string,
+) (missingParent bool, parentMsgID string, parentInfo *ParentInfo) {
+	var candidates []string
+	if inReplyTo != "" {
+		candidates = append(candidates, parser.ExtractMsgIDs(inReplyTo)...)
+		cleaned := parser.CleanMsgID(inReplyTo)
+		if cleaned != "" {
+			already := false
+			for _, c := range candidates {
+				if c == cleaned {
+					already = true
+					break
+				}
+			}
+			if !already {
+				candidates = append(candidates, cleaned)
+			}
+		}
+	}
+	if referencesHeader != "" {
+		refs := parser.ExtractMsgIDs(referencesHeader)
+		for i := len(refs) - 1; i >= 0; i-- {
+			r := refs[i]
+			already := false
+			for _, c := range candidates {
+				if c == r {
+					already = true
+					break
+				}
+			}
+			if !already {
+				candidates = append(candidates, r)
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return false, "", nil
+	}
+
+	cleanedCurr := parser.CleanMsgID(currentMsgID)
+	primaryParentID := candidates[0]
+
+	// 1. First check if parent exists in b4-imports
+	b4Folder, _ := d.GetFolderByName("b4-imports")
+	var parentMsg *Message
+
+	if b4Folder != nil {
+		for _, cand := range candidates {
+			if cleanedCurr != "" && cand == cleanedCurr {
+				continue
+			}
+			m, err := d.GetMessageByFolderAndMsgID(b4Folder.ID, cand)
+			if err == nil && m != nil {
+				parentMsg = m
+				break
+			}
+		}
+	}
+
+	// 2. Next check any folder in the database
+	if parentMsg == nil {
+		for _, cand := range candidates {
+			if cleanedCurr != "" && cand == cleanedCurr {
+				continue
+			}
+			m, err := d.GetMessageByMsgID(cand)
+			if err == nil && m != nil {
+				parentMsg = m
+				break
+			}
+		}
+	}
+
+	if parentMsg == nil {
+		return true, primaryParentID, nil
+	}
+
+	fName := parentMsg.FolderName
+	isInB4 := (fName == "b4-imports")
+	isSame := (currentFolderID != nil && parentMsg.FolderID == *currentFolderID)
+
+	info := &ParentInfo{
+		ID:           parentMsg.ID,
+		MessageID:    parentMsg.MessageID,
+		FolderID:     parentMsg.FolderID,
+		FolderName:   fName,
+		Subject:      parentMsg.Subject,
+		IsInB4:       isInB4,
+		IsSameFolder: isSame,
+	}
+
+	return false, primaryParentID, info
+}
