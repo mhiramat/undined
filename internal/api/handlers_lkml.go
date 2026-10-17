@@ -31,7 +31,12 @@ func (s *Server) handleB4Import(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(res)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":        true,
+		"message_id":     body.MessageID,
+		"imported_count": len(res),
+		"indexed_ids":    res,
+	})
 }
 
 func (s *Server) handleB4Apply(w http.ResponseWriter, r *http.Request) {
@@ -130,16 +135,23 @@ func (s *Server) handleReviewCancel(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
+	targetID := body.MessageID
+	if targetID == "" {
+		targetID = r.URL.Query().Get("message_id")
+	}
+
 	if s.Review == nil {
 		http.Error(w, "review runner not configured", http.StatusInternalServerError)
 		return
 	}
 
-	cancelled := s.Review.CancelReview(body.MessageID)
+	cancelled := s.Review.CancelReview(targetID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":    true,
+		"status":     "ok",
 		"cancelled":  cancelled,
-		"message_id": body.MessageID,
+		"message_id": targetID,
 	})
 }
 
@@ -160,15 +172,32 @@ func (s *Server) handlePreviewQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	notes := body.Notes
+	if len(notes) == 0 && s.DB != nil {
+		dbComments, _ := s.DB.GetMessageComments(msg.MessageID)
+		for _, c := range dbComments {
+			notes = append(notes, quote.InlineNote{
+				File:   c.FilePath,
+				LineNo: c.LineNo,
+				Side:   c.Side,
+				Text:   c.Text,
+			})
+		}
+	}
+
 	parsed := patch.ParsePatch(msg.BodyPlain)
 	sig := s.Config.SMTP.EffectiveSignature()
 	quoteText := quote.MergePatchReviewQuote(
 		msg.Date, msg.FromName, msg.FromAddr, msg.BodyPlain,
-		parsed, body.Notes, body.GeneralComment, sig,
+		parsed, notes, body.GeneralComment, sig,
 	)
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"quote": quoteText})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"quote_text": quoteText,
+		"body":       quoteText,
+		"quote":      quoteText,
+	})
 }
 
 func (s *Server) handleOpenEditor(w http.ResponseWriter, r *http.Request) {
@@ -195,17 +224,33 @@ func (s *Server) handleOpenEditor(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ToAddr      string `json:"to_addr"`
-		Subject     string `json:"subject"`
-		BodyText    string `json:"body_text"`
-		CcAddr      string `json:"cc_addr"`
-		InReplyTo   string `json:"in_reply_to"`
-		References  string `json:"references"`
-		CustomFrom  string `json:"custom_from"`
+		ToAddr     string `json:"to_addr"`
+		To         string `json:"to"`
+		Subject    string `json:"subject"`
+		BodyText   string `json:"body_text"`
+		Body       string `json:"body"`
+		CcAddr     string `json:"cc_addr"`
+		Cc         string `json:"cc"`
+		InReplyTo  string `json:"in_reply_to"`
+		References string `json:"references"`
+		CustomFrom string `json:"custom_from"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid draft payload", http.StatusBadRequest)
 		return
+	}
+
+	toAddr := body.ToAddr
+	if toAddr == "" {
+		toAddr = body.To
+	}
+	bodyText := body.BodyText
+	if bodyText == "" {
+		bodyText = body.Body
+	}
+	ccAddr := body.CcAddr
+	if ccAddr == "" {
+		ccAddr = body.Cc
 	}
 
 	if s.SMTP == nil || s.Maildir == nil || s.DB == nil {
@@ -213,7 +258,7 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := s.SMTP.BuildMessage(body.ToAddr, body.Subject, body.BodyText, body.CcAddr, body.InReplyTo, body.References, body.CustomFrom)
+	raw := s.SMTP.BuildMessage(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References, body.CustomFrom)
 
 	_ = s.Maildir.EnsureFolder(constants.FolderDrafts)
 	draftFolder, err := s.DB.GetOrCreateFolder(constants.FolderDrafts, false)
@@ -230,26 +275,50 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 
 	dbID, _ := s.DB.IndexEmailFile(draftFolder.ID, path)
 
+	msgID := ""
+	if savedMsg, _ := s.DB.GetMessageByID(dbID); savedMsg != nil {
+		msgID = savedMsg.MessageID
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"success":   true,
-		"db_id":     dbID,
-		"file_path": path,
+		"success":    true,
+		"status":     "ok",
+		"message_id": msgID,
+		"db_id":      dbID,
+		"file_path":  path,
 	})
 }
 
 func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ToAddr     string `json:"to"`
-		CcAddr     string `json:"cc"`
+		ToAddr     string `json:"to_addr"`
+		To         string `json:"to"`
+		CcAddr     string `json:"cc_addr"`
+		Cc         string `json:"cc"`
 		Subject    string `json:"subject"`
-		BodyText   string `json:"body"`
+		BodyText   string `json:"body_text"`
+		Body       string `json:"body"`
 		InReplyTo  string `json:"in_reply_to"`
 		References string `json:"references"`
+		OrigMsgID  string `json:"orig_msg_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid send payload", http.StatusBadRequest)
 		return
+	}
+
+	toAddr := body.ToAddr
+	if toAddr == "" {
+		toAddr = body.To
+	}
+	bodyText := body.BodyText
+	if bodyText == "" {
+		bodyText = body.Body
+	}
+	ccAddr := body.CcAddr
+	if ccAddr == "" {
+		ccAddr = body.Cc
 	}
 
 	if s.SMTP == nil {
@@ -257,12 +326,30 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, msg, err := s.SMTP.SendMessage(body.ToAddr, body.Subject, body.BodyText, body.CcAddr, body.InReplyTo, body.References)
+	ok, msg, err := s.SMTP.SendMessage(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "detail": err.Error()})
 		return
+	}
+
+	// If this message was replying to an existing email, mark the original email as replied
+	origRef := body.OrigMsgID
+	if origRef == "" {
+		origRef = body.InReplyTo
+	}
+	if origRef != "" && s.DB != nil {
+		if orig, _ := s.resolveMessage(origRef); orig != nil {
+			_ = s.DB.SetMessageReplied(orig.ID, true)
+			if s.Maildir != nil && orig.FilePath != "" {
+				newPath, flagErr := s.Maildir.AddFlag(orig.FilePath, constants.FlagReplied)
+				if flagErr == nil && newPath != orig.FilePath {
+					_ = s.DB.SetMessageFilePath(orig.ID, newPath)
+				}
+			}
+			_, _ = s.DB.DiscardDraftComments(orig.MessageID)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

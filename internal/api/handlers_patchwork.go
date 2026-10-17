@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -213,8 +214,13 @@ func (s *Server) handlePatchworkDelegateToMe(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	myUser := s.Config.Patchwork.GetMyUsername(s.Config.SMTP.FromEmail)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(updated)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"patch":   updated,
+		"message": fmt.Sprintf("Patch #%d delegated to %s", pID, myUser),
+	})
 }
 
 func (s *Server) handlePatchworkProjects(w http.ResponseWriter, r *http.Request) {
