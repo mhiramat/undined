@@ -1,6 +1,6 @@
 # Binaries & build artifacts
 bin/
-undined
+/undined
 *.exe
 *.exe~
 *.dll

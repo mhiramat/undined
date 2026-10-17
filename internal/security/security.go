@@ -4,6 +4,7 @@ package security
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
@@ -125,6 +126,12 @@ func (sm *SecurityManager) IsTokenValid(provided string) bool {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(sm.Token)) == 1
+}
+
+// GetTokenFingerprint returns the hex-encoded SHA-256 hash of the auth token.
+func (sm *SecurityManager) GetTokenFingerprint() string {
+	h := sha256.Sum256([]byte(sm.Token))
+	return hex.EncodeToString(h[:])
 }
 
 // ValidateHost ensures the incoming Host header matches allowed interfaces (DNS rebinding defense).
