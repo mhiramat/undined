@@ -241,3 +241,89 @@ func TestThreadingCycleDetection(t *testing.T) {
 		t.Fatalf("expected 3 threaded messages, got %d", len(threaded))
 	}
 }
+
+func TestThreadMessagesHierarchyAndPrefixes(t *testing.T) {
+	root := &Message{ID: 1, MessageID: "root@kernel.org", Subject: "RFC: feature", EpochTimestamp: 100}
+	reply1 := &Message{ID: 2, MessageID: "reply1@kernel.org", InReplyTo: "<root@kernel.org>", Subject: "Re: RFC: feature", EpochTimestamp: 200}
+	reply2 := &Message{ID: 3, MessageID: "reply2@kernel.org", InReplyTo: "<root@kernel.org>", Subject: "Re: RFC: feature", EpochTimestamp: 300}
+	nested := &Message{ID: 4, MessageID: "nested@kernel.org", InReplyTo: "<reply1@kernel.org>", Subject: "Re: Re: RFC: feature", EpochTimestamp: 250}
+
+	msgs := []*Message{root, reply1, reply2, nested}
+	threaded := ThreadMessages(msgs, "date", "asc")
+
+	if len(threaded) != 4 {
+		t.Fatalf("expected 4 threaded messages, got %d", len(threaded))
+	}
+
+	// Root should be first
+	if threaded[0].ID != 1 || threaded[0].ThreadDepth != 0 || !threaded[0].HasChildren || threaded[0].ThreadPrefix != "" {
+		t.Fatalf("unexpected root node: %+v", threaded[0])
+	}
+
+	// reply1 is followed by nested
+	if threaded[1].ID != 2 || threaded[1].ThreadDepth != 1 || threaded[1].ThreadPrefix != "├─ " {
+		t.Fatalf("unexpected reply1 node: %+v", threaded[1])
+	}
+
+	if threaded[2].ID != 4 || threaded[2].ThreadDepth != 2 || threaded[2].ThreadPrefix != "│  └─ " {
+		t.Fatalf("unexpected nested node: %+v", threaded[2])
+	}
+
+	// reply2 is last child
+	if threaded[3].ID != 3 || threaded[3].ThreadDepth != 1 || threaded[3].ThreadPrefix != "└─ " {
+		t.Fatalf("unexpected reply2 node: %+v", threaded[3])
+	}
+}
+
+func TestListMessagesWithOptions(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_options.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil || folder == nil {
+		t.Fatalf("failed to get or create INBOX folder: %v", err)
+	}
+
+	// Insert 3 messages with different timestamps and subjects
+	m1ID, _ := db.InsertHeaderSummary(folder.ID, 1, []byte("Message-ID: <m1@example.com>\r\nSubject: Banana\r\nDate: Mon, 12 Oct 2026 10:00:00 +0000\r\n\r\n"), true, "")
+	m2ID, _ := db.InsertHeaderSummary(folder.ID, 2, []byte("Message-ID: <m2@example.com>\r\nIn-Reply-To: <m1@example.com>\r\nSubject: Re: Banana\r\nDate: Mon, 12 Oct 2026 11:00:00 +0000\r\n\r\n"), true, "")
+	m3ID, _ := db.InsertHeaderSummary(folder.ID, 3, []byte("Message-ID: <m3@example.com>\r\nSubject: Apple\r\nDate: Mon, 12 Oct 2026 09:00:00 +0000\r\n\r\n"), false, "$cl_1")
+
+	if m1ID == 0 || m2ID == 0 || m3ID == 0 {
+		t.Fatalf("failed inserting headers")
+	}
+
+	// Test 1: Flat list sorted by subject asc
+	flat, err := db.ListMessagesWithOptions(&folder.ID, 0, 0, "subject", "asc", false)
+	if err != nil {
+		t.Fatalf("ListMessagesWithOptions flat failed: %v", err)
+	}
+	if len(flat) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(flat))
+	}
+	if flat[0].Subject != "Apple" {
+		t.Fatalf("expected Apple first in subject asc sort, got %s", flat[0].Subject)
+	}
+
+	// Test 2: Threaded list
+	th, err := db.ListMessagesWithOptions(&folder.ID, 0, 0, "date", "desc", true)
+	if err != nil {
+		t.Fatalf("ListMessagesWithOptions threaded failed: %v", err)
+	}
+	if len(th) != 3 {
+		t.Fatalf("expected 3 threaded messages, got %d", len(th))
+	}
+	// Banana thread had reply at 11:00, while Apple was 09:00. So Banana thread should be first in date desc.
+	if th[0].Subject != "Banana" || !th[0].HasChildren {
+		t.Fatalf("expected Banana thread with children first, got %s (has_children: %v)", th[0].Subject, th[0].HasChildren)
+	}
+	if th[1].Subject != "Re: Banana" || th[1].ThreadDepth != 1 {
+		t.Fatalf("expected Re: Banana as child, got %+v", th[1])
+	}
+}
+

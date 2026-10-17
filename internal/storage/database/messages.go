@@ -32,9 +32,19 @@ type Message struct {
 	IsRead           bool    `json:"is_read"`
 	IsReplied        bool    `json:"is_replied"`
 	HasNotes         bool    `json:"has_notes"`
-	Flags            string  `json:"flags"`
-	ReviewCommitID   string  `json:"review_commit_id,omitempty"`
-	CreatedAt        string  `json:"created_at"`
+	Flags                string  `json:"flags"`
+	ReviewCommitID       string  `json:"review_commit_id,omitempty"`
+	ReviewCommitIDHyphen string  `json:"review-commit-id,omitempty"`
+	CreatedAt            string  `json:"created_at"`
+
+	TagKey   *string `json:"tag_key"`
+	TagName  *string `json:"tag_name"`
+	TagColor *string `json:"tag_color"`
+
+	ThreadDepth  int    `json:"thread_depth"`
+	ThreadPrefix string `json:"thread_prefix,omitempty"`
+	HasChildren  bool   `json:"has_children"`
+	IsAIReview   bool   `json:"is_ai_review,omitempty"`
 }
 
 // SearchResult represents full-text search match from FTS5.
@@ -185,6 +195,17 @@ func scanMessage(row interface {
 	m.IsReplied = toBool(isReplied)
 	m.HasNotes = toBool(hasNotes)
 
+	if m.FolderName == "AI-reviews" || m.FromName == "AI review" {
+		m.IsAIReview = true
+		m.MessageID = ""
+		m.IsPatch = false
+		m.HasNotes = false
+		m.ReviewCommitID = ""
+		m.ReviewCommitIDHyphen = ""
+	} else if m.ReviewCommitID != "" {
+		m.ReviewCommitIDHyphen = m.ReviewCommitID
+	}
+
 	return &m, nil
 }
 
@@ -232,8 +253,8 @@ func (d *Database) GetMessageByFolderAndMsgID(folderID int64, msgID string) (*Me
 	return scanMessage(d.DB.QueryRow(query, folderID, cleaned, msgID))
 }
 
-// ListMessages lists messages optionally filtered by folder, with limit and offset.
-func (d *Database) ListMessages(folderID *int64, limit, offset int) ([]*Message, error) {
+// ListMessagesWithOptions lists messages filtered by folder, with limit, offset, sorting and optional threading.
+func (d *Database) ListMessagesWithOptions(folderID *int64, limit, offset int, sortBy, sortOrder string, threaded bool) ([]*Message, error) {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("SELECT %s FROM messages m JOIN folders f ON m.folder_id = f.id ", messageSelectColumns))
 
@@ -243,11 +264,28 @@ func (d *Database) ListMessages(folderID *int64, limit, offset int) ([]*Message,
 		args = append(args, *folderID)
 	}
 
-	sb.WriteString("ORDER BY m.epoch_timestamp DESC, m.id DESC ")
+	if !threaded {
+		sqlCol := "m.epoch_timestamp"
+		switch strings.ToLower(sortBy) {
+		case "subject":
+			sqlCol = "m.subject"
+		case "from":
+			sqlCol = "m.from_name"
+		}
+		sqlOrder := "DESC"
+		if strings.ToLower(sortOrder) == "asc" {
+			sqlOrder = "ASC"
+		}
+		sb.WriteString(fmt.Sprintf("ORDER BY %s %s, m.id DESC ", sqlCol, sqlOrder))
+	} else {
+		sb.WriteString("ORDER BY m.epoch_timestamp DESC, m.id DESC ")
+	}
 
 	if limit > 0 {
 		sb.WriteString("LIMIT ? ")
 		args = append(args, limit)
+	} else if offset > 0 {
+		sb.WriteString("LIMIT -1 ")
 	}
 	if offset > 0 {
 		sb.WriteString("OFFSET ? ")
@@ -268,7 +306,16 @@ func (d *Database) ListMessages(folderID *int64, limit, offset int) ([]*Message,
 		}
 		messages = append(messages, m)
 	}
+
+	if threaded {
+		return ThreadMessages(messages, sortBy, sortOrder), nil
+	}
 	return messages, nil
+}
+
+// ListMessages lists messages optionally filtered by folder, with limit and offset.
+func (d *Database) ListMessages(folderID *int64, limit, offset int) ([]*Message, error) {
+	return d.ListMessagesWithOptions(folderID, limit, offset, "date", "desc", false)
 }
 
 // SetMessageRead marks a message as read or unread.

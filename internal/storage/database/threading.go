@@ -1,6 +1,7 @@
 package database
 
 import (
+	"regexp"
 	"sort"
 	"strings"
 
@@ -93,6 +94,11 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 		rootNodes = append(rootNodes, node)
 	}
 
+	var rePrefix = regexp.MustCompile(`^(?i)(re:\s*|fwd:\s*)+`)
+	cleanSubject := func(s string) string {
+		return strings.ToLower(rePrefix.ReplaceAllString(s, ""))
+	}
+
 	// Helper to calculate thread timestamp for sorting
 	getThreadTimestamp := func(root *ThreadNode) int64 {
 		maxTS := root.Message.EpochTimestamp
@@ -109,22 +115,84 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 		return maxTS
 	}
 
-	// Sort root nodes
 	isDesc := strings.ToLower(sortOrder) != "asc"
+
+	// Sort root nodes
 	sort.SliceStable(rootNodes, func(i, j int) bool {
-		tsI := getThreadTimestamp(rootNodes[i])
-		tsJ := getThreadTimestamp(rootNodes[j])
-		if isDesc {
-			return tsI > tsJ
+		mI := rootNodes[i].Message
+		mJ := rootNodes[j].Message
+		var less bool
+		switch strings.ToLower(sortBy) {
+		case "subject":
+			less = cleanSubject(mI.Subject) < cleanSubject(mJ.Subject)
+		case "from":
+			fromI := strings.ToLower(mI.FromName)
+			if fromI == "" {
+				fromI = strings.ToLower(mI.FromAddr)
+			}
+			fromJ := strings.ToLower(mJ.FromName)
+			if fromJ == "" {
+				fromJ = strings.ToLower(mJ.FromAddr)
+			}
+			less = fromI < fromJ
+		case "tag":
+			tagI := ""
+			if mI.TagName != nil {
+				tagI = *mI.TagName
+			}
+			tagJ := ""
+			if mJ.TagName != nil {
+				tagJ = *mJ.TagName
+			}
+			less = strings.ToLower(tagI) < strings.ToLower(tagJ)
+		default: // "date"
+			tsI := getThreadTimestamp(rootNodes[i])
+			tsJ := getThreadTimestamp(rootNodes[j])
+			less = tsI < tsJ
 		}
-		return tsI < tsJ
+		if isDesc {
+			return !less
+		}
+		return less
 	})
 
-	// Sort children recursively by date ascending
+	// Sort children recursively
 	var sortChildren func(n *ThreadNode)
 	sortChildren = func(n *ThreadNode) {
 		sort.SliceStable(n.Children, func(i, j int) bool {
-			return n.Children[i].Message.EpochTimestamp < n.Children[j].Message.EpochTimestamp
+			mI := n.Children[i].Message
+			mJ := n.Children[j].Message
+			var less bool
+			switch strings.ToLower(sortBy) {
+			case "subject":
+				less = cleanSubject(mI.Subject) < cleanSubject(mJ.Subject)
+			case "from":
+				fromI := strings.ToLower(mI.FromName)
+				if fromI == "" {
+					fromI = strings.ToLower(mI.FromAddr)
+				}
+				fromJ := strings.ToLower(mJ.FromName)
+				if fromJ == "" {
+					fromJ = strings.ToLower(mJ.FromAddr)
+				}
+				less = fromI < fromJ
+			case "tag":
+				tagI := ""
+				if mI.TagName != nil {
+					tagI = *mI.TagName
+				}
+				tagJ := ""
+				if mJ.TagName != nil {
+					tagJ = *mJ.TagName
+				}
+				less = strings.ToLower(tagI) < strings.ToLower(tagJ)
+			default: // "date"
+				less = mI.EpochTimestamp < mJ.EpochTimestamp
+			}
+			if isDesc {
+				return !less
+			}
+			return less
 		})
 		for _, child := range n.Children {
 			sortChildren(child)
@@ -134,19 +202,42 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 		sortChildren(root)
 	}
 
-	// Flatten tree pre-order
+	// Flatten tree pre-order with branch prefixes
 	var result []*Message
-	var flatten func(n *ThreadNode, depth int)
-	flatten = func(n *ThreadNode, depth int) {
-		n.Depth = depth
-		result = append(result, n.Message)
-		for _, child := range n.Children {
-			flatten(child, depth+1)
+	var dfs func(node *ThreadNode, depth int, hasMoreAncestors []bool)
+	dfs = func(node *ThreadNode, depth int, hasMoreAncestors []bool) {
+		node.Depth = depth
+		var prefix strings.Builder
+		for k := 0; k < depth-1; k++ {
+			if hasMoreAncestors[k] {
+				prefix.WriteString("│  ")
+			} else {
+				prefix.WriteString("   ")
+			}
+		}
+		if depth > 0 {
+			isLast := !hasMoreAncestors[depth-1]
+			if isLast {
+				prefix.WriteString("└─ ")
+			} else {
+				prefix.WriteString("├─ ")
+			}
+		}
+
+		mCopy := *node.Message
+		mCopy.ThreadDepth = depth
+		mCopy.ThreadPrefix = prefix.String()
+		mCopy.HasChildren = len(node.Children) > 0
+		result = append(result, &mCopy)
+
+		for i, child := range node.Children {
+			hasMore := i < len(node.Children)-1
+			dfs(child, depth+1, append(hasMoreAncestors, hasMore))
 		}
 	}
 
 	for _, root := range rootNodes {
-		flatten(root, 0)
+		dfs(root, 0, nil)
 	}
 
 	return result

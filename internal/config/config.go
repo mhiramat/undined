@@ -19,6 +19,13 @@ type TagDefinition struct {
 	Color string `toml:"color" json:"color"`
 }
 
+// ResolvedTag contains key, tag name, and color for a matched email flag.
+type ResolvedTag struct {
+	Key   string `json:"key"`
+	Tag   string `json:"tag"`
+	Color string `json:"color"`
+}
+
 // GeneralConfig holds server, storage, and editor settings.
 type GeneralConfig struct {
 	Host                   string `toml:"host" json:"host"`
@@ -296,6 +303,42 @@ func DefaultTags() map[string]TagDefinition {
 		"$label4": {Tag: "To Do", Color: "#3333FF"},
 		"$label5": {Tag: "Later", Color: "#993399"},
 	}
+}
+
+// ResolveTag checks tokens in flags against configured tag definitions (case-insensitive)
+// and returns the first matching tag info, or nil if no match.
+func (c *Config) ResolveTag(flags string) *ResolvedTag {
+	if strings.TrimSpace(flags) == "" || c == nil || len(c.Tags) == 0 {
+		return nil
+	}
+	cleanFlags := strings.ReplaceAll(flags, ",", " ")
+	tokens := strings.Fields(cleanFlags)
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	lowerMap := make(map[string]struct {
+		origKey string
+		tagDef  TagDefinition
+	}, len(c.Tags))
+	for k, v := range c.Tags {
+		lowerMap[strings.ToLower(k)] = struct {
+			origKey string
+			tagDef  TagDefinition
+		}{origKey: k, tagDef: v}
+	}
+
+	for _, tok := range tokens {
+		tokLower := strings.ToLower(tok)
+		if entry, ok := lowerMap[tokLower]; ok {
+			return &ResolvedTag{
+				Key:   entry.origKey,
+				Tag:   entry.tagDef.Tag,
+				Color: entry.tagDef.Color,
+			}
+		}
+	}
+	return nil
 }
 
 // NewDefaultConfig returns a Config initialized with standard defaults.

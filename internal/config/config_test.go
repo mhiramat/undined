@@ -86,3 +86,38 @@ func TestExpandPath(t *testing.T) {
 		t.Fatalf("expected %s, got %s", expected, expanded)
 	}
 }
+
+func TestResolveTag(t *testing.T) {
+	cfg := NewDefaultConfig()
+
+	// 1. Empty or whitespace
+	if res := cfg.ResolveTag(""); res != nil {
+		t.Fatalf("expected nil for empty string, got %+v", res)
+	}
+	if res := cfg.ResolveTag("   "); res != nil {
+		t.Fatalf("expected nil for spaces, got %+v", res)
+	}
+
+	// 2. Exact match
+	res := cfg.ResolveTag("$cl_1")
+	if res == nil || res.Key != "$cl_1" || res.Tag != "Red" || res.Color != "#CC0000" {
+		t.Fatalf("unexpected result for $cl_1: %+v", res)
+	}
+
+	// 3. Case-insensitive
+	res = cfg.ResolveTag("$CL_2")
+	if res == nil || res.Key != "$cl_2" || res.Tag != "Blue" || res.Color != "#3333FF" {
+		t.Fatalf("unexpected result for $CL_2: %+v", res)
+	}
+
+	// 4. Multiple flags separated by spaces and commas
+	res = cfg.ResolveTag(`\Seen, $label4, something`)
+	if res == nil || res.Key != "$label4" || res.Tag != "To Do" || res.Color != "#3333FF" {
+		t.Fatalf("unexpected result for multiple flags: %+v", res)
+	}
+
+	// 5. No match
+	if res := cfg.ResolveTag(`\Seen \Answered`); res != nil {
+		t.Fatalf("expected nil for unmapped flags, got %+v", res)
+	}
+}
