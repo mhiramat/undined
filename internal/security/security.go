@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -132,8 +133,15 @@ func (sm *SecurityManager) ValidateHost(hostHeader string) bool {
 	if hostHeader == "" {
 		return false
 	}
-	_, ok := sm.AllowedHosts[hostHeader]
-	return ok
+	if _, ok := sm.AllowedHosts[hostHeader]; ok {
+		return true
+	}
+	if h, _, err := net.SplitHostPort(hostHeader); err == nil {
+		if _, ok := sm.AllowedHosts[h]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateOrigin ensures state-modifying requests originate from local origins (CSRF defense).
@@ -146,16 +154,30 @@ func (sm *SecurityManager) ValidateOrigin(method, originHeader, refererHeader st
 
 	if originHeader != "" {
 		originHeader = strings.ToLower(strings.TrimRight(strings.TrimSpace(originHeader), "/"))
-		_, ok := sm.AllowedOrigins[originHeader]
-		return ok
+		if _, ok := sm.AllowedOrigins[originHeader]; ok {
+			return true
+		}
+		u, err := url.Parse(originHeader)
+		if err == nil {
+			hostname := strings.ToLower(u.Hostname())
+			if _, ok := sm.AllowedHosts[hostname]; ok {
+				return true
+			}
+		}
+		return false
 	}
 
 	if refererHeader != "" {
 		u, err := url.Parse(refererHeader)
 		if err == nil {
 			refOrigin := strings.ToLower(fmt.Sprintf("%s://%s", u.Scheme, u.Host))
-			_, ok := sm.AllowedOrigins[refOrigin]
-			return ok
+			if _, ok := sm.AllowedOrigins[refOrigin]; ok {
+				return true
+			}
+			hostname := strings.ToLower(u.Hostname())
+			if _, ok := sm.AllowedHosts[hostname]; ok {
+				return true
+			}
 		}
 		return false
 	}
