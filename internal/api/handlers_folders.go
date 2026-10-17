@@ -69,14 +69,25 @@ func (s *Server) handleSyncFullFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() {
-		_, _ = s.IMAP.SyncFullFolder(folderID, folder.Name)
-	}()
+	count, err := s.IMAP.SyncFullFolder(folderID, folder.Name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	syncStatus := s.IMAP.GetSyncStatus(folderID)
+	statusStr := syncStatus.Status
+	if statusStr == "" {
+		statusStr = "completed"
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"message":   "Sync started",
-		"folder_id": folderID,
+		"status":        statusStr,
+		"folder_id":     folderID,
+		"folder_name":   folder.Name,
+		"synced_count":  count,
+		"removed_count": syncStatus.Removed,
 	})
 }
 
@@ -114,6 +125,7 @@ func (s *Server) handleCancelFolderSync(w http.ResponseWriter, r *http.Request) 
 	cancelled := s.IMAP.CancelFolderSync(folderID)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":    "ok",
 		"cancelled": cancelled,
 		"folder_id": folderID,
 	})

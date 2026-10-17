@@ -40,6 +40,23 @@ func (s *Server) resolveMessage(idOrMsgID string) (*database.Message, error) {
 	return nil, fmt.Errorf("message not found")
 }
 
+func (s *Server) attachTagInfo(m *database.Message) {
+	if m == nil {
+		return
+	}
+	if s.Config != nil {
+		tagInfo := s.Config.ResolveTag(m.Flags)
+		if tagInfo != nil {
+			m.TagKey = &tagInfo.Key
+			m.TagName = &tagInfo.Tag
+			m.TagColor = &tagInfo.Color
+		}
+	}
+	if m.ReviewCommitID != "" {
+		m.ReviewCommitIDHyphen = m.ReviewCommitID
+	}
+}
+
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	var folderID *int64
 	if fStr := r.URL.Query().Get("folder_id"); fStr != "" {
@@ -48,7 +65,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	limit := 50
+	limit := 0
 	if lStr := r.URL.Query().Get("limit"); lStr != "" {
 		if l, err := strconv.Atoi(lStr); err == nil && l > 0 {
 			limit = l
@@ -62,23 +79,33 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	threaded := r.URL.Query().Get("threaded") == "true"
-	if threaded && folderID != nil {
-		// In threaded mode, list top-level messages or entire thread trees
-		msgs, err := s.DB.ListMessages(folderID, limit, offset)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(msgs)
-		return
+	threaded := true
+	if r.URL.Query().Get("threaded") == "false" {
+		threaded = false
 	}
 
-	msgs, err := s.DB.ListMessages(folderID, limit, offset)
+	sortBy := r.URL.Query().Get("sort_by")
+	if sortBy == "" {
+		sortBy = "date"
+	}
+
+	sortOrder := r.URL.Query().Get("sort_order")
+	if sortOrder == "" {
+		sortOrder = "desc"
+	}
+
+	msgs, err := s.DB.ListMessagesWithOptions(folderID, limit, offset, sortBy, sortOrder, threaded)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	for _, m := range msgs {
+		s.attachTagInfo(m)
+	}
+
+	if msgs == nil {
+		msgs = []*database.Message{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -103,6 +130,8 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 			}
 		}
 	}
+
+	s.attachTagInfo(msg)
 
 	// Parse diff if message is a patch
 	var parsedDiff *patch.ParsedEmailDiff

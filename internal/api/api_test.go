@@ -14,6 +14,7 @@ import (
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/imap"
 	"undined-go/internal/patchwork"
 	"undined-go/internal/security"
 	"undined-go/internal/storage/database"
@@ -49,7 +50,8 @@ func setupTestAPIServer(t *testing.T) (*Server, *database.Database, string, stri
 	_ = os.MkdirAll(filepath.Join(frontendDir, "src"), 0755)
 	_ = os.WriteFile(filepath.Join(frontendDir, "index.html"), []byte("<html><body>Undine UI</body></html>"), 0644)
 
-	server := NewServer(cfg, db, store, sec, nil, nil, nil, nil, nil, nil, frontendDir)
+	imapPoller := imap.NewPoller(cfg, store, db)
+	server := NewServer(cfg, db, store, sec, imapPoller, nil, nil, nil, nil, nil, frontendDir)
 	return server, db, sec.Token, tmpDir
 }
 
@@ -311,3 +313,105 @@ func TestRule4PatchworkUpdateWithNullDelegateEndpoint(t *testing.T) {
 		t.Errorf("Expected delegate to be null, got %v", val)
 	}
 }
+
+func TestFolderSyncAndThreadedMessagesEndpoints(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+	client := ts.Client()
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	// 1. Test GET /api/folders/{id}/sync-status
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/folders/%d/sync-status", ts.URL, folder.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("sync-status failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for sync-status, got %d", resp.StatusCode)
+	}
+	var syncSt map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&syncSt)
+	if syncSt["status"] != "idle" {
+		t.Errorf("expected status idle, got %v", syncSt["status"])
+	}
+
+	// 2. Test POST /api/folders/{id}/sync-cancel
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/folders/%d/sync-cancel", ts.URL, folder.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("sync-cancel failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for sync-cancel, got %d", resp.StatusCode)
+	}
+	var cancelRes map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&cancelRes)
+	if cancelRes["status"] != "ok" {
+		t.Errorf("expected status ok, got %v", cancelRes["status"])
+	}
+
+	// 3. Test POST /api/folders/{id}/sync-full (without IMAP username configured, should fail cleanly)
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/folders/%d/sync-full", ts.URL, folder.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("sync-full failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Errorf("expected 500 when IMAP credentials missing, got %d", resp.StatusCode)
+	}
+
+	// 4. Test GET /api/messages with threading and tag resolution
+	m1ID, _ := db.InsertHeaderSummary(folder.ID, 1, []byte("Message-ID: <root-msg@kernel.org>\r\nSubject: Test Subject\r\nDate: Mon, 12 Oct 2026 10:00:00 +0000\r\n\r\n"), true, "$cl_1")
+	m2ID, _ := db.InsertHeaderSummary(folder.ID, 2, []byte("Message-ID: <reply-msg@kernel.org>\r\nIn-Reply-To: <root-msg@kernel.org>\r\nSubject: Re: Test Subject\r\nDate: Mon, 12 Oct 2026 11:00:00 +0000\r\n\r\n"), false, "")
+
+	if m1ID == 0 || m2ID == 0 {
+		t.Fatalf("failed inserting test headers")
+	}
+
+	req, _ = http.NewRequest("GET", fmt.Sprintf("%s/api/messages?folder_id=%d", ts.URL, folder.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/messages failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var msgs []*database.Message
+	_ = json.NewDecoder(resp.Body).Decode(&msgs)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+
+	// Verify root message has children and tag info
+	if msgs[0].MessageID != "root-msg@kernel.org" {
+		t.Fatalf("expected root-msg first in thread, got %s", msgs[0].MessageID)
+	}
+	if !msgs[0].HasChildren || msgs[0].ThreadDepth != 0 {
+		t.Fatalf("expected root to have children and depth 0: %+v", msgs[0])
+	}
+	if msgs[0].TagKey == nil || *msgs[0].TagKey != "$cl_1" || msgs[0].TagName == nil || *msgs[0].TagName != "Red" {
+		t.Fatalf("expected tag $cl_1 (Red) on root message, got %+v", msgs[0])
+	}
+
+	// Verify reply message has depth 1 and prefix
+	if msgs[1].MessageID != "reply-msg@kernel.org" {
+		t.Fatalf("expected reply-msg second in thread, got %s", msgs[1].MessageID)
+	}
+	if msgs[1].ThreadDepth != 1 || msgs[1].ThreadPrefix != "└─ " {
+		t.Fatalf("expected reply to have depth 1 and prefix '└─ ', got depth %d, prefix %q", msgs[1].ThreadDepth, msgs[1].ThreadPrefix)
+	}
+}
+
