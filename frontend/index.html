@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>UndineD - Linux Kernel MUA</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="alternate icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/src/styles/terminal.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="undine-app">
+  <div id="app" class="app-layout">
+    <!-- Left Pane: Folder Tree -->
+    <aside id="folder-pane" class="pane folder-pane"></aside>
+
+    <!-- Right Container -->
+    <main id="main-content" class="main-content">
+      <!-- Top-Right Pane: Thread Summary -->
+      <section id="summary-pane" class="pane summary-pane"></section>
+
+      <!-- Draggable Splitter Divider -->
+      <div id="pane-resizer-h" class="pane-resizer-h" title="Drag to resize message list / viewer height">
+        <div class="resizer-handle"></div>
+      </div>
+
+      <!-- Bottom-Right Pane: Message & Diff Viewer -->
+      <section id="viewer-pane" class="pane viewer-pane"></section>
+    </main>
+  </div>
+
+  <!-- Internal Editor Composer Container -->
+  <div id="composer-container"></div>
+
+  <div id="toast-container" class="toast-container"></div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

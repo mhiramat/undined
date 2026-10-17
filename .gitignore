@@ -1,0 +1,28 @@
+# Binaries & build artifacts
+bin/
+undined
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go dependency directory
+vendor/
+
+# Undine runtime artifacts
+auth_token
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+
+# OS & Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
