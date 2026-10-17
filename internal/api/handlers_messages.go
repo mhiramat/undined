@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"undined-go/internal/config"
 	"undined-go/internal/constants"
 	"undined-go/internal/lkml/patch"
 	"undined-go/internal/storage/database"
@@ -141,6 +142,9 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 
 	// Fetch inline comments
 	comments, _ := s.DB.GetMessageComments(msg.MessageID)
+	if comments == nil {
+		comments = make([]*database.PatchComment, 0)
+	}
 
 	// Fetch review commit ID
 	revCommit := msg.ReviewCommitID
@@ -149,13 +153,16 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Fetch parent info
-	_, primaryParentID, parentInfo := s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
+	missingParent, primaryParentID, parentInfo := s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
 
 	res := map[string]any{
 		"message":           msg,
 		"patch":             parsedDiff,
+		"parsed_diff":       parsedDiff,
 		"comments":          comments,
 		"review_commit_id":  revCommit,
+		"missing_parent":    missingParent,
+		"parent_msgid":      primaryParentID,
 		"parent_info":       parentInfo,
 		"primary_parent_id": primaryParentID,
 	}
@@ -221,7 +228,14 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":    true,
+		"status":     "ok",
+		"id":         msg.ID,
+		"deleted_id": msg.ID,
+		"message_id": msg.MessageID,
+		"message":    "Message deleted successfully",
+	})
 }
 
 func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
@@ -232,16 +246,25 @@ func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body struct {
-		Read bool `json:"read"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	var raw map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&raw)
 
-	_ = s.DB.SetMessageRead(msg.ID, body.Read)
+	isRead := true
+	if v, ok := raw["is_read"]; ok {
+		if b, ok := v.(bool); ok {
+			isRead = b
+		}
+	} else if v, ok := raw["read"]; ok {
+		if b, ok := v.(bool); ok {
+			isRead = b
+		}
+	}
+
+	_ = s.DB.SetMessageRead(msg.ID, isRead)
+	newPath := msg.FilePath
 	if s.Maildir != nil && msg.FilePath != "" {
-		var newPath string
 		var flagErr error
-		if body.Read {
+		if isRead {
 			newPath, flagErr = s.Maildir.AddFlag(msg.FilePath, constants.FlagSeen)
 		} else {
 			newPath, flagErr = s.Maildir.RemoveFlag(msg.FilePath, constants.FlagSeen)
@@ -252,7 +275,13 @@ func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "is_read": body.Read})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":       true,
+		"status":        "ok",
+		"message_db_id": msg.ID,
+		"is_read":       isRead,
+		"file_path":     newPath,
+	})
 }
 
 func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request) {
@@ -263,16 +292,25 @@ func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var body struct {
-		Replied bool `json:"replied"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	var raw map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&raw)
 
-	_ = s.DB.SetMessageReplied(msg.ID, body.Replied)
+	isReplied := true
+	if v, ok := raw["is_replied"]; ok {
+		if b, ok := v.(bool); ok {
+			isReplied = b
+		}
+	} else if v, ok := raw["replied"]; ok {
+		if b, ok := v.(bool); ok {
+			isReplied = b
+		}
+	}
+
+	_ = s.DB.SetMessageReplied(msg.ID, isReplied)
+	newPath := msg.FilePath
 	if s.Maildir != nil && msg.FilePath != "" {
-		var newPath string
 		var flagErr error
-		if body.Replied {
+		if isReplied {
 			newPath, flagErr = s.Maildir.AddFlag(msg.FilePath, constants.FlagReplied)
 		} else {
 			newPath, flagErr = s.Maildir.RemoveFlag(msg.FilePath, constants.FlagReplied)
@@ -283,7 +321,13 @@ func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "is_replied": body.Replied})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":       true,
+		"status":        "ok",
+		"message_db_id": msg.ID,
+		"is_replied":    isReplied,
+		"file_path":     newPath,
+	})
 }
 
 func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
@@ -295,33 +339,99 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Tag    string `json:"tag"`
-		Action string `json:"action"` // "set", "toggle", "clear"
+		Tag    *string `json:"tag"`
+		Action string  `json:"action"` // optional legacy fallback
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
-	currentFlags := msg.Flags
-	newFlags := currentFlags
+	allTags := make(map[string]config.TagDefinition)
+	if s.Config != nil {
+		allTags = s.Config.Tags
+	}
+	lowerTagMap := make(map[string]string)
+	for k, v := range allTags {
+		lowerTagMap[strings.ToLower(k)] = k
+		if v.Tag != "" && lowerTagMap[strings.ToLower(v.Tag)] == "" {
+			lowerTagMap[strings.ToLower(v.Tag)] = k
+		}
+	}
 
-	switch body.Action {
-	case "set":
-		if !strings.Contains(currentFlags, body.Tag) {
-			newFlags = strings.TrimSpace(currentFlags + " " + body.Tag)
+	currentTokens := strings.Fields(msg.Flags)
+	existingTagKeys := make(map[string]bool)
+	for _, t := range currentTokens {
+		if _, ok := allTags[t]; ok {
+			existingTagKeys[t] = true
+		} else if _, ok := lowerTagMap[strings.ToLower(t)]; ok {
+			existingTagKeys[t] = true
 		}
-	case "toggle":
-		if strings.Contains(currentFlags, body.Tag) {
-			newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, body.Tag, ""))
-		} else {
-			newFlags = strings.TrimSpace(currentFlags + " " + body.Tag)
+	}
+
+	var newFlags string
+	if body.Action != "" && body.Tag != nil {
+		// Legacy action support ("set", "toggle", "clear")
+		tagVal := *body.Tag
+		currentFlags := msg.Flags
+		switch body.Action {
+		case "set":
+			if !strings.Contains(currentFlags, tagVal) {
+				newFlags = strings.TrimSpace(currentFlags + " " + tagVal)
+			} else {
+				newFlags = currentFlags
+			}
+		case "toggle":
+			if strings.Contains(currentFlags, tagVal) {
+				newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, tagVal, ""))
+			} else {
+				newFlags = strings.TrimSpace(currentFlags + " " + tagVal)
+			}
+		case "clear":
+			newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, tagVal, ""))
 		}
-	case "clear":
-		newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, body.Tag, ""))
+	} else {
+		// Standard UndineD set tag logic: replace existing recognized tag with new tag
+		var newTagKey string
+		if body.Tag != nil && strings.TrimSpace(*body.Tag) != "" {
+			reqClean := strings.TrimSpace(*body.Tag)
+			if matchedKey, ok := lowerTagMap[strings.ToLower(reqClean)]; ok {
+				newTagKey = matchedKey
+			} else {
+				newTagKey = reqClean
+			}
+		}
+
+		var remainingTokens []string
+		for _, t := range currentTokens {
+			if !existingTagKeys[t] {
+				remainingTokens = append(remainingTokens, t)
+			}
+		}
+		if newTagKey != "" {
+			remainingTokens = append(remainingTokens, newTagKey)
+		}
+		newFlags = strings.Join(remainingTokens, " ")
 	}
 
 	_ = s.DB.SetMessageFlags(msg.ID, newFlags)
 
+	var tagKey, tagName, tagColor any
+	if s.Config != nil {
+		if tagInfo := s.Config.ResolveTag(newFlags); tagInfo != nil {
+			tagKey = tagInfo.Key
+			tagName = tagInfo.Tag
+			tagColor = tagInfo.Color
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "flags": newFlags})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":    true,
+		"status":     "ok",
+		"message_id": msg.ID,
+		"flags":      newFlags,
+		"tag_key":    tagKey,
+		"tag_name":   tagName,
+		"tag_color":  tagColor,
+	})
 }
 
 func (s *Server) handleGetComments(w http.ResponseWriter, r *http.Request) {
@@ -332,14 +442,21 @@ func (s *Server) handleGetComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comments, err := s.DB.GetMessageComments(msg.MessageID)
+	state := r.URL.Query().Get("state")
+	comments, err := s.DB.GetMessageComments(msg.MessageID, state)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if comments == nil {
+		comments = make([]*database.PatchComment, 0)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(comments)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"message_id": msg.MessageID,
+		"comments":   comments,
+	})
 }
 
 func (s *Server) handleSaveComment(w http.ResponseWriter, r *http.Request) {
@@ -350,13 +467,49 @@ func (s *Server) handleSaveComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req database.PatchComment
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body struct {
+		ID        int64  `json:"id"`
+		CommentID int64  `json:"comment_id"`
+		File      string `json:"file"`
+		FilePath  string `json:"file_path"`
+		LineNo    int    `json:"line_no"`
+		LineNoAlt *int   `json:"lineNo"`
+		Side      string `json:"side"`
+		Text      string `json:"text"`
+		State     string `json:"state"`
+		Author    string `json:"author"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid comment payload", http.StatusBadRequest)
 		return
 	}
 
-	req.MessageID = msg.MessageID
+	commentID := body.ID
+	if commentID <= 0 && body.CommentID > 0 {
+		commentID = body.CommentID
+	}
+
+	filePath := body.FilePath
+	if filePath == "" && body.File != "" {
+		filePath = body.File
+	}
+
+	lineNo := body.LineNo
+	if lineNo == 0 && body.LineNoAlt != nil {
+		lineNo = *body.LineNoAlt
+	}
+
+	req := database.PatchComment{
+		ID:        commentID,
+		MessageID: msg.MessageID,
+		FilePath:  filePath,
+		LineNo:    lineNo,
+		Side:      body.Side,
+		Text:      body.Text,
+		State:     body.State,
+		Author:    body.Author,
+	}
+
 	saved, err := s.DB.SavePatchComment(&req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -364,7 +517,10 @@ func (s *Server) handleSaveComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(saved)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success": true,
+		"comment": saved,
+	})
 }
 
 func (s *Server) handleDiscardComments(w http.ResponseWriter, r *http.Request) {
@@ -375,9 +531,12 @@ func (s *Server) handleDiscardComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.DB.DiscardDraftComments(msg.MessageID)
+	discarded, _ := s.DB.DiscardDraftComments(msg.MessageID)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"success":         true,
+		"discarded_count": discarded,
+	})
 }
 
 func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
@@ -406,6 +565,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if results == nil {
+		results = make([]*database.SearchResult, 0)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

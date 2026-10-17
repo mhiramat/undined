@@ -247,8 +247,13 @@ func TestFolderAndMessageEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST comment failed: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected 200 OK for comment, got %d", resp.StatusCode)
+	var postCommentRes struct {
+		Success bool           `json:"success"`
+		Comment map[string]any `json:"comment"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&postCommentRes)
+	if !postCommentRes.Success || postCommentRes.Comment == nil || postCommentRes.Comment["text"] != "Check this lock" {
+		t.Fatalf("Unexpected POST comment response: %v", postCommentRes)
 	}
 
 	req, _ = http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/comments", ts.URL, msgID), nil)
@@ -257,10 +262,13 @@ func TestFolderAndMessageEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET comments failed: %v", err)
 	}
-	var comments []map[string]any
-	_ = json.NewDecoder(resp.Body).Decode(&comments)
-	if len(comments) != 1 || comments[0]["text"] != "Check this lock" {
-		t.Errorf("Unexpected comments response: %v", comments)
+	var getCommentsRes struct {
+		MessageID string           `json:"message_id"`
+		Comments  []map[string]any `json:"comments"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&getCommentsRes)
+	if len(getCommentsRes.Comments) != 1 || getCommentsRes.Comments[0]["text"] != "Check this lock" {
+		t.Errorf("Unexpected comments response: %v", getCommentsRes)
 	}
 }
 
