@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"undined-go/internal/storage/maildir"
@@ -45,6 +46,7 @@ type Message struct {
 	ThreadPrefix string `json:"thread_prefix,omitempty"`
 	HasChildren  bool   `json:"has_children"`
 	IsAIReview   bool   `json:"is_ai_review,omitempty"`
+	ReviewedMessage *ReviewedMessage `json:"reviewed_message,omitempty"`
 }
 
 // SearchResult represents full-text search match from FTS5.
@@ -587,4 +589,125 @@ func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*M
 	}
 	return deleted, nil
 }
+
+// ReviewedMessage represents the original patch email linked to an AI review.
+type ReviewedMessage struct {
+	ID         int64  `json:"id"`
+	MessageID  string `json:"message_id"`
+	FolderID   int64  `json:"folder_id"`
+	FolderName string `json:"folder_name"`
+	Subject    string `json:"subject"`
+}
+
+// FindReviewedMessage locates the original email reviewed by an AI-review message.
+func (d *Database) FindReviewedMessage(msg *Message) (*ReviewedMessage, error) {
+	if msg == nil {
+		return nil, nil
+	}
+
+	var orig *Message
+
+	// 1. Resolve from InReplyTo
+	if msg.InReplyTo != "" {
+		cleanedRef := parser.CleanMsgID(msg.InReplyTo)
+		if strings.HasPrefix(cleanedRef, "id-") {
+			if idNum, err := strconv.ParseInt(cleanedRef[3:], 10, 64); err == nil && idNum > 0 {
+				orig, _ = d.GetMessageByID(idNum)
+			}
+		} else if idNum, err := strconv.ParseInt(cleanedRef, 10, 64); err == nil && idNum > 0 {
+			orig, _ = d.GetMessageByID(idNum)
+		}
+		if orig == nil && cleanedRef != "" {
+			orig, _ = d.GetMessageByMsgID(cleanedRef)
+		}
+	}
+
+	// 2. Fallback: Parse headers from the raw message file if available
+	if orig == nil && msg.FilePath != "" {
+		if content, err := os.ReadFile(msg.FilePath); err == nil {
+			rawHeaders := string(content)
+			if idx := strings.Index(rawHeaders, "\n\n"); idx != -1 {
+				rawHeaders = rawHeaders[:idx]
+			} else if idx := strings.Index(rawHeaders, "\r\n\r\n"); idx != -1 {
+				rawHeaders = rawHeaders[:idx]
+			}
+
+			// Check X-Reviewed-Message-DB-ID
+			for _, line := range strings.Split(rawHeaders, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(strings.ToLower(line), "x-reviewed-message-db-id:") {
+					val := strings.TrimSpace(line[len("x-reviewed-message-db-id:"):])
+					if idNum, err := strconv.ParseInt(val, 10, 64); err == nil && idNum > 0 {
+						orig, _ = d.GetMessageByID(idNum)
+						if orig != nil {
+							break
+						}
+					}
+				}
+			}
+
+			// Check X-Reviewed-Message-ID
+			if orig == nil {
+				for _, line := range strings.Split(rawHeaders, "\n") {
+					line = strings.TrimSpace(line)
+					if strings.HasPrefix(strings.ToLower(line), "x-reviewed-message-id:") {
+						val := strings.TrimSpace(line[len("x-reviewed-message-id:"):])
+						cleaned := parser.CleanMsgID(val)
+						if cleaned != "" {
+							orig, _ = d.GetMessageByMsgID(cleaned)
+							if orig != nil {
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Fallback: Subject matching ("AI review: <subject>", "AI review (failed): <subject>", etc.)
+	if orig == nil && msg.Subject != "" {
+		subj := strings.TrimSpace(msg.Subject)
+		var origSubj string
+		if strings.HasPrefix(subj, "AI review:") {
+			origSubj = strings.TrimSpace(strings.TrimPrefix(subj, "AI review:"))
+		} else if strings.HasPrefix(subj, "AI review (failed):") {
+			origSubj = strings.TrimSpace(strings.TrimPrefix(subj, "AI review (failed):"))
+		} else if strings.HasPrefix(subj, "AI review (cancelled):") {
+			origSubj = strings.TrimSpace(strings.TrimPrefix(subj, "AI review (cancelled):"))
+		}
+
+		if origSubj != "" {
+			row := d.DB.QueryRow(`
+				SELECT id FROM messages
+				WHERE subject = ? AND (from_name != 'AI review' OR from_name IS NULL)
+				ORDER BY epoch_timestamp DESC LIMIT 1
+			`, origSubj)
+			var targetID int64
+			if err := row.Scan(&targetID); err == nil && targetID > 0 {
+				orig, _ = d.GetMessageByID(targetID)
+			}
+		}
+	}
+
+	if orig == nil {
+		return nil, nil
+	}
+
+	fName := orig.FolderName
+	if fName == "" && orig.FolderID > 0 {
+		if folder, _ := d.GetFolderByID(orig.FolderID); folder != nil {
+			fName = folder.Name
+		}
+	}
+
+	return &ReviewedMessage{
+		ID:         orig.ID,
+		MessageID:  orig.MessageID,
+		FolderID:   orig.FolderID,
+		FolderName: fName,
+		Subject:    orig.Subject,
+	}, nil
+}
+
 

@@ -557,3 +557,116 @@ func TestAPIConsistencyAndReturnValues(t *testing.T) {
 	}
 }
 
+func TestAIReviewMessageDetailAndLinks(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	// 1. Create a patch message in b4-imports
+	b4Folder, err := db.GetOrCreateFolder("b4-imports", true)
+	if err != nil {
+		t.Fatalf("failed creating b4 folder: %v", err)
+	}
+
+	origID, err := db.InsertHeaderSummary(
+		b4Folder.ID,
+		501,
+		[]byte("Message-ID: <reviewed-patch@kernel.org>\r\nSubject: [PATCH] mm: fix slab memory leak\r\nFrom: Dev <dev@kernel.org>\r\nDate: Sat, 17 Oct 2026 10:00:00 +0000\r\n\r\n"),
+		true,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("failed creating orig patch: %v", err)
+	}
+
+	// 2. Create AI review message in AI-reviews folder linking to reviewed-patch@kernel.org
+	aiFolder, err := db.GetOrCreateFolder("AI-reviews", false)
+	if err != nil {
+		t.Fatalf("failed creating AI-reviews folder: %v", err)
+	}
+
+	aiReviewID, err := db.InsertHeaderSummary(
+		aiFolder.ID,
+		0,
+		[]byte("From: AI review\r\nSubject: AI review: [PATCH] mm: fix slab memory leak\r\nDate: Sat, 17 Oct 2026 10:05:00 +0000\r\nIn-Reply-To: <reviewed-patch@kernel.org>\r\nReferences: <reviewed-patch@kernel.org>\r\n\r\n"),
+		false,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("failed creating AI review message: %v", err)
+	}
+
+	// 3. Fetch message detail via GET /api/messages/{id}
+	req, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d", ts.URL, aiReviewID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/messages/{id} failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var detail struct {
+		Message struct {
+			ID              int64          `json:"id"`
+			Subject         string         `json:"subject"`
+			IsAIReview      bool           `json:"is_ai_review"`
+			IsPatch         bool           `json:"is_patch"`
+			ReviewedMessage map[string]any `json:"reviewed_message"`
+		} `json:"message"`
+		ReviewedMessage map[string]any `json:"reviewed_message"`
+		Patch           any            `json:"patch"`
+		ParsedDiff      any            `json:"parsed_diff"`
+		MissingParent   bool           `json:"missing_parent"`
+		LoreURL         string         `json:"lore_url"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
+		t.Fatalf("failed to decode message detail: %v", err)
+	}
+
+	// Verify AI-review flags
+	if !detail.Message.IsAIReview {
+		t.Errorf("expected is_ai_review=true, got %v", detail.Message.IsAIReview)
+	}
+	if detail.Message.IsPatch {
+		t.Errorf("expected is_patch=false for AI review message, got %v", detail.Message.IsPatch)
+	}
+	if detail.Patch != nil || detail.ParsedDiff != nil {
+		t.Errorf("expected patch and parsed_diff to be nil for AI review message")
+	}
+	if detail.MissingParent {
+		t.Errorf("expected missing_parent=false for AI review message")
+	}
+
+	// Verify top-level reviewed_message
+	if detail.ReviewedMessage == nil {
+		t.Fatalf("expected reviewed_message in detail response, got nil")
+	}
+	if fmt.Sprintf("%v", detail.ReviewedMessage["id"]) != fmt.Sprintf("%d", origID) {
+		t.Errorf("expected reviewed_message.id=%d, got %v", origID, detail.ReviewedMessage["id"])
+	}
+	if detail.ReviewedMessage["folder_name"] != "b4-imports" {
+		t.Errorf("expected reviewed_message.folder_name='b4-imports', got %v", detail.ReviewedMessage["folder_name"])
+	}
+	if detail.ReviewedMessage["message_id"] != "reviewed-patch@kernel.org" {
+		t.Errorf("expected reviewed_message.message_id='reviewed-patch@kernel.org', got %v", detail.ReviewedMessage["message_id"])
+	}
+
+	// Verify nested message.reviewed_message
+	if detail.Message.ReviewedMessage == nil {
+		t.Fatalf("expected detail.message.reviewed_message to be populated, got nil")
+	}
+	if fmt.Sprintf("%v", detail.Message.ReviewedMessage["id"]) != fmt.Sprintf("%d", origID) {
+		t.Errorf("expected detail.message.reviewed_message.id=%d, got %v", origID, detail.Message.ReviewedMessage["id"])
+	}
+}
+

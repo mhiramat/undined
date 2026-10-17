@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,9 +165,17 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 	// 2. Resolve message metadata and commit ID
 	var origMsg *database.Message
 	if r.DB != nil {
-		origMsg, _ = r.DB.GetMessageByMsgID(cleanedID)
-		if origMsg == nil && msgID != cleanedID {
-			origMsg, _ = r.DB.GetMessageByMsgID(msgID)
+		if num, err := strconv.ParseInt(msgID, 10, 64); err == nil && num > 0 {
+			origMsg, _ = r.DB.GetMessageByID(num)
+		}
+		if origMsg == nil {
+			origMsg, _ = r.DB.GetMessageByMsgID(cleanedID)
+			if origMsg == nil && msgID != cleanedID {
+				origMsg, _ = r.DB.GetMessageByMsgID(msgID)
+			}
+		}
+		if origMsg != nil && origMsg.MessageID != "" && cleanedID == msgID {
+			cleanedID = parser.CleanMsgID(origMsg.MessageID)
 		}
 	}
 
@@ -401,6 +410,11 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 			fmt.Sprintf("In-Reply-To: <%s>", cleanedMid),
 			fmt.Sprintf("References: <%s>", cleanedMid),
 			fmt.Sprintf("X-Reviewed-Message-ID: <%s>", cleanedMid),
+		)
+	} else if job.OrigDBID != 0 {
+		rawLines = append(rawLines,
+			fmt.Sprintf("In-Reply-To: <id-%d>", job.OrigDBID),
+			fmt.Sprintf("References: <id-%d>", job.OrigDBID),
 		)
 	}
 	if job.OrigDBID != 0 {

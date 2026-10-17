@@ -2,6 +2,8 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -328,6 +330,88 @@ func TestListMessagesWithOptions(t *testing.T) {
 	}
 	if th[1].Subject != "Re: Banana" || th[1].ThreadDepth != 1 {
 		t.Fatalf("expected Re: Banana as child, got %+v", th[1])
+	}
+}
+
+func TestFindReviewedMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_review_link.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Create a patch message in b4-imports
+	b4Folder, err := db.GetOrCreateFolder("b4-imports", true)
+	if err != nil {
+		t.Fatalf("failed creating b4 folder: %v", err)
+	}
+
+	origID, err := db.InsertHeaderSummary(
+		b4Folder.ID,
+		101,
+		[]byte("Message-ID: <patch-123@kernel.org>\r\nSubject: [PATCH] trace: fix race in ring buffer\r\nFrom: Dev <dev@kernel.org>\r\nDate: Sat, 17 Oct 2026 12:00:00 +0000\r\n\r\n"),
+		true,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("failed inserting patch message: %v", err)
+	}
+
+	// Case 1: InReplyTo by MessageID
+	aiRev1 := &Message{
+		Subject:   "AI review: [PATCH] trace: fix race in ring buffer",
+		InReplyTo: "<patch-123@kernel.org>",
+	}
+	rev1, err := db.FindReviewedMessage(aiRev1)
+	if err != nil || rev1 == nil {
+		t.Fatalf("Case 1 (InReplyTo msgid) failed: %v", err)
+	}
+	if rev1.ID != origID || rev1.FolderName != "b4-imports" || rev1.Subject != "[PATCH] trace: fix race in ring buffer" {
+		t.Errorf("Case 1 unexpected result: %+v", rev1)
+	}
+
+	// Case 2: InReplyTo by id-<num>
+	aiRev2 := &Message{
+		Subject:   "AI review: [PATCH] trace: fix race in ring buffer",
+		InReplyTo: fmt.Sprintf("<id-%d>", origID),
+	}
+	rev2, err := db.FindReviewedMessage(aiRev2)
+	if err != nil || rev2 == nil {
+		t.Fatalf("Case 2 (InReplyTo id-num) failed: %v", err)
+	}
+	if rev2.ID != origID {
+		t.Errorf("Case 2 unexpected id: %d, expected %d", rev2.ID, origID)
+	}
+
+	// Case 3: Header fallback via raw file
+	aiRevFile := filepath.Join(tmpDir, "ai_rev_msg.eml")
+	fileContent := fmt.Sprintf("From: AI review\r\nSubject: AI review (failed): [PATCH] trace: fix race in ring buffer\r\nX-Reviewed-Message-DB-ID: %d\r\n\r\nQueued\r\n", origID)
+	_ = os.WriteFile(aiRevFile, []byte(fileContent), 0644)
+
+	aiRev3 := &Message{
+		Subject:  "AI review (failed): [PATCH] trace: fix race in ring buffer",
+		FilePath: aiRevFile,
+	}
+	rev3, err := db.FindReviewedMessage(aiRev3)
+	if err != nil || rev3 == nil {
+		t.Fatalf("Case 3 (X-Reviewed header) failed: %v", err)
+	}
+	if rev3.ID != origID {
+		t.Errorf("Case 3 unexpected id: %d", rev3.ID)
+	}
+
+	// Case 4: Subject prefix fallback
+	aiRev4 := &Message{
+		Subject: "AI review: [PATCH] trace: fix race in ring buffer",
+	}
+	rev4, err := db.FindReviewedMessage(aiRev4)
+	if err != nil || rev4 == nil {
+		t.Fatalf("Case 4 (subject fallback) failed: %v", err)
+	}
+	if rev4.ID != origID {
+		t.Errorf("Case 4 unexpected id: %d", rev4.ID)
 	}
 }
 

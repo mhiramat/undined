@@ -134,26 +134,53 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 
 	s.attachTagInfo(msg)
 
-	// Parse diff if message is a patch
+	isAIReview := msg.IsAIReview || msg.FolderName == constants.FolderAIReviews || msg.FromName == "AI review"
+	var reviewedMsg *database.ReviewedMessage
+
+	// Parse diff if message is a patch and not an AI review
 	var parsedDiff *patch.ParsedEmailDiff
-	if msg.IsPatch && msg.BodyPlain != "" {
+	if !isAIReview && msg.IsPatch && msg.BodyPlain != "" {
 		parsedDiff = patch.ParsePatch(msg.BodyPlain)
 	}
 
 	// Fetch inline comments
-	comments, _ := s.DB.GetMessageComments(msg.MessageID)
+	var comments []*database.PatchComment
+	if !isAIReview && msg.MessageID != "" {
+		comments, _ = s.DB.GetMessageComments(msg.MessageID)
+	}
 	if comments == nil {
 		comments = make([]*database.PatchComment, 0)
 	}
 
 	// Fetch review commit ID
 	revCommit := msg.ReviewCommitID
-	if revCommit == "" {
+	if revCommit == "" && msg.MessageID != "" {
 		revCommit, _ = s.DB.GetReviewCommit(msg.MessageID)
 	}
 
 	// Fetch parent info
-	missingParent, primaryParentID, parentInfo := s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
+	var missingParent bool
+	var primaryParentID string
+	var parentInfo *database.ParentInfo
+	if !isAIReview {
+		missingParent, primaryParentID, parentInfo = s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
+	} else {
+		msg.IsAIReview = true
+		msg.MessageID = ""
+		msg.IsPatch = false
+		if rev, err := s.DB.FindReviewedMessage(msg); err == nil && rev != nil {
+			reviewedMsg = rev
+			msg.ReviewedMessage = rev
+		}
+	}
+
+	loreURL := ""
+	if !isAIReview && msg.MessageID != "" {
+		cleaned := parser.CleanMsgID(msg.MessageID)
+		if cleaned != "" {
+			loreURL = fmt.Sprintf("https://lore.kernel.org/r/%s", cleaned)
+		}
+	}
 
 	res := map[string]any{
 		"message":           msg,
@@ -165,6 +192,8 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 		"parent_msgid":      primaryParentID,
 		"parent_info":       parentInfo,
 		"primary_parent_id": primaryParentID,
+		"reviewed_message":  reviewedMsg,
+		"lore_url":          loreURL,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
