@@ -30,7 +30,7 @@ type SecurityManager struct {
 }
 
 // NewSecurityManager initializes the security context, creating or loading the 0600 auth token.
-func NewSecurityManager(host string, port int, dataDir string) (*SecurityManager, error) {
+func NewSecurityManager(host string, port int, dataDir string, forceRenew ...bool) (*SecurityManager, error) {
 	if host == "" {
 		host = constants.DefaultHost
 	}
@@ -75,7 +75,14 @@ func NewSecurityManager(host string, port int, dataDir string) (*SecurityManager
 		sm.AllowedOrigins[strings.ToLower(strings.TrimRight(o, "/"))] = struct{}{}
 	}
 
-	token, err := sm.initToken()
+	renew := len(forceRenew) > 0 && forceRenew[0]
+	var token string
+	var err error
+	if renew {
+		token, err = sm.RenewToken()
+	} else {
+		token, err = sm.initToken()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize auth token: %w", err)
 	}
@@ -84,18 +91,11 @@ func NewSecurityManager(host string, port int, dataDir string) (*SecurityManager
 	return sm, nil
 }
 
-// initToken atomically generates and writes a 256-bit token with 0600 permissions if not present.
-func (sm *SecurityManager) initToken() (string, error) {
+// RenewToken generates a fresh 256-bit cryptographically secure token,
+// overwrites the auth_token file with 0600 permissions, and updates sm.Token.
+func (sm *SecurityManager) RenewToken() (string, error) {
 	if err := os.MkdirAll(sm.DataDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create data dir %s: %w", sm.DataDir, err)
-	}
-
-	// If file exists and contains valid token, reuse it
-	if data, err := os.ReadFile(sm.TokenPath); err == nil {
-		existing := strings.TrimSpace(string(data))
-		if len(existing) == 64 {
-			return existing, nil
-		}
 	}
 
 	// Generate 32 cryptographically secure random bytes (64 hex characters)
@@ -116,7 +116,25 @@ func (sm *SecurityManager) initToken() (string, error) {
 		return "", fmt.Errorf("failed to write token: %w", err)
 	}
 
+	sm.Token = token
 	return token, nil
+}
+
+// initToken atomically generates and writes a 256-bit token with 0600 permissions if not present.
+func (sm *SecurityManager) initToken() (string, error) {
+	if err := os.MkdirAll(sm.DataDir, 0700); err != nil {
+		return "", fmt.Errorf("failed to create data dir %s: %w", sm.DataDir, err)
+	}
+
+	// If file exists and contains valid token, reuse it
+	if data, err := os.ReadFile(sm.TokenPath); err == nil {
+		existing := strings.TrimSpace(string(data))
+		if len(existing) == 64 {
+			return existing, nil
+		}
+	}
+
+	return sm.RenewToken()
 }
 
 // IsTokenValid checks whether the provided token matches sm.Token using constant-time comparison.

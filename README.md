@@ -206,8 +206,22 @@ Open the link in your browser to access the Sylpheed-style 3-pane review interfa
 | `--port <port>` | `-p <port>` | Port number to bind Web UI | `8080` (or from config) |
 | `--mcp-stdio` | | Run in MCP JSON-RPC 2.0 STDIO mode | `false` |
 | `--log-level <lvl>` | | Log level (`debug`, `info`, `warning`, `error`) | `info` |
+| `--renew-token` | | Renew authentication token (generates a new token and overwrites auth_token file) | `false` |
+| `--no-server` | | Do not start the HTTP server (useful with `--renew-token` to rotate token and exit) | `false` |
 | `--version` | `-v` | Output version and exit | |
 | `--help` | `-h` | Display usage options | |
+
+#### Renewing Authentication Token
+To rotate your authentication token:
+- **Renew and start daemon**:
+  ```bash
+  ./bin/undined --renew-token
+  ```
+  Generates a new cryptographically secure 256-bit token, updates `auth_token`, and starts the Web UI server with the new token.
+- **Renew and exit immediately** (without starting the server or binding ports):
+  ```bash
+  ./bin/undined --renew-token --no-server
+  ```
 
 ---
 

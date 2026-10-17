@@ -40,6 +40,28 @@ func TestSecurityManagerInitAndPermissions(t *testing.T) {
 	if sm2.Token != sm.Token {
 		t.Fatalf("expected reloaded token %s, got %s", sm.Token, sm2.Token)
 	}
+
+	// Verify RenewToken generates a different valid token
+	oldToken := sm.Token
+	newToken, err := sm.RenewToken()
+	if err != nil {
+		t.Fatalf("RenewToken failed: %v", err)
+	}
+	if len(newToken) != 64 || newToken == oldToken {
+		t.Fatalf("expected new 64-char token different from old token, got %s", newToken)
+	}
+	if sm.Token != newToken {
+		t.Fatalf("expected sm.Token to update to %s, got %s", newToken, sm.Token)
+	}
+
+	// Verify NewSecurityManager with forceRenew=true forces regeneration
+	sm3, err := NewSecurityManager("127.0.0.1", 8080, tmpDir, true)
+	if err != nil {
+		t.Fatalf("failed to create SecurityManager with forceRenew: %v", err)
+	}
+	if sm3.Token == newToken {
+		t.Fatalf("expected sm3.Token to be regenerated, got same token %s", sm3.Token)
+	}
 }
 
 func TestHostValidation(t *testing.T) {
