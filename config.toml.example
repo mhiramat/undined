@@ -101,7 +101,13 @@ sse_port = 8081
 # AI Review Runner
 # ==============================================================================
 [review]
-# Command to execute for patch review (executed asynchronously in background).
+# Path to custom review wrapper script or executable (recommended for custom review pipelines).
+# Executed directly without a subshell, passing message_id ($1) and commit_id ($2)
+# with the prompt piped via stdin.
+# wrapper_script = "~/.config/undined/review-wrapper.sh"
+
+# Direct command to execute for patch review (e.g. "agy --print").
+# Executed directly with arguments without invoking /bin/sh.
 command = "agy --print"
 # prompt_file = "~/.config/undined/review_prompt.txt"
 

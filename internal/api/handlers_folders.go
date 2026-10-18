@@ -31,6 +31,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"patchwork_delegate_users":  s.Config.Patchwork.GetDelegateUsers(),
 		"patchwork_can_update":      s.Config.Patchwork.GetToken() != "",
 		"review_cmd":                s.Config.Review.Command,
+		"review_wrapper_script":     s.Config.Review.WrapperScript,
 		"review_prompt_file":        reviewPromptFile,
 		"tags":                      s.Config.Tags,
 		"patchwork": map[string]any{

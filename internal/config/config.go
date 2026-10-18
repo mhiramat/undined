@@ -155,9 +155,10 @@ type MCPConfig struct {
 
 // ReviewConfig holds AI review runner settings.
 type ReviewConfig struct {
-	Command    string `toml:"command" json:"command"`
-	PromptFile string `toml:"prompt_file" json:"prompt_file"`
-	Prompt     string `toml:"prompt" json:"prompt"`
+	Command       string `toml:"command" json:"command"`
+	WrapperScript string `toml:"wrapper_script" json:"wrapper_script"`
+	PromptFile    string `toml:"prompt_file" json:"prompt_file"`
+	Prompt        string `toml:"prompt" json:"prompt"`
 }
 
 // EffectivePrompt returns PromptFile content if exists, or Prompt, or DefaultReviewPrompt.
@@ -507,6 +508,9 @@ func Load(explicitPath ...string) (*Config, error) {
 	cfg.SMTP.SignatureFile = ExpandPath(cfg.SMTP.SignatureFile)
 	if cfg.Review.PromptFile != "" {
 		cfg.Review.PromptFile = ExpandPath(cfg.Review.PromptFile)
+	}
+	if cfg.Review.WrapperScript != "" {
+		cfg.Review.WrapperScript = ExpandPath(cfg.Review.WrapperScript)
 	}
 
 	// Merge default tags if not overridden

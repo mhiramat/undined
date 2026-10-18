@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,64 @@ import (
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
 )
+
+var (
+	safeMsgIDRegex  = regexp.MustCompile(`^[a-zA-Z0-9._\-+@~]+$`)
+	safeCommitRegex = regexp.MustCompile(`^[a-zA-Z0-9._\-+/~^:]+$`)
+)
+
+// SplitCommandLine splits a command string into program and arguments, respecting quotes.
+func SplitCommandLine(cmdStr string) ([]string, error) {
+	cmdStr = strings.TrimSpace(cmdStr)
+	if cmdStr == "" {
+		return nil, fmt.Errorf("empty command")
+	}
+
+	var parts []string
+	var current strings.Builder
+	inSingle := false
+	inDouble := false
+	escaped := false
+
+	for _, r := range cmdStr {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
+		if r == '\'' && !inDouble {
+			inSingle = !inSingle
+			continue
+		}
+		if r == '"' && !inSingle {
+			inDouble = !inDouble
+			continue
+		}
+		if (r == ' ' || r == '\t') && !inSingle && !inDouble {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteRune(r)
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	if inSingle || inDouble {
+		return nil, fmt.Errorf("unclosed quote in command %q", cmdStr)
+	}
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+	return parts, nil
+}
 
 // Job represents a review job in queue or execution.
 type Job struct {
@@ -151,6 +210,10 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 		cleanedID = msgID
 	}
 
+	if !safeMsgIDRegex.MatchString(cleanedID) {
+		return nil, fmt.Errorf("invalid message ID format: contains illegal characters")
+	}
+
 	// 1. Check duplicate running or queued jobs
 	if r.isRunning && r.activeJob != nil && r.matchesJob(r.activeJob, cleanedID) {
 		return nil, fmt.Errorf("a review is already in progress for message %s", msgID)
@@ -179,6 +242,14 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 		}
 	}
 
+	if r.DB != nil && origMsg == nil {
+		return nil, fmt.Errorf("message %s not found in local mailbox", cleanedID)
+	}
+
+	if origMsg != nil && !origMsg.IsPatch {
+		return nil, fmt.Errorf("message %s is not a patch", cleanedID)
+	}
+
 	resolvedCommit := commitID
 	if resolvedCommit == "" && origMsg != nil {
 		resolvedCommit = origMsg.ReviewCommitID
@@ -189,6 +260,10 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 
 	if resolvedCommit == "" {
 		return nil, fmt.Errorf("message has no associated review-commit-id. Apply the patch first")
+	}
+
+	if strings.HasPrefix(resolvedCommit, "-") || !safeCommitRegex.MatchString(resolvedCommit) {
+		return nil, fmt.Errorf("invalid commit ID format: must be a valid commit hash or ref")
 	}
 
 	job := &Job{
@@ -323,23 +398,59 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	prompt = strings.ReplaceAll(prompt, "{commit_id}", job.CommitID)
 	prompt = strings.ReplaceAll(prompt, "{commit}", job.CommitID)
 
-	cmdStr := r.Config.Review.Command
-	if cmdStr == "" {
-		cmdStr = constants.DefaultReviewCmd
-	}
-	cmdStr = strings.ReplaceAll(cmdStr, "{message_id}", job.MessageID)
-	cmdStr = strings.ReplaceAll(cmdStr, "{msgid}", job.MessageID)
-	cmdStr = strings.ReplaceAll(cmdStr, "{commit_id}", job.CommitID)
-	cmdStr = strings.ReplaceAll(cmdStr, "{commit}", job.CommitID)
+	var cmd *exec.Cmd
 
-	var fullCmd string
-	if strings.Contains(cmdStr, "{prompt}") {
-		fullCmd = strings.ReplaceAll(cmdStr, "{prompt}", prompt)
+	wrapperScript := r.Config.Review.WrapperScript
+	if wrapperScript != "" {
+		wrapperPath := config.ExpandPath(wrapperScript)
+		cmd = exec.CommandContext(ctx, wrapperPath, job.MessageID, job.CommitID)
 	} else {
-		fullCmd = fmt.Sprintf("%s %q", cmdStr, prompt)
+		cmdStr := r.Config.Review.Command
+		if cmdStr == "" {
+			cmdStr = constants.DefaultReviewCmd
+		}
+		parts, err := SplitCommandLine(cmdStr)
+		if err != nil || len(parts) == 0 {
+			r.mu.Lock()
+			r.status = "error"
+			job.Status = "error"
+			job.Error = fmt.Sprintf("invalid review command %q: %v", cmdStr, err)
+			r.lastError = job.Error
+			r.saveOrUpdateReviewMessage(job, job.Error, " (failed)")
+			r.mu.Unlock()
+			return
+		}
+
+		hasTemplateVar := false
+		for i, p := range parts {
+			if strings.Contains(p, "{message_id}") || strings.Contains(p, "{msgid}") ||
+				strings.Contains(p, "{commit_id}") || strings.Contains(p, "{commit}") ||
+				strings.Contains(p, "{prompt}") {
+				hasTemplateVar = true
+			}
+			p = strings.ReplaceAll(p, "{message_id}", job.MessageID)
+			p = strings.ReplaceAll(p, "{msgid}", job.MessageID)
+			p = strings.ReplaceAll(p, "{commit_id}", job.CommitID)
+			p = strings.ReplaceAll(p, "{commit}", job.CommitID)
+			p = strings.ReplaceAll(p, "{prompt}", prompt)
+			parts[i] = p
+		}
+
+		if !hasTemplateVar {
+			parts = append(parts, prompt)
+		}
+
+		cmd = exec.CommandContext(ctx, parts[0], parts[1:]...)
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", fullCmd)
+	// Always pipe prompt to stdin and provide environment variables
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Env = append(os.Environ(),
+		"UNDINE_MESSAGE_ID="+job.MessageID,
+		"UNDINE_COMMIT_ID="+job.CommitID,
+		"UNDINE_PROMPT="+prompt,
+	)
+
 	outBytes, err := cmd.CombinedOutput()
 	output := string(outBytes)
 
