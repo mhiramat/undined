@@ -64,11 +64,11 @@ func setupLogging(cfg *config.Config, mcpStdio bool) *os.File {
 		return nil
 	}
 	logFilePath := cfg.General.LogFile
-	if err := os.MkdirAll(filepath.Dir(logFilePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(logFilePath), 0700); err != nil {
 		log.Printf("Warning: failed to create log directory for %s: %v", logFilePath, err)
 		return nil
 	}
-	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		log.Printf("Warning: failed to open log file %s: %v", logFilePath, err)
 		return nil

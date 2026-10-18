@@ -112,8 +112,8 @@ func (s *Server) writeAccessLog(level, message string) {
 	}
 
 	if logFile != "" {
-		_ = os.MkdirAll(filepath.Dir(logFile), 0755)
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		_ = os.MkdirAll(filepath.Dir(logFile), 0700)
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err == nil {
 			defer f.Close()
 			_, _ = f.WriteString(formatted)

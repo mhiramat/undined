@@ -730,6 +730,17 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 		t.Fatalf("expected 200 OK, got %d", resp3.StatusCode)
 	}
 
+	// 4. Access with ?token= query parameter
+	req4, err := http.NewRequest("GET", ts.URL+"/api/folders?token="+token, nil)
+	if err != nil {
+		t.Fatalf("failed to create req4: %v", err)
+	}
+	resp4, err := client.Do(req4)
+	if err != nil {
+		t.Fatalf("req4 failed: %v", err)
+	}
+	_ = resp4.Body.Close()
+
 	// Verify log writer output
 	bufStr := logBuf.String()
 	if !strings.Contains(bufStr, "[INFO] [undine.api] REST API access: GET /api/folders - 200 OK") {
@@ -741,8 +752,22 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 	if strings.Contains(bufStr, "favicon.svg") {
 		t.Errorf("did not expect static /favicon.svg to be logged in REST API access log, got:\n%s", bufStr)
 	}
+	if strings.Contains(bufStr, token) {
+		t.Errorf("auth token must be redacted in logs, but found in buffer: %s", bufStr)
+	}
+	if !strings.Contains(bufStr, "token=REDACTED") {
+		t.Errorf("expected token=REDACTED in log buffer, got:\n%s", bufStr)
+	}
 
-	// Verify log file output
+	// Verify log file output and permissions
+	fi, err := os.Stat(logFile)
+	if err != nil {
+		t.Fatalf("failed to stat log file %s: %v", logFile, err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Errorf("expected log file permissions 0600, got %o", fi.Mode().Perm())
+	}
+
 	fileData, err := os.ReadFile(logFile)
 	if err != nil {
 		t.Fatalf("failed to read log file %s: %v", logFile, err)
@@ -753,6 +778,12 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 	}
 	if !strings.Contains(fileStr, "[WARN] [undine.api] REST API access: GET /api/messages - 401 Unauthorized") {
 		t.Errorf("expected 401 log in log file, got:\n%s", fileStr)
+	}
+	if strings.Contains(fileStr, token) {
+		t.Errorf("auth token must be redacted in log file, but found in file: %s", fileStr)
+	}
+	if !strings.Contains(fileStr, "token=REDACTED") {
+		t.Errorf("expected token=REDACTED in log file, got:\n%s", fileStr)
 	}
 }
 
