@@ -62,6 +62,14 @@ func (s *Server) handlePatchworkMyPatches(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	for _, p := range patches {
+		if msgID, ok := p["msgid"].(string); ok && msgID != "" {
+			if localMsg, err := s.DB.GetMessageByMsgID(msgID); err == nil && localMsg != nil {
+				p["local_message_id"] = localMsg.ID
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(patches)
 }

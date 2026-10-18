@@ -64,6 +64,19 @@ func (s *Server) attachTagInfo(m *database.Message) {
 }
 
 func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
+	if msgID := r.URL.Query().Get("msgid"); msgID != "" {
+		msg, err := s.resolveMessage(msgID)
+		if err != nil || msg == nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]*database.Message{})
+			return
+		}
+		s.attachTagInfo(msg)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]*database.Message{msg})
+		return
+	}
+
 	var folderID *int64
 	if fStr := r.URL.Query().Get("folder_id"); fStr != "" {
 		if id, err := strconv.ParseInt(fStr, 10, 64); err == nil {
