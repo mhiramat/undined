@@ -87,6 +87,11 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
     this.refresh();
   }
 
+  public findMessageByMsgId(msgId: string): MessageSummary | undefined {
+    const clean = this.cleanMsgId(msgId);
+    return this.flatList.find((m) => this.cleanMsgId(m.message_id) === clean);
+  }
+
   public getTreeItem(element: MessageTreeItem): vscode.TreeItem {
     return element;
   }

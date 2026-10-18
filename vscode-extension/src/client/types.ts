@@ -128,6 +128,7 @@ export interface PatchworkPatch {
   delegate: PatchworkUser | null;
   checks: string;
   project?: PatchworkProject;
+  local_message_id?: number | null;
 }
 
 export interface PatchworkCheck {

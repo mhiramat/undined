@@ -52,10 +52,8 @@ export function registerPatchworkCommands(
 
       if (!patch) return;
 
-      if (patch.msgid) {
-        // Open local patch diff or header view
-        vscode.commands.executeCommand("undine.selectMessage", patch.msgid);
-      }
+      // Open local patch diff or header view
+      vscode.commands.executeCommand("undine.selectMessage", patch);
     })
   );
 }

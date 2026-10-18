@@ -60,31 +60,96 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("undine.selectMessage", async (messageOrId: any) => {
-      let cleanId = "";
-      try {
-        let msgId: string;
+      let mboxIndex: number | undefined;
+      let cleanMsgId: string = "";
 
-        if (typeof messageOrId === "string") {
-          msgId = messageOrId;
-        } else if (messageOrId?.patch?.msgid) {
-          msgId = messageOrId.patch.msgid;
-        } else if (messageOrId && messageOrId.message_id) {
-          msgId = messageOrId.message_id;
-        } else if (messageOrId && messageOrId.message && messageOrId.message.message_id) {
-          msgId = messageOrId.message.message_id;
-        } else if (messageOrId?.msgid) {
-          msgId = messageOrId.msgid;
-        } else if (typeof messageOrId === "number") {
-          msgId = String(messageOrId);
-        } else {
+      try {
+        // 1. Check if numeric Mbox index is directly provided
+        if (typeof messageOrId === "number") {
+          mboxIndex = messageOrId;
+        } else if (typeof messageOrId?.id === "number") {
+          mboxIndex = messageOrId.id;
+          if (messageOrId.message_id) {
+            cleanMsgId = messageOrId.message_id.replace(/^<|>$/g, "");
+          }
+        } else if (typeof messageOrId?.message?.id === "number") {
+          mboxIndex = messageOrId.message.id;
+          if (messageOrId.message.message_id) {
+            cleanMsgId = messageOrId.message.message_id.replace(/^<|>$/g, "");
+          }
+        } else if (typeof messageOrId?.local_message_id === "number") {
+          mboxIndex = messageOrId.local_message_id;
+          if (messageOrId.msgid) {
+            cleanMsgId = messageOrId.msgid.replace(/^<|>$/g, "");
+          }
+        } else if (typeof messageOrId?.patch?.local_message_id === "number") {
+          mboxIndex = messageOrId.patch.local_message_id;
+          if (messageOrId.patch.msgid) {
+            cleanMsgId = messageOrId.patch.msgid.replace(/^<|>$/g, "");
+          }
+        }
+
+        // 2. If numeric index is not known yet, extract Message-ID and find index
+        if (!mboxIndex) {
+          let rawMsgId: string | undefined;
+          if (typeof messageOrId === "string") {
+            if (/^\d+$/.test(messageOrId.trim())) {
+              mboxIndex = parseInt(messageOrId.trim(), 10);
+            } else {
+              rawMsgId = messageOrId;
+            }
+          } else if (messageOrId?.patch?.msgid) {
+            rawMsgId = messageOrId.patch.msgid;
+          } else if (messageOrId?.msgid) {
+            rawMsgId = messageOrId.msgid;
+          } else if (messageOrId?.message_id) {
+            rawMsgId = messageOrId.message_id;
+          }
+
+          if (rawMsgId) {
+            cleanMsgId = rawMsgId.replace(/^<|>$/g, "");
+            // Look up in threadsProvider cache first
+            const cached = threadsProvider.findMessageByMsgId(cleanMsgId);
+            if (cached && typeof cached.id === "number") {
+              mboxIndex = cached.id;
+            } else {
+              // Look up via API (?msgid= or /search)
+              const found = await client.getMessageByMsgId(cleanMsgId);
+              if (found && typeof found.id === "number") {
+                mboxIndex = found.id;
+              }
+            }
+          }
+        }
+
+        if (!mboxIndex) {
+          // Message is not in local mailbox
+          if (cleanMsgId) {
+            const choice = await vscode.window.showWarningMessage(
+              `Patch <${cleanMsgId}> was not found in your local mailbox. Would you like to import it from lore via b4?`,
+              "Import via b4",
+              "Open in lore.kernel.org"
+            );
+            if (choice === "Import via b4") {
+              await vscode.commands.executeCommand("undine.importB4", cleanMsgId);
+              setTimeout(() => {
+                vscode.commands.executeCommand("undine.selectMessage", cleanMsgId);
+              }, 1000);
+            } else if (choice === "Open in lore.kernel.org") {
+              vscode.env.openExternal(vscode.Uri.parse(`https://lore.kernel.org/r/${encodeURIComponent(cleanMsgId)}`));
+            }
+            return;
+          }
+          vscode.window.showErrorMessage("Failed to open message: missing message index or ID.");
           return;
         }
 
-        cleanId = msgId.replace(/^<|>$/g, "");
-        const detail = await client.getMessageDetail(cleanId);
+        // 3. Fetch message detail by numeric Mbox index
+        const detail = await client.getMessageDetail(mboxIndex);
         activeDetail = detail;
+        cleanMsgId = detail.message.message_id.replace(/^<|>$/g, "");
 
-        patchProvider.setCachedDetail(cleanId, detail);
+        patchProvider.setCachedDetail(cleanMsgId, detail);
         threadsProvider.setSelectedMessageId(detail.message.id);
 
         // Mark as read in background
@@ -97,33 +162,17 @@ export function activate(context: vscode.ExtensionContext) {
         if (detail.message.is_patch && detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0) {
           const firstFile = detail.parsed_diff.files[0];
           const targetFile = firstFile.new_path || firstFile.old_path;
-          vscode.commands.executeCommand("undine.openPatchDiff", cleanId, targetFile);
+          vscode.commands.executeCommand("undine.openPatchDiff", cleanMsgId, targetFile);
         } else if (detail.message.is_patch) {
-          vscode.commands.executeCommand("undine.openCommitDescription", cleanId);
+          vscode.commands.executeCommand("undine.openCommitDescription", cleanMsgId);
         }
 
         // Open Header Drawer panel docked beside diff editor
         MessageHeaderView.createOrShow(context.extensionUri, detail, client);
 
         // Load existing review comments
-        await commentController.loadCommentsForMessage(cleanId);
+        await commentController.loadCommentsForMessage(cleanMsgId);
       } catch (err: any) {
-        if (cleanId && (err.message?.includes("404") || err.message?.includes("not found"))) {
-          const choice = await vscode.window.showWarningMessage(
-            `Patch <${cleanId}> was not found in your local mailbox. Would you like to import it from lore via b4?`,
-            "Import via b4",
-            "Open in lore.kernel.org"
-          );
-          if (choice === "Import via b4") {
-            await vscode.commands.executeCommand("undine.importB4", cleanId);
-            setTimeout(() => {
-              vscode.commands.executeCommand("undine.selectMessage", cleanId);
-            }, 1000);
-          } else if (choice === "Open in lore.kernel.org") {
-            vscode.env.openExternal(vscode.Uri.parse(`https://lore.kernel.org/r/${encodeURIComponent(cleanId)}`));
-          }
-          return;
-        }
         vscode.window.showErrorMessage(`Failed to open message: ${err.message}`);
       }
     }),

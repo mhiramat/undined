@@ -103,8 +103,24 @@ export class UndineRestClient {
     return this.request<MessageSummary[]>(`/api/messages${qs}`);
   }
 
-  public async getMessageDetail(idOrMsgId: string | number): Promise<MessageDetail> {
-    return this.request<MessageDetail>(`/api/messages/${encodeURIComponent(String(idOrMsgId))}`);
+  public async getMessageDetail(idOrIndex: string | number): Promise<MessageDetail> {
+    return this.request<MessageDetail>(`/api/messages/${encodeURIComponent(String(idOrIndex))}`);
+  }
+
+  public async getMessageByMsgId(msgId: string): Promise<MessageSummary | null> {
+    const cleanId = msgId.replace(/^<|>$/g, "");
+    try {
+      const res = await this.request<MessageSummary[]>(`/api/messages?msgid=${encodeURIComponent(cleanId)}`);
+      if (res && res.length > 0) return res[0];
+    } catch {}
+    try {
+      const searchRes = await this.search(cleanId);
+      const match = searchRes.find(
+        (r) => r.message_id.replace(/^<|>$/g, "") === cleanId
+      );
+      if (match) return match;
+    } catch {}
+    return null;
   }
 
   public async setMessageRead(id: number, isRead = true): Promise<{ success: boolean }> {
