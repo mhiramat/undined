@@ -274,6 +274,24 @@ func TestFolderAndMessageEndpoints(t *testing.T) {
 	if len(getCommentsRes.Comments) != 1 || getCommentsRes.Comments[0]["text"] != "Check this lock" {
 		t.Errorf("Unexpected comments response: %v", getCommentsRes)
 	}
+
+	// 4. Comment on DESCRIPTION
+	descPayload := `{"file": "description", "line_no": 1, "side": "new", "text": "Commit title review"}`
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/comments", ts.URL, msgID), strings.NewReader(descPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("POST description comment failed: %v", err)
+	}
+	var descCommentRes struct {
+		Success bool           `json:"success"`
+		Comment map[string]any `json:"comment"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&descCommentRes)
+	if !descCommentRes.Success || descCommentRes.Comment["file_path"] != "DESCRIPTION" {
+		t.Errorf("expected canonical file_path DESCRIPTION, got %v", descCommentRes.Comment)
+	}
 }
 
 func TestRule4PatchworkUpdateWithNullDelegateEndpoint(t *testing.T) {

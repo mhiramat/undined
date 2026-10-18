@@ -579,6 +579,9 @@ func (s *Server) handleSaveComment(w http.ResponseWriter, r *http.Request) {
 	if filePath == "" && body.File != "" {
 		filePath = body.File
 	}
+	if strings.EqualFold(filePath, "DESCRIPTION") {
+		filePath = "DESCRIPTION"
+	}
 
 	lineNo := body.LineNo
 	if lineNo == 0 && body.LineNoAlt != nil {

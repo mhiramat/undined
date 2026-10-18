@@ -258,7 +258,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		{
 			"name": "create_review_draft",
 			"description": "Convert structured review comments into an LKML quoted reply in the local Drafts folder.\n\n        " +
-				"inline_notes format: [{\"file\": \"path/file.c\", \"line_no\": 123, \"comment\": \"Review text...\"}]\n        ",
+				"inline_notes format: [{\"file\": \"path/file.c\" (or \"DESCRIPTION\"), \"line_no\": 123, \"comment\": \"Review text...\"}]\n        ",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "create_review_draftArguments",
@@ -365,7 +365,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 			"name": "post_review_comment",
 			"description": "Post an inline review comment onto a patch message by specifying the target FILE:LINE.\n\n        " +
 				"Args:\n            message_id: Message-ID (or database ID) of the target patch email.\n            " +
-				"target: Target coordinate in \"FILE:LINE\" format (e.g. \"kernel/trace/ftrace.c:51\").\n            " +
+				"target: Target coordinate in \"FILE:LINE\" format (e.g. \"kernel/trace/ftrace.c:51\"). To comment on lines in the message body / patch description, specify \"DESCRIPTION:LINE\" (e.g. \"DESCRIPTION:12\").\n            " +
 				"comment: Review comment text.\n            " +
 				"side: Diff side: \"new\" (post-image/additions) or \"old\" (pre-image/deletions). Defaults to \"new\".\n            " +
 				"target_message_id: Alias for message_id for backward compatibility.\n        ",
@@ -396,7 +396,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "post_diff_comment",
-			"description": "Post an inline review comment onto a patch message (alias for post_review_comment).",
+			"description": "Post an inline review comment onto a patch message or description (alias for post_review_comment, supports FILE:LINE and DESCRIPTION:LINE).",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "post_diff_commentArguments",
@@ -423,7 +423,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "add_diff_comment",
-			"description": "Add an inline review comment onto a patch message (alias for post_review_comment).",
+			"description": "Add an inline review comment onto a patch message or description (alias for post_review_comment, supports FILE:LINE and DESCRIPTION:LINE).",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "add_diff_commentArguments",
@@ -641,6 +641,9 @@ func (s *Server) toolCreateReviewDraft(args map[string]interface{}) (interface{}
 	for _, n := range rawNotes {
 		if m, ok := n.(map[string]interface{}); ok {
 			file := getString(m, "file", "path")
+			if strings.EqualFold(file, "DESCRIPTION") {
+				file = "DESCRIPTION"
+			}
 			lineNo := getInt(m, "line_no", 0)
 			if lineNo == 0 {
 				lineNo = getInt(m, "lineNo", 0)
@@ -903,7 +906,12 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("Line number must be positive in target '%s'.", target)}, nil
 	}
 
-	filePart = patch.NormalizePath(filePart)
+	isDesc := strings.EqualFold(filePart, "DESCRIPTION")
+	if isDesc {
+		filePart = "DESCRIPTION"
+	} else {
+		filePart = patch.NormalizePath(filePart)
+	}
 
 	if s.DB == nil {
 		return map[string]interface{}{"success": false, "error": "Database not initialized"}, nil
@@ -926,58 +934,72 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 	}
 
 	parsed := patch.ParsePatch(orig.BodyPlain)
-	var matchedFile *patch.DiffFile
-	for _, f := range parsed.Files {
-		if patch.FileMatches(filePart, f.NewPath) || patch.FileMatches(filePart, f.OldPath) {
-			matchedFile = f
-			break
-		}
-	}
-
+	canonicalFile := filePart
 	lineMapped := false
 	chosenSide := strings.ToLower(strings.TrimSpace(side))
 	if chosenSide == "" {
 		chosenSide = "new"
 	}
-	canonicalFile := filePart
 
-	if matchedFile != nil {
-		if matchedFile.NewPath != "" {
-			canonicalFile = patch.NormalizePath(matchedFile.NewPath)
-		} else if matchedFile.OldPath != "" {
-			canonicalFile = patch.NormalizePath(matchedFile.OldPath)
+	if isDesc {
+		canonicalFile = "DESCRIPTION"
+		descText := ""
+		if parsed.IsPatch && parsed.Preamble != "" {
+			descText = parsed.Preamble
+		} else {
+			descText = orig.BodyPlain
+		}
+		descLines := strings.Split(descText, "\n")
+		if lineNo >= 1 && lineNo <= len(descLines) {
+			lineMapped = true
+		}
+	} else {
+		var matchedFile *patch.DiffFile
+		for _, f := range parsed.Files {
+			if patch.FileMatches(filePart, f.NewPath) || patch.FileMatches(filePart, f.OldPath) {
+				matchedFile = f
+				break
+			}
 		}
 
-		for _, hunk := range matchedFile.Hunks {
-			if chosenSide == "old" || chosenSide == "left" {
-				for _, row := range hunk.PairedRows {
-					if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
-						lineMapped = true
-						chosenSide = "old"
-						break
-					}
-					if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
-						lineMapped = true
-						chosenSide = "new"
-						break
-					}
-				}
-			} else {
-				for _, row := range hunk.PairedRows {
-					if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
-						lineMapped = true
-						chosenSide = "new"
-						break
-					}
-					if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
-						lineMapped = true
-						chosenSide = "old"
-						break
-					}
-				}
+		if matchedFile != nil {
+			if matchedFile.NewPath != "" {
+				canonicalFile = patch.NormalizePath(matchedFile.NewPath)
+			} else if matchedFile.OldPath != "" {
+				canonicalFile = patch.NormalizePath(matchedFile.OldPath)
 			}
-			if lineMapped {
-				break
+
+			for _, hunk := range matchedFile.Hunks {
+				if chosenSide == "old" || chosenSide == "left" {
+					for _, row := range hunk.PairedRows {
+						if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
+							lineMapped = true
+							chosenSide = "old"
+							break
+						}
+						if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
+							lineMapped = true
+							chosenSide = "new"
+							break
+						}
+					}
+				} else {
+					for _, row := range hunk.PairedRows {
+						if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
+							lineMapped = true
+							chosenSide = "new"
+							break
+						}
+						if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
+							lineMapped = true
+							chosenSide = "old"
+							break
+						}
+					}
+				}
+				if lineMapped {
+					break
+				}
 			}
 		}
 	}

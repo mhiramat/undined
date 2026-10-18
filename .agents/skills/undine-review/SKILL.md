@@ -27,7 +27,7 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 
 - **Parameters**:
   - `message_id` (*str*, required): The Message-ID header (e.g. `<20261003...-1-author@kernel.org>`) or database ID of the target patch email.
-  - `target` (*str*, required): Coordinate in `FILE:LINE` format (e.g. `kernel/trace/ftrace.c:51` or `b/kernel/trace/ftrace.c:51`). Paths prefixed with `a/` or `b/` are automatically normalized.
+  - `target` (*str*, required): Coordinate in `FILE:LINE` format (e.g. `kernel/trace/ftrace.c:51` or `b/kernel/trace/ftrace.c:51`). To comment on lines in the message body / commit description, specify `DESCRIPTION:LINE` (e.g. `DESCRIPTION:12`). Paths prefixed with `a/` or `b/` are automatically normalized.
   - `comment` (*str*, required): The review feedback, critique, or question.
   - `side` (*str*, optional): Diff side: `"new"` for additions and context lines (default), or `"old"` for deletions.
   - `target_message_id` (*str*, optional): Alias for `message_id` for backward compatibility.
@@ -70,7 +70,7 @@ Aggregates inline review comments into an LKML quoted reply email saved to the l
 - **Parameters**:
   - `target_message_id` (*str*, required): Message-ID being replied to.
   - `general_feedback` (*str*, required): High-level series summary or general review remarks.
-  - `inline_notes` (*list[dict]*, required): Array of `{"file": "...", "line_no": 123, "comment": "..."}` dicts.
+  - `inline_notes` (*list[dict]*, required): Array of `{"file": "...", "line_no": 123, "comment": "..."}` dicts. Use `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body.
 - **Returns**: `{"success": true, "draft_id": int, "subject": str, "file_path": str}`.
 
 ### 6. `import_patch_series_b4`
@@ -109,13 +109,23 @@ Identify patch submissions where `is_patch: true`.
 Examine `body_plain` for the commit message, subsystem tags, and unified diff hunks.
 
 ### Step 3: Analyze Code & Post Line-Specific Comments
-Evaluate the patch against Linux kernel quality standards. For each identified issue, call `post_review_comment`:
+Evaluate the patch against Linux kernel quality standards. For each identified issue, call `post_review_comment`. Comments may target diff lines (e.g. `kernel/trace/ftrace.c:50`) or commit description lines (e.g. `DESCRIPTION:12`):
 ```json
-// Example call: post_review_comment
+// Example call: post_review_comment on diff line
 {
   "message_id": "20261003140000.12345-1-author@kernel.org",
   "target": "kernel/trace/ftrace.c:50",
   "comment": "Missing lockdep assertion prior to accessing shared state. Consider guard(spinlock)(&ftrace_lock);",
+  "side": "new"
+}
+```
+Or to comment on the commit log / patch description:
+```json
+// Example call: post_review_comment on patch description
+{
+  "message_id": "20261003140000.12345-1-author@kernel.org",
+  "target": "DESCRIPTION:12",
+  "comment": "Please cite the relevant commit hash or bug report URL in the description.",
   "side": "new"
 }
 ```

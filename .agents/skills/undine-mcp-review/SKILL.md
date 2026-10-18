@@ -65,7 +65,7 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `message_id` | `str` | Yes | — | Target patch email Message-ID (e.g. `<20261003...-1-author@kernel.org>`) or numeric DB ID. |
-| `target` | `str` | Yes | — | Target coordinate in `FILE:LINE` format (e.g. `kernel/trace/ftrace.c:51`). Paths prefixed with `a/` or `b/` are automatically normalized. |
+| `target` | `str` | Yes | — | Target coordinate in `FILE:LINE` format (e.g. `kernel/trace/ftrace.c:51`). To comment on lines in the message body / commit description, specify `DESCRIPTION:LINE` (e.g. `DESCRIPTION:12`). Paths prefixed with `a/` or `b/` are automatically normalized. |
 | `comment` | `str` | Yes | — | The review feedback, critique, or question text. |
 | `side` | `str` | No | `"new"` | Diff side: `"new"` (or `"right"`) for additions/post-image and context lines; `"old"` (or `"left"`) for deletions/pre-image. |
 | `state` | `str` | No | `"draft"` | Comment status: `"draft"` or `"submitted"`. Automatically set to `"submitted"` if comment text contains `[ai review]` or `[review]`. |
@@ -86,8 +86,8 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 ```
 
 #### Mapping Behavior (`mapped` field):
-- `mapped: true`: The specified `line_no` successfully matched an active row within the patch diff's unified hunks. The comment appears directly attached to that diff line in Undine's Side-by-Side viewer.
-- `mapped: false`: The file exists in the patch, but `line_no` falls outside the diff's context window. Undine still persists the note as a draft comment so reviewer feedback is never discarded.
+- `mapped: true`: When targeting a diff file, the specified `line_no` successfully matched an active row within the patch diff's unified hunks. When targeting `DESCRIPTION:LINE`, `mapped` is `true` if `line_no` is within the line count of the commit description / message body preamble. The comment appears directly attached to that line in Undine's Side-by-Side viewer.
+- `mapped: false`: The file exists in the patch (or the line is beyond the description), but `line_no` falls outside the active context window. Undine still persists the note as a draft comment so reviewer feedback is never discarded.
 
 ---
 
@@ -181,7 +181,7 @@ Aggregates inline review comments and general feedback into a canonical LKML quo
 |---|---|---|---|---|
 | `target_message_id` | `str` | Yes | — | Message-ID being replied to. |
 | `general_feedback` | `str` | Yes | — | High-level review summary or greeting text. |
-| `inline_notes` | `list[dict]` | Yes | — | Array of note objects: `[{"file": "...", "line_no": 123, "comment": "..."}]`. |
+| `inline_notes` | `list[dict]` | Yes | — | Array of note objects: `[{"file": "...", "line_no": 123, "comment": "..."}]`. Set `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body. |
 
 #### Returns:
 ```json

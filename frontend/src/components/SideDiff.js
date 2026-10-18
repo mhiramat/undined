@@ -26,12 +26,38 @@ export function renderSideDiff(container, parsedDiff) {
 
     // Preamble / Commit message
     if (parsedDiff.preamble) {
+      const preambleLines = parsedDiff.preamble.split("\n");
       html += `
-        <div style="background-color: var(--bg-secondary); padding: 12px 16px; margin-bottom: 16px; border-radius: 4px; border: 1px solid var(--border-color); min-width: 100%; width: max-content;">
-          <div style="font-weight: 700; color: #94a3b8; font-size: 11px; text-transform: uppercase; margin-bottom: 6px;">Commit Description</div>
-          <pre class="plaintext-email" style="font-size: 12.5px;">${linkifyUrls(parsedDiff.preamble)}</pre>
-        </div>
+        <div class="diff-file-card" data-file="DESCRIPTION" style="margin-bottom: 16px;">
+          <div class="diff-file-header">
+            <span>📝 Commit Description</span>
+            <span style="font-size: 11px; color: var(--text-muted); float: right;">
+              Click line number to comment
+            </span>
+          </div>
+          <table class="diff-table unified">
+            <colgroup>
+              <col class="diff-col-gutter">
+              <col class="diff-col-code-unified">
+            </colgroup>
+            <tbody>
       `;
+
+      for (let i = 0; i < preambleLines.length; i++) {
+        const lineNo = i + 1;
+        const lineContent = linkifyUrls((preambleLines[i] || "").replace(/[\r\n]/g, ""));
+        const noteKey = `DESCRIPTION:${lineNo}`;
+        const hasNote = notes && notes[noteKey];
+
+        html += `
+          <tr class="diff-row">
+            <td class="diff-gutter ${hasNote ? "has-note" : ""}" data-side="new" data-file="DESCRIPTION" data-line="${lineNo}">${lineNo}</td>
+            <td class="diff-code ctx" style="padding-left: 8px;">${lineContent}</td>
+          </tr>
+        `;
+      }
+
+      html += `</tbody></table></div>`;
     }
 
     // Render each changed file

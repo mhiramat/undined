@@ -238,6 +238,124 @@ func TestMCPPostDiffCommentAlias(t *testing.T) {
 	}
 }
 
+func TestMCPPostReviewCommentDescription(t *testing.T) {
+	server, db, store, _, _, _ := setupTestMCPEnv(t)
+	ctx := context.Background()
+
+	descEmail := []byte(`From: Kernel Developer <dev@kernel.org>
+To: linux-kernel@vger.kernel.org
+Subject: [PATCH] ftrace: update description
+Message-ID: <desc-email-1@kernel.org>
+Date: Sat, 03 Oct 2026 14:00:00 +0000
+
+This is line 1 of the patch description.
+This is line 2 of the patch description.
+This is line 3 of the patch description.
+
+diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
+--- a/kernel/trace/ftrace.c
++++ b/kernel/trace/ftrace.c
+@@ -50,3 +50,3 @@ static void ftrace_test(void)
+-	old_code();
++	new_code();
+ }
+`)
+	b4Folder, _ := db.GetOrCreateFolder(constants.FolderB4Imports, false)
+	savedPath, err := store.AddMessage(constants.FolderB4Imports, descEmail, "")
+	if err != nil {
+		t.Fatalf("Failed to save email: %v", err)
+	}
+	_, err = db.IndexEmailFile(b4Folder.ID, savedPath)
+	if err != nil {
+		t.Fatalf("Failed to index email: %v", err)
+	}
+
+	// 1. Post comment on DESCRIPTION:2 (within bounds -> mapped: true)
+	res, err := server.CallTool(ctx, "post_review_comment", map[string]interface{}{
+		"message_id": "desc-email-1@kernel.org",
+		"target":     "DESCRIPTION:2",
+		"comment":    "Clarify line 2 in description.",
+	})
+	if err != nil {
+		t.Fatalf("post_review_comment failed: %v", err)
+	}
+	resMap, ok := res.(map[string]interface{})
+	if !ok || resMap["success"] != true {
+		t.Fatalf("expected success, got %v", res)
+	}
+	if resMap["file"] != "DESCRIPTION" {
+		t.Errorf("expected file DESCRIPTION, got %v", resMap["file"])
+	}
+	if resMap["line_no"] != 2 {
+		t.Errorf("expected line_no 2, got %v", resMap["line_no"])
+	}
+	if resMap["mapped"] != true {
+		t.Errorf("expected mapped=true for valid description line, got %v", resMap["mapped"])
+	}
+
+	// 2. Post comment with lowercase "description:1" (case insensitivity)
+	resLower, err := server.CallTool(ctx, "post_review_comment", map[string]interface{}{
+		"message_id": "desc-email-1@kernel.org",
+		"target":     "description:1",
+		"comment":    "Good title summary.",
+	})
+	if err != nil {
+		t.Fatalf("post_review_comment failed: %v", err)
+	}
+	resLowerMap := resLower.(map[string]interface{})
+	if resLowerMap["file"] != "DESCRIPTION" || resLowerMap["mapped"] != true {
+		t.Errorf("expected canonical DESCRIPTION and mapped=true, got %v", resLower)
+	}
+
+	// 3. Post comment out-of-bounds on DESCRIPTION:99 (mapped: false)
+	resOOB, err := server.CallTool(ctx, "post_review_comment", map[string]interface{}{
+		"message_id": "desc-email-1@kernel.org",
+		"target":     "DESCRIPTION:99",
+		"comment":    "Line out of range.",
+	})
+	if err != nil {
+		t.Fatalf("post_review_comment failed: %v", err)
+	}
+	resOOBMap := resOOB.(map[string]interface{})
+	if resOOBMap["file"] != "DESCRIPTION" || resOOBMap["mapped"] != false {
+		t.Errorf("expected mapped=false for line out of range, got %v", resOOB)
+	}
+
+	// 4. Verify DB comments
+	comments, err := db.GetMessageComments("desc-email-1@kernel.org")
+	if err != nil || len(comments) != 3 {
+		t.Fatalf("expected 3 comments, got %d (err=%v)", len(comments), err)
+	}
+
+	// 5. Create review draft containing DESCRIPTION inline note
+	draftRes, err := server.CallTool(ctx, "create_review_draft", map[string]interface{}{
+		"target_message_id": "desc-email-1@kernel.org",
+		"general_feedback":  "Patch looks good, small remarks on description.",
+		"inline_notes": []interface{}{
+			map[string]interface{}{
+				"file":    "DESCRIPTION",
+				"line_no": 2,
+				"comment": "Line 2 needs more detail.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create_review_draft failed: %v", err)
+	}
+	draftMap := draftRes.(map[string]interface{})
+	draftID := int64(draftMap["draft_id"].(int64))
+	draftMsg, err := db.GetMessageByID(draftID)
+	if err != nil || draftMsg == nil {
+		t.Fatalf("failed to retrieve draft message: %v", err)
+	}
+	if !strings.Contains(draftMsg.BodyPlain, "> This is line 2 of the patch description.") {
+		t.Errorf("expected draft to quote line 2 of description, got %s", draftMsg.BodyPlain)
+	}
+	if !strings.Contains(draftMsg.BodyPlain, "Line 2 needs more detail.") {
+		t.Errorf("expected draft to contain comment under line 2, got %s", draftMsg.BodyPlain)
+	}
+}
+
 func TestMCPTargetNormalization(t *testing.T) {
 	server, db, _, _, _, _ := setupTestMCPEnv(t)
 	ctx := context.Background()
