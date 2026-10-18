@@ -41,3 +41,44 @@ npm install
 npm run compile
 npm test
 ```
+
+## Packaging & Installation
+
+### Option 1: Package as VSIX & Install (Recommended)
+
+To package the extension into an installable `.vsix` archive:
+
+1. Install `@vscode/vsce` if not already installed:
+   ```bash
+   npm install -g @vscode/vsce
+   ```
+
+2. Package the extension:
+   ```bash
+   cd vscode-extension
+   vsce package --allow-missing-repository
+   ```
+   *(This produces `undine-vscode-<version>.vsix`)*
+
+3. Install into VS Code:
+   - **Via Command Line**:
+     ```bash
+     code --install-extension undine-vscode-0.1.0.vsix
+     ```
+   - **Via VS Code GUI**:
+     Open the Extensions view (`Ctrl+Shift+X`), click the `...` (More Actions) menu in the top right corner of the Extensions panel, choose **"Install from VSIX..."**, and select the generated file.
+
+### Option 2: Live Development Symlink (For Active Development)
+
+For rapid iteration without repackaging on every change:
+
+1. Symlink the extension directory to your user extensions folder:
+   ```bash
+   cd vscode-extension
+   npm run compile
+   ln -s "$(pwd)" ~/.vscode/extensions/undine-vscode
+   ```
+
+2. Reload VS Code:
+   Press `Ctrl+Shift+P` (or `Cmd+Shift+P`), type **"Developer: Reload Window"**, and press Enter. Any changes recompiled with `npm run compile` will be active immediately.
+
