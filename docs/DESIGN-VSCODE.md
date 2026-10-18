@@ -134,9 +134,8 @@ The user interface adapts the traditional Sylpheed 3-pane paradigm (Folders, Thr
 
 ### 4.2 Patch Diff & Code Viewer
 * Displays code patches with strict preservation of tab characters (`tab-size: 8`) and monospace font styling.
-
-
 * Opens dual-column Side-by-Side or Unified Diff via custom virtual document providers (`undine-patch://<msgid>/<filepath>`).
+* **On-Demand Inspection**: By default, selecting an email or patch updates the Message Header pane in the sidebar without immediately opening diff tabs. The diff or commit description is opened on-demand when the developer clicks `[🔍 View Diff]`, `[📝 Description]`, or any file shortcut in the header (or automatically if `undine.autoOpenDiff` is configured).
 
 
 
@@ -244,6 +243,11 @@ Unlike standalone email clients that only inspect isolated patch text, the VS Co
         "type": "number",
         "default": 8,
         "description": "Strict tab size for LKML patch and code display."
+      },
+      "undine.autoOpenDiff": {
+        "type": "boolean",
+        "default": false,
+        "description": "Automatically open the patch diff editor when selecting a message (default: false)."
       }
     }
   }

@@ -157,17 +157,20 @@ export function activate(context: vscode.ExtensionContext) {
           detail.message.is_read = true;
         }
 
-        // Open diff editor for patch if files are present, or description
-        if (detail.message.is_patch && detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0) {
-          const firstFile = detail.parsed_diff.files[0];
-          const targetFile = firstFile.new_path || firstFile.old_path;
-          vscode.commands.executeCommand("undine.openPatchDiff", cleanMsgId, targetFile);
-        } else if (detail.message.is_patch) {
-          vscode.commands.executeCommand("undine.openCommitDescription", cleanMsgId);
-        }
-
         // Update Message Header pane in the sidebar
         await headerProvider.setMessage(detail);
+
+        // Auto-open diff only if explicitly configured (disabled by default)
+        const autoOpenDiff = vscode.workspace.getConfiguration("undine").get<boolean>("autoOpenDiff", false);
+        if (autoOpenDiff) {
+          if (detail.message.is_patch && detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0) {
+            const firstFile = detail.parsed_diff.files[0];
+            const targetFile = firstFile.new_path || firstFile.old_path;
+            vscode.commands.executeCommand("undine.openPatchDiff", cleanMsgId, targetFile);
+          } else if (detail.message.is_patch) {
+            vscode.commands.executeCommand("undine.openCommitDescription", cleanMsgId);
+          }
+        }
 
         // Load existing review comments
         await commentController.loadCommentsForMessage(cleanMsgId);

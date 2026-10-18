@@ -91,6 +91,7 @@ describe("MessageHeaderViewProvider", () => {
     assert.ok(html.includes("Changed Files (1)"), "Changed file counter should be correct");
 
     // Action buttons
+    assert.ok(html.includes("View Diff"), "View Diff button should be rendered for patches with files");
     assert.ok(html.includes("Commit Description") || html.includes("Description"), "Description button should be rendered");
     assert.ok(html.includes("Apply (b4 am)"), "Apply button should be rendered");
     assert.ok(html.includes("Compose LKML Reply"), "Compose LKML Reply button should be rendered");

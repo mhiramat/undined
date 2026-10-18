@@ -315,10 +315,13 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 
     <div class="actions-container">
       <div class="actions-row">
+        ${m.is_patch && this._currentDetail.parsed_diff?.files?.length ? '<button class="btn btn-primary" onclick="sendMessage(\'openDiff\')">🔍 View Diff</button>' : ""}
         <button class="btn btn-primary" onclick="sendMessage('openDescription')">📝 Description</button>
-        ${m.is_patch ? '<button class="btn btn-primary" onclick="sendMessage(\'applyPatch\')">📥 Apply (b4 am)</button>' : ""}
       </div>
-      <button class="btn btn-secondary" onclick="sendMessage('generateReply')">💬 Compose LKML Reply</button>
+      <div class="actions-row">
+        ${m.is_patch ? '<button class="btn btn-primary" onclick="sendMessage(\'applyPatch\')">📥 Apply (b4 am)</button>' : ""}
+        <button class="btn btn-secondary" onclick="sendMessage('generateReply')">💬 Compose LKML Reply</button>
+      </div>
     </div>
   </div>
 
@@ -576,9 +579,11 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
         margin-top: 4px;
       }
       .actions-row {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
+        display: flex;
         gap: 6px;
+      }
+      .actions-row .btn {
+        flex: 1;
       }
       .btn {
         background-color: var(--vscode-button-background);

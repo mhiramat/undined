@@ -209,6 +209,11 @@
           "type": "number",
           "default": 30,
           "description": "Interval in seconds to poll UndineD for mailbox updates (0 to disable)."
+        },
+        "undine.autoOpenDiff": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open the patch diff editor when selecting a message (default: false, diff is opened on-demand via the Message Header pane)."
         }
       }
     },
