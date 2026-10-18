@@ -2,7 +2,7 @@
  * Filter parser and matcher for Project UndineD message list.
  *
  * Supports search query syntax:
- *   from:mhiramat
+ *   from:developer
  *   subject:kprobes
  *   before:2026/Sep
  *   after:2026/Jan

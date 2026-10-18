@@ -73,7 +73,7 @@ const (
 	DefaultSMTPPort          = 587
 	DefaultSMTPSSLPort       = 465
 	DefaultFromName          = "Kernel Developer"
-	DefaultFromEmail         = "mhiramat@kernel.org"
+	DefaultFromEmail         = "dev@example.com"
 	DefaultContentType       = "text/plain; charset=utf-8"
 	DefaultTransferEncoding  = "8bit"
 

@@ -26,8 +26,8 @@ func TestEditorLauncherPrepareDraftContent(t *testing.T) {
 	defer db.Close()
 
 	cfg := config.NewDefaultConfig()
-	cfg.SMTP.FromName = "Masami Hiramatsu"
-	cfg.SMTP.FromEmail = "mhiramat@kernel.org"
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
 
 	launcher := NewLauncher(cfg, db)
 
@@ -47,7 +47,7 @@ func TestEditorLauncherPrepareDraftContent(t *testing.T) {
 		t.Fatalf("PrepareDraftContent failed: %v", err)
 	}
 
-	if !strings.Contains(content, "From: Masami Hiramatsu <mhiramat@kernel.org>") {
+	if !strings.Contains(content, "From: Kernel Developer <dev@example.com>") {
 		t.Errorf("Missing From header in content: %s", content)
 	}
 	if !strings.Contains(content, "To: dev@vger.kernel.org") {

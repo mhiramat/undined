@@ -134,9 +134,9 @@ log_level = "info"
 [imap]
 host = "imap.example.com"
 port = 993
-username = "mhiramat@kernel.org"
+username = "dev@example.com"
 # Retrieve password dynamically via CLI command or raw password:
-password_eval = "pass show mail/mhiramat"
+password_eval = "pass show mail/dev"
 use_ssl = true
 verify_cert = true
 poll_interval_seconds = 60
@@ -145,12 +145,12 @@ sync_folders = ["INBOX", "LKML", "Sent"]
 [smtp]
 host = "smtp.example.com"
 port = 587
-username = "mhiramat@kernel.org"
-password_eval = "pass show mail/mhiramat"
-from_name = "Masami Hiramatsu"
-from_email = "mhiramat@kernel.org"
+username = "dev@example.com"
+password_eval = "pass show mail/dev"
+from_name = "Kernel Developer"
+from_email = "dev@example.com"
 use_starttls = true
-signature = "-- \nMasami Hiramatsu"
+signature = "-- \nKernel Developer"
 
 [lkml]
 b4_cmd = "b4"

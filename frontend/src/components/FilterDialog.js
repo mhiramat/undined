@@ -1,6 +1,6 @@
 /**
  * FilterDialog: Modal dialog allowing users to filter messages in the summary pane
- * by subject, from (e.g. from:mhiramat), date (e.g. before:2026/Sep, after:2026/Jan),
+ * by subject, from (e.g. from:developer), date (e.g. before:2026/Sep, after:2026/Jan),
  * color tags (selectable dropdown with multiple boxes), or patch/unread status.
  */
 
@@ -91,7 +91,7 @@ export async function openFilterDialog() {
             class="filter-input query-main"
             id="filter-query-input"
             value="${escapeAttr(currentQuery)}"
-            placeholder="e.g. from:mhiramat subject:kprobes tag:Red,Blue before:2026/Sep is:patch"
+            placeholder="e.g. from:developer subject:kprobes tag:Red,Blue before:2026/Sep is:patch"
             autocomplete="off"
             autofocus
           />
@@ -120,7 +120,7 @@ export async function openFilterDialog() {
               class="filter-input"
               id="field-filter-from"
               value="${escapeAttr(initialFrom)}"
-              placeholder="e.g. mhiramat or developer"
+              placeholder="e.g. dev or developer"
             />
           </div>
 

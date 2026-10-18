@@ -39,11 +39,11 @@ host = "imap.example.com"
 port = 993
 use_ssl = true
 verify_cert = true
-username = "mhiramat@kernel.org"
+username = "dev@example.com"
 
 # Password options:
 # 1. secret-tool (Recommended on Linux desktops / GNOME Keyring):
-password_cmd = "secret-tool lookup service undined-imap user mhiramat@kernel.org"
+password_cmd = "secret-tool lookup service undined-imap user dev@example.com"
 # 2. pass (Unix standard password manager):
 # password_cmd = "pass show mail/imap-undined"
 # 3. Plaintext (Not recommended for production):
@@ -67,12 +67,12 @@ use_ssl = false
 use_starttls = true
 verify_cert = true
 
-username = "mhiramat@kernel.org"
-password_cmd = "secret-tool lookup service undined-smtp user mhiramat@kernel.org"
+username = "dev@example.com"
+password_cmd = "secret-tool lookup service undined-smtp user dev@example.com"
 
 # Identity headers
-from_name = "Masami Hiramatsu"
-from_email = "mhiramat@kernel.org"
+from_name = "Kernel Developer"
+from_email = "dev@example.com"
 signature_file = "~/.signature"
 
 # Strict Plaintext Enforcement:
@@ -118,9 +118,9 @@ command = "agy --print"
 enabled = true
 url = "https://patchwork.kernel.org"
 api_version = "1.4"
-username = "mhiramat"
-email = "mhiramat@kernel.org"
-# token_cmd = "secret-tool lookup service undined-patchwork user mhiramat@kernel.org"
+username = "dev"
+email = "dev@example.com"
+# token_cmd = "secret-tool lookup service undined-patchwork user dev@example.com"
 preferred_archives = ["linux-trace"]
 timeout_seconds = 10.0
 

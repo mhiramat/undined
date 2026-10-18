@@ -17,8 +17,8 @@ import (
 
 func TestBuildMessageStrictHeaders(t *testing.T) {
 	cfg := config.NewDefaultConfig()
-	cfg.SMTP.FromName = "Masami Hiramatsu"
-	cfg.SMTP.FromEmail = "mhiramat@kernel.org"
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
 
 	client := NewClient(cfg, nil, nil)
 
@@ -33,7 +33,7 @@ func TestBuildMessageStrictHeaders(t *testing.T) {
 		"",
 	)
 
-	if !strings.Contains(raw, "From: Masami Hiramatsu <mhiramat@kernel.org>") {
+	if !strings.Contains(raw, "From: Kernel Developer <dev@example.com>") {
 		t.Errorf("Missing From: %s", raw)
 	}
 	if !strings.Contains(raw, "To: linux-trace-kernel@vger.kernel.org") {
@@ -64,8 +64,8 @@ func TestBuildMessageStrictHeaders(t *testing.T) {
 
 func TestBuildMessageHeaderInjectionSanitization(t *testing.T) {
 	cfg := config.NewDefaultConfig()
-	cfg.SMTP.FromName = "Masami\r\nHiramatsu"
-	cfg.SMTP.FromEmail = "mhiramat@kernel.org\r\nBcc: evil@attacker.com"
+	cfg.SMTP.FromName = "Kernel\r\nDeveloper"
+	cfg.SMTP.FromEmail = "dev@example.com\r\nBcc: evil@attacker.com"
 
 	client := NewClient(cfg, nil, nil)
 
@@ -175,7 +175,7 @@ func TestSendRawMessageWithMockSMTP(t *testing.T) {
 	cfg.SMTP.Port = port
 	cfg.SMTP.UseSSL = false
 	cfg.SMTP.UseSTARTTLS = false
-	cfg.SMTP.FromEmail = "mhiramat@kernel.org"
+	cfg.SMTP.FromEmail = "dev@example.com"
 
 	client := NewClient(cfg, store, db)
 

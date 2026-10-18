@@ -191,7 +191,7 @@ func TestFolderAndMessageEndpoints(t *testing.T) {
 	}
 
 	testEml := []byte("Message-ID: <patch-api-101@kernel.org>\n" +
-		"From: Masami Hiramatsu <mhiramat@kernel.org>\n" +
+		"From: Kernel Developer <dev@example.com>\n" +
 		"To: linux-trace@vger.kernel.org\n" +
 		"Subject: [PATCH] tracing: Fix probe\n" +
 		"Date: Sat, 17 Oct 2026 12:00:00 +0000\n\n" +
@@ -445,10 +445,10 @@ func TestAPIConsistencyAndReturnValues(t *testing.T) {
 	cfg.General.MaildirPath = maildirPath
 	cfg.General.DBPath = dbPath
 	cfg.General.KernelGitDir = tempDir
-	cfg.SMTP.FromName = "Masami Hiramatsu"
-	cfg.SMTP.FromEmail = "mhiramat@kernel.org"
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
 	cfg.Patchwork.Enabled = true
-	cfg.Patchwork.DelegateUsers = []string{"mhiramat", "rostedt"}
+	cfg.Patchwork.DelegateUsers = []string{"dev", "rostedt"}
 	cfg.Patchwork.Token = "test-token"
 	cfg.Tags = map[string]config.TagDefinition{
 		"$cl_1": {Tag: "Red", Color: "#ff0000"},
@@ -474,7 +474,7 @@ func TestAPIConsistencyAndReturnValues(t *testing.T) {
 	}
 	var configRes map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&configRes)
-	if configRes["from_name"] != "Masami Hiramatsu" || configRes["from_email"] != "mhiramat@kernel.org" {
+	if configRes["from_name"] != "Kernel Developer" || configRes["from_email"] != "dev@example.com" {
 		t.Errorf("expected flat from_name/from_email in config, got %v", configRes)
 	}
 	if configRes["patchwork_can_update"] != true || configRes["patchwork_enabled"] != true {

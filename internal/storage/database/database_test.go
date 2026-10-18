@@ -128,7 +128,7 @@ func TestDatabaseIndexingAndSearch(t *testing.T) {
 
 	// 1. Create a test email in maildir
 	store := maildir.NewMaildirStore(tmpDir)
-	raw := `From: "Masami Hiramatsu" <mhiramat@kernel.org>
+	raw := `From: "Kernel Developer" <dev@example.com>
 To: linux-trace-kernel@vger.kernel.org
 Subject: [PATCH] ftrace: tracepoint kprobe optimization
 Date: Mon, 12 Oct 2026 10:00:00 +0900

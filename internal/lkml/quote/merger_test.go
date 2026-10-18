@@ -37,7 +37,7 @@ func TestMergePatchReviewQuote(t *testing.T) {
 		parsed,
 		notes,
 		"Thanks for the patch, please see my comment below.",
-		"Masami Hiramatsu\nGoogle",
+		"Kernel Developer\nExample Org",
 		2,
 	)
 
@@ -57,7 +57,7 @@ func TestMergePatchReviewQuote(t *testing.T) {
 	}
 
 	// Verify Signature
-	if !strings.Contains(result, "-- \nMasami Hiramatsu\nGoogle") {
+	if !strings.Contains(result, "-- \nKernel Developer\nExample Org") {
 		t.Errorf("missing signature: %s", result)
 	}
 }

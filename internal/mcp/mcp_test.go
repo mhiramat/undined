@@ -490,7 +490,7 @@ func TestMCPPatchworkAndB4Tools(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id": 123, "state": "new", "msgid": "ftrace-patch-1@kernel.org"}]`))
 		case strings.Contains(r.URL.Path, "/users/"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[{"id": 99, "username": "mhiramat"}]`))
+			_, _ = w.Write([]byte(`[{"id": 99, "username": "dev"}]`))
 		default:
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[]`))

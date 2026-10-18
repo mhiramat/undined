@@ -77,8 +77,8 @@ func TestUpdatePatchWithExplicitNullDelegate(t *testing.T) {
 func TestChoosePreferredItem(t *testing.T) {
 	cfg := config.NewDefaultConfig()
 	cfg.Patchwork.PreferredArchives = []string{"linux-trace-kernel", "netdev"}
-	cfg.Patchwork.Username = "mhiramat"
-	cfg.Patchwork.Email = "mhiramat@kernel.org"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
 
 	client := NewClient(cfg, nil, nil)
 
@@ -91,7 +91,7 @@ func TestChoosePreferredItem(t *testing.T) {
 		{
 			"id":       102,
 			"project":  map[string]any{"link_name": "linux-trace-kernel"},
-			"delegate": map[string]any{"username": "mhiramat"},
+			"delegate": map[string]any{"username": "dev"},
 		},
 		{
 			"id":       103,
@@ -100,7 +100,7 @@ func TestChoosePreferredItem(t *testing.T) {
 		},
 	}
 
-	chosen := client.ChoosePreferredItem(items, "mhiramat@kernel.org")
+	chosen := client.ChoosePreferredItem(items, "dev@example.com")
 	if chosen == nil || chosen["id"].(int) != 102 {
 		t.Errorf("Expected item 102 (preferred archive + delegated to me), got %v", chosen)
 	}
@@ -126,7 +126,7 @@ func TestSyncTodoFromPatchwork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if strings.HasPrefix(r.URL.Path, "/api/1.4/users/") {
-			w.Write([]byte(`[{"id": 99, "username": "mhiramat", "email": "mhiramat@kernel.org"}]`))
+			w.Write([]byte(`[{"id": 99, "username": "dev", "email": "dev@example.com"}]`))
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/777/mbox/") {
@@ -145,8 +145,8 @@ func TestSyncTodoFromPatchwork(t *testing.T) {
 	cfg := config.NewDefaultConfig()
 	cfg.Patchwork.URL = server.URL
 	cfg.Patchwork.APIVersion = "1.4"
-	cfg.Patchwork.Username = "mhiramat"
-	cfg.Patchwork.Email = "mhiramat@kernel.org"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
 	cfg.Patchwork.Token = "test-token"
 
 	client := NewClient(cfg, db, store)

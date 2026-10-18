@@ -85,7 +85,7 @@ func TestPollerInsertHeaderSummaryAndHydration(t *testing.T) {
 
 	headers := []byte("Message-ID: <patch-101@kernel.org>\r\n" +
 		"Date: Sat, 17 Oct 2026 12:00:00 +0000\r\n" +
-		"From: Masami Hiramatsu <mhiramat@kernel.org>\r\n" +
+		"From: Kernel Developer <dev@example.com>\r\n" +
 		"Subject: [PATCH] ftrace: Fix event ring buffer\r\n" +
 		"In-Reply-To: <parent-100@kernel.org>\r\n\r\n")
 
