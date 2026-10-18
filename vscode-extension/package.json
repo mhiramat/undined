@@ -1,0 +1,248 @@
+{
+  "name": "undine-vscode",
+  "displayName": "Undine Review Workstation",
+  "description": "Integrated Linux kernel mail and patch review workstation for UndineD",
+  "version": "0.1.0",
+  "publisher": "undine",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages",
+    "SCM Providers"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onView:undine.foldersView",
+    "onCommand:undine.refreshFolders",
+    "onCommand:undine.refreshThreads",
+    "onCommand:undine.openPatchDiff",
+    "onCommand:undine.openCommitDescription",
+    "onCommand:undine.generateReplyDraft",
+    "onCommand:undine.importB4",
+    "onCommand:undine.applyPatch"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "undine",
+          "title": "Undine Review",
+          "icon": "media/undine-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "undine": [
+        {
+          "id": "undine.foldersView",
+          "name": "Folders",
+          "type": "tree"
+        },
+        {
+          "id": "undine.threadsView",
+          "name": "Thread Hierarchy",
+          "type": "tree"
+        },
+        {
+          "id": "undine.patchworkView",
+          "name": "Patchwork (Assigned to Me)",
+          "type": "tree"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "undine.refreshFolders",
+        "title": "Refresh Folders",
+        "category": "Undine",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "undine.refreshThreads",
+        "title": "Refresh Threads",
+        "category": "Undine",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "undine.openPatchDiff",
+        "title": "Open Patch Diff",
+        "category": "Undine"
+      },
+      {
+        "command": "undine.openCommitDescription",
+        "title": "Open Commit Description",
+        "category": "Undine"
+      },
+      {
+        "command": "undine.generateReplyDraft",
+        "title": "Generate LKML Reply Draft",
+        "category": "Undine",
+        "icon": "$(reply)"
+      },
+      {
+        "command": "undine.sendEmail",
+        "title": "Send Email Draft",
+        "category": "Undine",
+        "icon": "$(mail)"
+      },
+      {
+        "command": "undine.importB4",
+        "title": "Hydrate Thread via b4",
+        "category": "Undine",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "undine.applyPatch",
+        "title": "Apply Patch to Repository (git am)",
+        "category": "Undine",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "undine.abortApplyPatch",
+        "title": "Abort In-Progress Patch Application",
+        "category": "Undine"
+      },
+      {
+        "command": "undine.delegateToMe",
+        "title": "Delegate Patch to Me (Patchwork)",
+        "category": "Undine"
+      },
+      {
+        "command": "undine.searchMessages",
+        "title": "Search Messages (FTS5)",
+        "category": "Undine",
+        "icon": "$(search)"
+      },
+      {
+        "command": "undine.nextMessage",
+        "title": "Next Message",
+        "category": "Undine"
+      },
+      {
+        "command": "undine.prevMessage",
+        "title": "Previous Message",
+        "category": "Undine"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "undine.refreshFolders",
+          "when": "view == undine.foldersView",
+          "group": "navigation"
+        },
+        {
+          "command": "undine.refreshThreads",
+          "when": "view == undine.threadsView",
+          "group": "navigation"
+        },
+        {
+          "command": "undine.searchMessages",
+          "when": "view == undine.threadsView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "undine.generateReplyDraft",
+          "when": "view == undine.threadsView && viewItem == message",
+          "group": "inline"
+        },
+        {
+          "command": "undine.importB4",
+          "when": "view == undine.threadsView && viewItem == message",
+          "group": "1_b4"
+        },
+        {
+          "command": "undine.applyPatch",
+          "when": "view == undine.threadsView && viewItem == patch",
+          "group": "1_b4"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "undine.nextMessage",
+        "key": "j",
+        "when": "focusedView == undine.threadsView"
+      },
+      {
+        "command": "undine.prevMessage",
+        "key": "k",
+        "when": "focusedView == undine.threadsView"
+      },
+      {
+        "command": "undine.searchMessages",
+        "key": "/",
+        "when": "focusedView == undine.threadsView"
+      }
+    ],
+    "configuration": {
+      "title": "Undine Review Workstation",
+      "properties": {
+        "undine.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8080",
+          "description": "Base URL of the running UndineD daemon."
+        },
+        "undine.authTokenPath": {
+          "type": "string",
+          "default": "~/.local/share/undined/auth_token",
+          "description": "Path to the authentication token file generated by UndineD."
+        },
+        "undine.targetGitRepo": {
+          "type": "string",
+          "default": "${workspaceFolder}",
+          "description": "Target Git repository path for b4/git patch application."
+        },
+        "undine.tabSize": {
+          "type": "number",
+          "default": 8,
+          "description": "Strict tab size for LKML patch and code display."
+        },
+        "undine.pollIntervalSeconds": {
+          "type": "number",
+          "default": 30,
+          "description": "Interval in seconds to poll UndineD for mailbox updates (0 to disable)."
+        }
+      }
+    },
+    "chatParticipants": [
+      {
+        "id": "undine",
+        "name": "undine",
+        "description": "Undine Linux kernel patch review and LKML assistant",
+        "commands": [
+          {
+            "name": "review",
+            "description": "Analyze active kernel patch diff against Linux kernel review conventions"
+          },
+          {
+            "name": "summarize",
+            "description": "Summarize discussion and review status for the active email thread"
+          },
+          {
+            "name": "draft-reply",
+            "description": "Generate an LKML-compliant reply draft with review feedback and trailers"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTests.js"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "mocha": "^10.4.0",
+    "typescript": "^5.4.5"
+  }
+}

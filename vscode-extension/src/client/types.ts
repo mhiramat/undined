@@ -1,0 +1,182 @@
+/**
+ * TypeScript definitions for UndineD REST entities and payloads.
+ */
+
+export interface Folder {
+  id: number;
+  name: string;
+  is_subscribed: boolean;
+  is_system: boolean;
+  unread_count?: number;
+  total_count?: number;
+}
+
+export interface FolderSyncStatus {
+  is_syncing: boolean;
+  synced: number;
+  total: number;
+  status: string;
+}
+
+export interface MessageSummary {
+  id: number;
+  message_id: string;
+  subject: string;
+  from_addr: string;
+  from_name: string;
+  date: string;
+  is_patch: boolean;
+  is_read: boolean;
+  is_replied: boolean;
+  tag?: string;
+  in_reply_to?: string;
+  references?: string;
+  has_notes?: boolean;
+}
+
+export interface DiffCell {
+  line_no: number | null;
+  content: string;
+  type: "ctx" | "del" | "add" | "empty";
+}
+
+export interface PairedRow {
+  row_idx: number;
+  left: DiffCell;
+  right: DiffCell;
+}
+
+export interface UnifiedLine {
+  type: "ctx" | "add" | "del" | "header";
+  old_no: number | null;
+  new_no: number | null;
+  content: string;
+}
+
+export interface Hunk {
+  header: string;
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  section?: string;
+  paired_rows: PairedRow[];
+  unified_lines: UnifiedLine[];
+}
+
+export interface DiffFile {
+  old_path: string;
+  new_path: string;
+  hunks: Hunk[];
+}
+
+export interface ParsedEmailDiff {
+  is_patch: boolean;
+  preamble: string;
+  files: DiffFile[];
+  postscript: string;
+}
+
+export interface PatchComment {
+  id?: number;
+  message_id?: string;
+  file_path: string;
+  file?: string;
+  line_no: number;
+  lineNo?: number;
+  side: "new" | "old" | "left" | "right";
+  text: string;
+  state?: "draft" | "submitted";
+  author?: string;
+  created_at?: string;
+}
+
+export interface MessageDetail {
+  message: MessageSummary & {
+    body_plain: string;
+    body_html?: string;
+    to_addr: string;
+    cc_addr: string;
+    file_path: string;
+  };
+  comments?: PatchComment[];
+  parsed_diff?: ParsedEmailDiff;
+  reviewed_message?: MessageSummary;
+  parent_info?: {
+    found: boolean;
+    folder_name?: string;
+    parent_id?: number;
+  };
+}
+
+export interface PatchworkUser {
+  id: number;
+  username: string;
+}
+
+export interface PatchworkProject {
+  id: number;
+  name: string;
+  link_name: string;
+}
+
+export interface PatchworkPatch {
+  id: number;
+  msgid: string;
+  name: string;
+  state: string;
+  delegate: PatchworkUser | null;
+  checks: string;
+  project?: PatchworkProject;
+}
+
+export interface PatchworkCheck {
+  id: number;
+  state: "pending" | "success" | "warning" | "fail";
+  target_url: string;
+  context: string;
+  description: string;
+}
+
+export interface B4ImportResult {
+  success: boolean;
+  message_id: string;
+  imported_count: number;
+  indexed_ids: number[];
+}
+
+export interface PatchApplyResult {
+  success: boolean;
+  branch: string;
+  head: string;
+  original_branch?: string;
+  head_before?: string;
+  error?: string;
+  detail?: string;
+}
+
+export interface QuotePreviewResult {
+  quote_text: string;
+  body?: string;
+  quote?: string;
+}
+
+export interface SendEmailPayload {
+  to_addr: string;
+  cc_addr?: string | null;
+  subject: string;
+  body_text: string;
+  in_reply_to?: string | null;
+  references?: string | null;
+  orig_msg_id?: string | null;
+}
+
+export interface SaveDraftPayload {
+  to_addr: string;
+  cc_addr?: string | null;
+  subject: string;
+  body_text: string;
+  in_reply_to?: string | null;
+  references?: string | null;
+  custom_from?: string | null;
+}
