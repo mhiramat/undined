@@ -16,6 +16,8 @@
   "main": "./out/src/extension.js",
   "activationEvents": [
     "onView:undine.foldersView",
+    "onView:undine.threadsView",
+    "onView:undine.headerView",
     "onCommand:undine.refreshFolders",
     "onCommand:undine.refreshThreads",
     "onCommand:undine.openPatchDiff",
@@ -47,9 +49,9 @@
           "type": "tree"
         },
         {
-          "id": "undine.patchworkView",
-          "name": "Patchwork (Assigned to Me)",
-          "type": "tree"
+          "type": "webview",
+          "id": "undine.headerView",
+          "name": "Message Header"
         }
       ]
     },
@@ -160,36 +162,6 @@
           "command": "undine.applyPatch",
           "when": "view == undine.threadsView && viewItem == patch",
           "group": "1_b4"
-        },
-        {
-          "command": "undine.openPatchDiff",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "inline"
-        },
-        {
-          "command": "undine.openCommitDescription",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "1_open"
-        },
-        {
-          "command": "undine.importB4",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "2_actions"
-        },
-        {
-          "command": "undine.applyPatch",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "2_actions"
-        },
-        {
-          "command": "undine.generateReplyDraft",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "2_actions"
-        },
-        {
-          "command": "undine.delegateToMe",
-          "when": "view == undine.patchworkView && viewItem == patchworkPatch",
-          "group": "3_delegate"
         }
       ]
     },

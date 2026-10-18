@@ -89,70 +89,50 @@ UndineD implements a token-based authentication mechanism where a cryptographica
 
 ## 4. UI/UX Specifications
 
-The user interface adapts the traditional Sylpheed 3-pane paradigm (Folders, Thread Summary, Message Viewer) into native VS Code UI components:
+The user interface adapts the traditional Sylpheed 3-pane paradigm (Folders, Thread Summary, Message Viewer) into native VS Code UI components with a redesigned stacked vertical sidebar:
 
 ```
 +------------------+------------------------------------+---------------------------------------+
 | Activity Bar     | Primary Sidebar (Custom Views)     | Editor / Tab Area                     |
 | [Undine Icon]    | ---------------------------------- | ------------------------------------- |
-|                  | ▼ Folders                          | [Header Drawer: From, Subject, lore]  |
-|                  |   📥 INBOX (12)                    | [Patchwork: Checks PASS | State: New] |
-|                  |   🐧 LKML (145)                    | ------------------------------------- |
-|                  |   📦 b4-imports                    | Patch Diff Viewer                     |
-|                  |   📝 Drafts                        | (font: monospace, tab-size: 8)        |
+|                  | ▼ Folders                          | Patch Diff Viewer                     |
+|                  |   📥 INBOX (12)                    | (font: monospace, tab-size: 8)        |
+|                  |   🐧 LKML (145)                    |                                       |
+|                  |   📦 b4-imports                    | @@ -230,6 +230,7 @@                   |
+|                  |   📝 Drafts                        | + return VM_FAULT_SIGBUS;             |
 |                  | ---------------------------------- |                                       |
-|                  | ▼ Thread Hierarchy                 | @@ -230,6 +230,7 @@                   |
-|                  |   ├─ [PATCH v2] mm: fix null...    | + return VM_FAULT_SIGBUS;             |
-|                  |   │  └─ Re: [PATCH v2] mm...       |                                       |
-|                  |   └─ [PATCH 0/3] trace: new...     | +-- (Inline Review Note) -------------+
-|                  | ---------------------------------- | | "Does this condition ever trigger   |
-|                  | ▼ Patchwork (Assigned to Me)       | |  for pure anonymous mappings?"      |
-|                  |   - #12431 [new] mm/memory.c       | +-------------------------------------+
+|                  | ▼ Thread Hierarchy                 | +-- (Inline Review Note) -------------+
+|                  |   ├─ [PATCH v2] mm: fix null...    | | "Does this condition ever trigger   |
+|                  |   │  └─ Re: [PATCH v2] mm...       | |  for pure anonymous mappings?"      |
+|                  |   └─ [PATCH 0/3] trace: new...     | +-------------------------------------+
+|                  | ---------------------------------- |                                       |
+|                  | ▼ Message Header                   |                                       |
+|                  |   [PATCH] [UNREAD]                 |                                       |
+|                  |   Subject: [PATCH v2] mm: fix...   |                                       |
+|                  |   From: dev@example.com            |                                       |
+|                  |   Msg-ID: <...> [lore ↗]           |                                       |
+|                  |   Patchwork: #12431 · [PASS]       |                                       |
+|                  |   [Description] [Apply] [Reply]    |                                       |
 +------------------+------------------------------------+---------------------------------------+
-
 ```
 
-(Sylpheed 3-pane layout reference:; UndineD workflow reference:)
-
-### 4.1 Sidebar Views
+### 4.1 Sidebar Views (Stacked Vertical Panes)
 
 * **Folders View (`vscode.TreeDataProvider`):**
-* Displays synchronized mail folders (`INBOX`, `LKML`, `Drafts`, `b4-imports`) along with unread counter badges.
+  * Displays synchronized mail folders (`INBOX`, `LKML`, `Drafts`, `b4-imports`) along with unread counter badges.
 
+* **Thread Summary View (`vscode.TreeDataProvider`):**
+  * Displays email threads in a hierarchical tree view based on `In-Reply-To` and `References` headers.
+  * Provides keyboard shortcuts: `j` for next email, `k` for previous email, and `/` to open search.
 
+* **Message Header View (`vscode.WebviewViewProvider`):**
+  * Replaces the standalone Patchwork pane in the stacked vertical sidebar with a rich, responsive email/patch header inspector.
+  * Displays `From`, `To`, `Cc`, `Subject`, `Date`, and canonical `Message-ID` with direct hyperlinks to `https://lore.kernel.org/r/<msgid>`.
+  * Integrates Patchwork status, CI checks badge (`PASS`/`FAIL`), and self-delegation (`Delegate to Me`) directly into the header for incoming patches.
+  * Displays thread hydration warnings with one-click `[Hydrate Thread via b4]` if parent emails are missing from the local store.
+  * Provides changed file shortcuts to jump directly to specific patch diffs, plus quick maintainer actions: `[Description]`, `[Apply (b4 am)]`, and `[Compose LKML Reply]`.
 
-
-* **Thread Summary View:**
-* Displays email threads in a hierarchical tree view based on `In-Reply-To` and `References` headers.
-
-
-* Provides keyboard shortcuts: `j` for next email, `k` for previous email, and `/` to open search.
-
-
-
-
-* **Patchwork View:**
-* Displays patches assigned to the current maintainer that require review (`new`, `under-review`).
-
-
-
-
-
-### 4.2 Patch & Message Viewer
-
-* **Header Drawer:**
-* Displays `From`, `To`, `Cc`, `Subject`, `Date`, and canonical `Message-ID` with direct hyperlinks to `[https://lore.kernel.org/r/](https://lore.kernel.org/r/)<msgid>`.
-
-
-* Displays Patchwork CI checks badge (PASS/FAIL) and an action to self-delegate (`Delegate to Me`).
-
-
-* If a parent email is missing from the local store, displays a warning badge with an action button: `[Hydrate Thread via b4]`.
-
-
-
-
-* **Diff Representation:**
+### 4.2 Patch Diff & Code Viewer
 * Displays code patches with strict preservation of tab characters (`tab-size: 8`) and monospace font styling.
 
 

@@ -94,6 +94,14 @@ export const mockVscode = {
       reveal: () => {},
     }),
     registerTreeDataProvider: () => ({ dispose: () => {} }),
+    registerWebviewViewProvider: () => ({ dispose: () => {} }),
+  },
+  env: {
+    openExternal: async () => true,
+    clipboard: {
+      writeText: async () => {},
+      readText: async () => "",
+    },
   },
   commands: {
     registerCommand: () => ({ dispose: () => {} }),

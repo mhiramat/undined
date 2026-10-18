@@ -8,10 +8,9 @@ import { UndineRestClient } from "./client/restClient";
 import { Folder, MessageDetail } from "./client/types";
 import { FoldersTreeProvider } from "./views/foldersProvider";
 import { ThreadsTreeProvider } from "./views/threadsProvider";
-import { PatchworkTreeProvider } from "./views/patchworkProvider";
+import { MessageHeaderViewProvider } from "./views/messageHeaderView";
 import { PatchContentProvider } from "./providers/patchContentProvider";
 import { UndineCommentController } from "./providers/commentController";
-import { MessageHeaderView } from "./views/messageHeaderView";
 import { registerViewCommands } from "./commands/viewCommands";
 import { registerComposeCommands } from "./commands/composeCommands";
 import { registerB4Commands } from "./commands/b4Commands";
@@ -30,15 +29,15 @@ export function activate(context: vscode.ExtensionContext) {
   const tokenManager = new TokenManager({ customTokenPath: authTokenPath });
   const client = new UndineRestClient(serverUrl, tokenManager);
 
-  // 2. Initialize Tree View Providers (Activity Bar Sidebar)
+  // 2. Initialize Sidebar View Providers (Folders, Thread Hierarchy, Message Header)
   const foldersProvider = new FoldersTreeProvider(client);
   const threadsProvider = new ThreadsTreeProvider(client);
-  const patchworkProvider = new PatchworkTreeProvider(client);
+  const headerProvider = new MessageHeaderViewProvider(context.extensionUri, client);
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("undine.foldersView", foldersProvider),
     vscode.window.registerTreeDataProvider("undine.threadsView", threadsProvider),
-    vscode.window.registerTreeDataProvider("undine.patchworkView", patchworkProvider)
+    vscode.window.registerWebviewViewProvider(MessageHeaderViewProvider.viewType, headerProvider)
   );
 
   // 3. Initialize Virtual Document & Comments Providers
@@ -167,8 +166,8 @@ export function activate(context: vscode.ExtensionContext) {
           vscode.commands.executeCommand("undine.openCommitDescription", cleanMsgId);
         }
 
-        // Open Header Drawer panel docked beside diff editor
-        MessageHeaderView.createOrShow(context.extensionUri, detail, client);
+        // Update Message Header pane in the sidebar
+        await headerProvider.setMessage(detail);
 
         // Load existing review comments
         await commentController.loadCommentsForMessage(cleanMsgId);
@@ -228,7 +227,9 @@ export function activate(context: vscode.ExtensionContext) {
     threadsProvider.refresh();
   });
   registerPatchworkCommands(context, client, () => {
-    patchworkProvider.refresh();
+    if (activeDetail) {
+      headerProvider.setMessage(activeDetail);
+    }
   });
 
   // 6. Register Copilot Chat Participant (@undine)
@@ -239,7 +240,6 @@ export function activate(context: vscode.ExtensionContext) {
     pollTimer = setInterval(() => {
       foldersProvider.refresh();
       threadsProvider.refresh();
-      patchworkProvider.refresh();
     }, pollInterval * 1000);
   }
 
