@@ -5,13 +5,14 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
 ## Features
 
 - **Activity Bar Workspace**:
-  - Vertically stacked, collapsible panes for **Folders**, **Thread Hierarchy**, and **Patchwork**.
+  - Vertically stacked, collapsible panes for **Folders**, **Thread Hierarchy**, and **Message Header**.
   - Fast keyboard navigation (`j` next patch, `k` previous patch, `/` search threads).
-  - Unread badges and status indicators for emails and Patchwork CI checks.
+  - Unread badges and status indicators for emails.
+  - Dedicated **Message Header** webview pane that shows envelope details (From, To, Cc, Date, Message-ID), clickable lore.kernel.org links, Patchwork CI checks and delegation, missing parent warning with b4 hydration, changed file shortcuts, and quick maintainer review actions (`Description`, `Apply (b4 am)`, `Compose LKML Reply`).
 - **Native Diff & Patch Viewer**:
   - Virtual document provider (`undine-patch://`) supporting pre-image / post-image diff view with LKML standard 8-space tabs.
   - Dedicated virtual document for commit message body (`undine-patch://<msgid>/DESCRIPTION`).
-  - Option A Message Header view docked alongside diffs with metadata, lore.kernel.org hyperlinks, and action buttons (`Hydrate via b4`, `Apply to Git`, `Delegate to Me`, `Reply`).
+  - Full-width editor area for diff and description inspection, keeping header metadata cleanly organized in the sidebar.
 - **Bidirectional Review Comments**:
   - Integration with VS Code Comments API (`vscode.comments`).
   - Comment on diff lines or commit descriptions (`DESCRIPTION:LINE`).
@@ -29,7 +30,7 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `undine.serverUrl` | `string` | `http://127.0.0.1:8080` | UndineD REST API server URL |
-| `undine.tokenPath` | `string` | `""` (auto-detect) | Path to Undine auth token (defaults to `~/.local/share/undined/auth_token`) |
+| `undine.authTokenPath` | `string` | `~/.local/share/undined/auth_token` | Path to Undine auth token |
 | `undine.pollIntervalSeconds` | `number` | `30` | Auto-refresh interval in seconds (0 to disable) |
 | `undine.tabSize` | `number` | `8` | Tab size for patch diffs and commit descriptions |
 

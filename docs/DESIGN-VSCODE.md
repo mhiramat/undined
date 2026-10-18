@@ -28,10 +28,10 @@
 +---------------------------------------------------------------------------------------+
 | Visual Studio Code (Extension Host / TypeScript)                                      |
 |                                                                                       |
-|  [ Activity Bar / Tree Views ]    [ Native Diff & Comments ]    [ @undine Copilot ]   |
+|  [ Activity Bar / Sidebar Views ] [ Native Diff & Comments ]    [ @undine Copilot ]   |
 |   - Mailbox Folders (INBOX, etc.)  - tab-size: 8 Diff Rendering  - LKML Style Check   |
 |   - Thread Hierarchy (j/k)         - Inline Review Notes         - Patch Summary      |
-|   - Patchwork Delegations          - Quote Merger Draft Engine   - Tree-Aware Review  |
+|   - Message Header (Lore, CI)      - Quote Merger Draft Engine   - Tree-Aware Review  |
 |                  |                             |                          |           |
 |                  +-----------------------------+--------------------------+           |
 |                                                |                                      |
@@ -264,12 +264,10 @@ Unlike standalone email clients that only inspect isolated patch text, the VS Co
 
 * Implement `UndineRestClient` with automatic `Authorization: Bearer` header injection and health checks.
 
-### Phase 2: Mailbox & Thread Navigation
+### Phase 2: Mailbox, Thread, & Header Navigation
 
 * Register the `Undine` icon in the VS Code Activity Bar.
-* Build `FoldersTreeProvider` and `MessagesTreeProvider` using the REST API.
-
-
+* Build `FoldersTreeProvider`, `ThreadsTreeProvider`, and `MessageHeaderViewProvider` using the REST API.
 * Register keyboard navigation commands (`j`, `k`, `/`).
 
 
