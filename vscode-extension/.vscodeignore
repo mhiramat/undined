@@ -3,6 +3,7 @@ node_modules/**
 .vscode-test/**
 src/**
 test/**
+out/test/**
 tsconfig.json
 .gitignore
 *.map
