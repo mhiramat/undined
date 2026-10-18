@@ -40,6 +40,7 @@ type GeneralConfig struct {
 	KernelGitDir           string `toml:"kernel_git_dir" json:"kernel_git_dir"`
 	LogFile                string `toml:"log_file" json:"log_file"`
 	LogLevel               string `toml:"log_level" json:"log_level"`
+	PIDFile                string `toml:"pid_file" json:"pid_file"`
 }
 
 // EffectiveEditorCmd returns EditorCmd, falling back to TerminalCmd or DefaultTerminalCmd.
@@ -377,6 +378,7 @@ func NewDefaultConfig() *Config {
 			KernelGitDir:           ExpandPath(constants.DefaultKernelGitDir),
 			LogFile:                ExpandPath(constants.DefaultLogPath),
 			LogLevel:               constants.DefaultLogLevel,
+			PIDFile:                ExpandPath(constants.DefaultPIDPath),
 		},
 		IMAP: IMAPConfig{
 			Host:                constants.DefaultIMAPHost,
@@ -505,6 +507,10 @@ func Load(explicitPath ...string) (*Config, error) {
 	cfg.General.DBPath = ExpandPath(cfg.General.DBPath)
 	cfg.General.KernelGitDir = ExpandPath(cfg.General.KernelGitDir)
 	cfg.General.LogFile = ExpandPath(cfg.General.LogFile)
+	cfg.General.PIDFile = ExpandPath(cfg.General.PIDFile)
+	if cfg.General.PIDFile == "" {
+		cfg.General.PIDFile = filepath.Join(cfg.General.DataDir, constants.PIDFileName)
+	}
 	cfg.SMTP.SignatureFile = ExpandPath(cfg.SMTP.SignatureFile)
 	if cfg.Review.PromptFile != "" {
 		cfg.Review.PromptFile = ExpandPath(cfg.Review.PromptFile)

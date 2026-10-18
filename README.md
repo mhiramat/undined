@@ -119,6 +119,7 @@ UndineD follows the **XDG Base Directory Specification**:
 * **Local Data & Maildir**: `~/.local/share/undined/`
 * **Log File**: `~/.cache/undined/undined.log`
 * **Auth Token**: `~/.local/share/undined/auth_token` (auto-generated POSIX `0600`)
+* **PID File**: `~/.local/share/undined/undined.pid` (auto-managed for daemon control)
 
 Create `~/.config/undined/config.toml` with your credentials:
 
@@ -177,30 +178,53 @@ todo_states = ["new", "under-review"]
 
 ### 5.1 Launching the Daemon & Web Workstation
 
-To run the full daemon with the Web UI and background IMAP synchronization:
+#### Background Daemon Mode (Recommended)
+To run UndineD detached from your terminal:
 ```bash
-./bin/undined
+./bin/undined --daemon
+# or shorthand:
+./bin/undined -d
 ```
-
-On startup, UndineD generates (or loads) a secure 256-bit token with POSIX `0600` permissions and displays the startup banner:
+On startup, UndineD displays the necessary connection parameters and PID details, writes the PID file (`~/.local/share/undined/undined.pid`), and detaches from the terminal:
 
 ```
 =================================================================
  Starting Project UndineD (Linux Kernel MUA Daemon & Web UI)
 =================================================================
-🚀 Web UI running at: http://127.0.0.1:8080/?token=404dfcf8f602... (Token authentication required)
-🤖 MCP Server tool:   undined --mcp-stdio
-🔑 Auth Token file:   ~/.local/share/undined/auth_token
+🚀 Web UI running at:    http://127.0.0.1:8080/?token=404dfcf8f602... (Token authentication required)
+🤖 MCP Server tool:      undined --mcp-stdio
+🔑 Auth Token file:      ~/.local/share/undined/auth_token
 🔑 Authentication Token: 404dfcf8f602b9e672f23fc8e64c20f1...
-📝 Log file:          ~/.cache/undined/undined.log
+📝 Log file:             ~/.cache/undined/undined.log
+📌 PID file:             ~/.local/share/undined/undined.pid (PID: 12345)
 =================================================================
+Daemon started in background. To terminate, run: undined --quit
 ```
 
-Open the link in your browser to access the Sylpheed-style 3-pane review interface.
+#### Stopping the Daemon
+To cleanly terminate a running UndineD instance:
+```bash
+./bin/undined --quit
+# or shorthand:
+./bin/undined -q
+```
+This reads the PID file, signals the process with `SIGTERM` for graceful shutdown, verifies process exit, and cleans up the PID file.
+
+#### Foreground Mode
+To run UndineD directly in the foreground attached to your current terminal session:
+```bash
+./bin/undined
+```
+Press `Ctrl+C` or send `SIGTERM` to stop gracefully.
+
+Open the Web UI URL in your browser to access the Sylpheed-style 3-pane review interface.
 
 #### Command-Line Flags
 | Flag | Shorthand | Description | Default |
 |---|---|---|---|
+| `--daemon` | `-d` | Run UndineD as a background daemon detached from terminal | `false` |
+| `--quit` | `-q` | Terminate running UndineD daemon instance | `false` |
+| `--pid-file <path>` | | Path to PID file (overrides config) | `~/.local/share/undined/undined.pid` |
 | `--config <path>` | `-C <path>` | Path to TOML configuration file | `~/.config/undined/config.toml` |
 | `--host <host>` | | Host interface to bind Web UI | `127.0.0.1` (or from config) |
 | `--port <port>` | `-p <port>` | Port number to bind Web UI | `8080` (or from config) |

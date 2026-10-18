@@ -22,6 +22,7 @@ const (
 	DBFileName         = "undined.db"
 	AuthTokenFileName  = "auth_token"
 	SessionCookieName  = "undine_session"
+	PIDFileName        = "undined.pid"
 
 	// Default Paths (unexpanded)
 	DefaultConfigDir     = "~/.config/undined"
@@ -33,6 +34,7 @@ const (
 	DefaultSignaturePath = "~/.signature"
 	DefaultKernelGitDir  = "~/linux"
 	DefaultAuthTokenPath = "~/.local/share/undined/auth_token"
+	DefaultPIDPath       = "~/.local/share/undined/undined.pid"
 
 	// Standard Mailbox Folders
 	FolderB4Imports = "b4-imports"

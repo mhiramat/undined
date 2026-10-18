@@ -27,6 +27,9 @@ reply_use_external_editor = false
 # Local kernel git tree for `git am` operations
 kernel_git_dir = "~/linux"
 
+# PID file for daemon management (used by --daemon and --quit)
+pid_file = "~/.local/share/undined/undined.pid"
+
 # Logging configuration (captures application and protocol logs: IMAP, SMTP)
 log_file = "~/.cache/undined/undined.log"
 log_level = "DEBUG"

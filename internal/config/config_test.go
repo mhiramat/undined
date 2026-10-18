@@ -23,17 +23,22 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Tags["$cl_1"].Color != "#CC0000" {
 		t.Fatalf("expected $cl_1 color #CC0000, got %s", cfg.Tags["$cl_1"].Color)
 	}
+	if cfg.General.PIDFile == "" {
+		t.Fatalf("expected default PIDFile to be populated")
+	}
 }
 
 func TestLoadConfigFromTOML(t *testing.T) {
 	tmpDir := t.TempDir()
 	confPath := filepath.Join(tmpDir, "config.toml")
+	customPID := filepath.Join(tmpDir, "custom.pid")
 
 	content := `
 [general]
 port = 9090
 host = "0.0.0.0"
 editor_cmd = "nvim +{line} {file}"
+pid_file = "` + customPID + `"
 
 [mcp]
 enabled = false
@@ -55,6 +60,9 @@ color = "#FF0000"
 
 	if cfg.General.Port != 9090 {
 		t.Fatalf("expected port 9090, got %d", cfg.General.Port)
+	}
+	if cfg.General.PIDFile != customPID {
+		t.Fatalf("expected pid_file %s, got %s", customPID, cfg.General.PIDFile)
 	}
 	if cfg.General.Host != "0.0.0.0" {
 		t.Fatalf("expected host 0.0.0.0, got %s", cfg.General.Host)
