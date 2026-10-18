@@ -15,9 +15,22 @@ export function registerViewCommands(
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "undine.openPatchDiff",
-      async (messageId: string, filePath?: string) => {
+      async (messageIdOrItem: any, filePath?: string) => {
         try {
-          const cleanId = messageId.replace(/^<|>$/g, "");
+          let msgId: string | undefined;
+          if (typeof messageIdOrItem === "string") {
+            msgId = messageIdOrItem;
+          } else if (messageIdOrItem?.patch?.msgid) {
+            msgId = messageIdOrItem.patch.msgid;
+          } else if (messageIdOrItem?.message?.message_id) {
+            msgId = messageIdOrItem.message.message_id;
+          } else if (messageIdOrItem?.msgid) {
+            msgId = messageIdOrItem.msgid;
+          }
+
+          if (!msgId) return;
+
+          const cleanId = msgId.replace(/^<|>$/g, "");
           const detail = await client.getMessageDetail(cleanId);
           patchProvider.setCachedDetail(cleanId, detail);
 
@@ -58,9 +71,22 @@ export function registerViewCommands(
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("undine.openCommitDescription", async (messageId: string) => {
+    vscode.commands.registerCommand("undine.openCommitDescription", async (messageIdOrItem: any) => {
       try {
-        const cleanId = messageId.replace(/^<|>$/g, "");
+        let msgId: string | undefined;
+        if (typeof messageIdOrItem === "string") {
+          msgId = messageIdOrItem;
+        } else if (messageIdOrItem?.patch?.msgid) {
+          msgId = messageIdOrItem.patch.msgid;
+        } else if (messageIdOrItem?.message?.message_id) {
+          msgId = messageIdOrItem.message.message_id;
+        } else if (messageIdOrItem?.msgid) {
+          msgId = messageIdOrItem.msgid;
+        }
+
+        if (!msgId) return;
+
+        const cleanId = msgId.replace(/^<|>$/g, "");
         const detail = await client.getMessageDetail(cleanId);
         patchProvider.setCachedDetail(cleanId, detail);
 

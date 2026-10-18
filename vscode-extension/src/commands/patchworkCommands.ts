@@ -19,6 +19,8 @@ export function registerPatchworkCommands(
           patchId = patchIdOrItem;
         } else if (patchIdOrItem?.patch?.id) {
           patchId = patchIdOrItem.patch.id;
+        } else if (patchIdOrItem?.id) {
+          patchId = patchIdOrItem.id;
         }
 
         if (!patchId) {

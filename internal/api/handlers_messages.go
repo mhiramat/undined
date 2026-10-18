@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -19,6 +20,9 @@ import (
 )
 
 func (s *Server) resolveMessage(idOrMsgID string) (*database.Message, error) {
+	if unescaped, err := url.PathUnescape(idOrMsgID); err == nil && unescaped != "" {
+		idOrMsgID = unescaped
+	}
 	cleanID := parser.CleanMsgID(idOrMsgID)
 	if cleanID == "" {
 		cleanID = idOrMsgID

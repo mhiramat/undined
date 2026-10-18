@@ -60,20 +60,27 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand("undine.selectMessage", async (messageOrId: any) => {
+      let cleanId = "";
       try {
         let msgId: string;
 
         if (typeof messageOrId === "string") {
           msgId = messageOrId;
+        } else if (messageOrId?.patch?.msgid) {
+          msgId = messageOrId.patch.msgid;
         } else if (messageOrId && messageOrId.message_id) {
           msgId = messageOrId.message_id;
+        } else if (messageOrId && messageOrId.message && messageOrId.message.message_id) {
+          msgId = messageOrId.message.message_id;
+        } else if (messageOrId?.msgid) {
+          msgId = messageOrId.msgid;
         } else if (typeof messageOrId === "number") {
           msgId = String(messageOrId);
         } else {
           return;
         }
 
-        const cleanId = msgId.replace(/^<|>$/g, "");
+        cleanId = msgId.replace(/^<|>$/g, "");
         const detail = await client.getMessageDetail(cleanId);
         activeDetail = detail;
 
@@ -86,12 +93,37 @@ export function activate(context: vscode.ExtensionContext) {
           detail.message.is_read = true;
         }
 
-        // Open Header Drawer panel
+        // Open diff editor for patch if files are present, or description
+        if (detail.message.is_patch && detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0) {
+          const firstFile = detail.parsed_diff.files[0];
+          const targetFile = firstFile.new_path || firstFile.old_path;
+          vscode.commands.executeCommand("undine.openPatchDiff", cleanId, targetFile);
+        } else if (detail.message.is_patch) {
+          vscode.commands.executeCommand("undine.openCommitDescription", cleanId);
+        }
+
+        // Open Header Drawer panel docked beside diff editor
         MessageHeaderView.createOrShow(context.extensionUri, detail, client);
 
         // Load existing review comments
         await commentController.loadCommentsForMessage(cleanId);
       } catch (err: any) {
+        if (cleanId && (err.message?.includes("404") || err.message?.includes("not found"))) {
+          const choice = await vscode.window.showWarningMessage(
+            `Patch <${cleanId}> was not found in your local mailbox. Would you like to import it from lore via b4?`,
+            "Import via b4",
+            "Open in lore.kernel.org"
+          );
+          if (choice === "Import via b4") {
+            await vscode.commands.executeCommand("undine.importB4", cleanId);
+            setTimeout(() => {
+              vscode.commands.executeCommand("undine.selectMessage", cleanId);
+            }, 1000);
+          } else if (choice === "Open in lore.kernel.org") {
+            vscode.env.openExternal(vscode.Uri.parse(`https://lore.kernel.org/r/${encodeURIComponent(cleanId)}`));
+          }
+          return;
+        }
         vscode.window.showErrorMessage(`Failed to open message: ${err.message}`);
       }
     }),

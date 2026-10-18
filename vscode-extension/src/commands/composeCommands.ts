@@ -15,8 +15,12 @@ export function registerComposeCommands(
         let msgId: string | undefined;
         if (typeof messageIdOrItem === "string") {
           msgId = messageIdOrItem;
-        } else if (messageIdOrItem && messageIdOrItem.message && messageIdOrItem.message.message_id) {
+        } else if (messageIdOrItem?.patch?.msgid) {
+          msgId = messageIdOrItem.patch.msgid;
+        } else if (messageIdOrItem?.message?.message_id) {
           msgId = messageIdOrItem.message.message_id;
+        } else if (messageIdOrItem?.msgid) {
+          msgId = messageIdOrItem.msgid;
         }
 
         if (!msgId) {
