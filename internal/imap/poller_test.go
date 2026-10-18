@@ -1,8 +1,13 @@
 package imap
 
 import (
+	"bufio"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"undined-go/internal/config"
@@ -138,5 +143,138 @@ func TestPollerInsertHeaderSummaryAndHydration(t *testing.T) {
 	}
 	if len(results) == 0 {
 		t.Errorf("FTS5 search did not find hydrated message")
+	}
+}
+
+func startMockIMAPServer(t *testing.T) (net.Listener, int, *[]string) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start mock IMAP server: %v", err)
+	}
+
+	var commands []string
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				fmt.Fprintf(c, "* OK [CAPABILITY IMAP4rev1] Mock IMAP Server Ready\r\n")
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimRight(line, "\r\n")
+					parts := strings.SplitN(line, " ", 3)
+					if len(parts) < 2 {
+						continue
+					}
+					tag := parts[0]
+					cmd := strings.ToUpper(parts[1])
+
+					mu.Lock()
+					commands = append(commands, line)
+					mu.Unlock()
+
+					switch cmd {
+					case "CAPABILITY":
+						fmt.Fprintf(c, "* CAPABILITY IMAP4rev1\r\n%s OK CAPABILITY completed\r\n", tag)
+					case "LOGIN":
+						fmt.Fprintf(c, "%s OK [CAPABILITY IMAP4rev1] LOGIN completed\r\n", tag)
+					case "SELECT":
+						fmt.Fprintf(c, "* 10 EXISTS\r\n* 0 RECENT\r\n* FLAGS (\\Seen \\Answered $cl_1 $cl_2)\r\n* OK [PERMANENTFLAGS (\\Seen \\Answered $cl_1 $cl_2 \\*)] Flags permitted.\r\n* OK [UIDVALIDITY 12345678] UIDs valid\r\n%s OK [READ-WRITE] SELECT completed\r\n", tag)
+					case "UID":
+						arg := ""
+						if len(parts) > 2 {
+							arg = parts[2]
+						}
+						fmt.Fprintf(c, "* 1 FETCH (UID 501 FLAGS (%s))\r\n%s OK UID STORE completed\r\n", arg, tag)
+					case "LOGOUT":
+						fmt.Fprintf(c, "* BYE Mock IMAP logging out\r\n%s OK LOGOUT completed\r\n", tag)
+						return
+					default:
+						fmt.Fprintf(c, "%s OK %s completed\r\n", tag, cmd)
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	return l, l.Addr().(*net.TCPAddr).Port, &commands
+}
+
+func TestUpdateIMAPMessageFlagsAndCustomTags(t *testing.T) {
+	listener, port, commands := startMockIMAPServer(t)
+	defer listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+
+	poller := NewPoller(cfg, nil, nil)
+
+	// 1. Test MarkIMAPMessageRead (true -> \Seen)
+	if err := poller.MarkIMAPMessageRead("INBOX", 501, true); err != nil {
+		t.Fatalf("MarkIMAPMessageRead(true) failed: %v", err)
+	}
+
+	// 2. Test MarkIMAPMessageRead (false -> -\Seen)
+	if err := poller.MarkIMAPMessageRead("INBOX", 501, false); err != nil {
+		t.Fatalf("MarkIMAPMessageRead(false) failed: %v", err)
+	}
+
+	// 3. Test UpdateIMAPMessageCustomTags ($cl_1 added, $cl_2 removed)
+	if err := poller.UpdateIMAPMessageCustomTags("INBOX", 501, []string{"$cl_1"}, []string{"$cl_2"}); err != nil {
+		t.Fatalf("UpdateIMAPMessageCustomTags failed: %v", err)
+	}
+
+	// 4. Test MarkIMAPMessageReplied (true -> \Answered)
+	if err := poller.MarkIMAPMessageReplied("INBOX", 501, true); err != nil {
+		t.Fatalf("MarkIMAPMessageReplied(true) failed: %v", err)
+	}
+
+	// Verify commands sent to IMAP server
+	var seenAdd, seenRemove, tagAdd, tagRemove, answeredAdd bool
+	for _, cmd := range *commands {
+		if strings.Contains(cmd, "UID STORE 501 +FLAGS.SILENT (\\Seen)") {
+			seenAdd = true
+		}
+		if strings.Contains(cmd, "UID STORE 501 -FLAGS.SILENT (\\Seen)") {
+			seenRemove = true
+		}
+		if strings.Contains(cmd, "UID STORE 501 +FLAGS.SILENT ($cl_1)") {
+			tagAdd = true
+		}
+		if strings.Contains(cmd, "UID STORE 501 -FLAGS.SILENT ($cl_2)") {
+			tagRemove = true
+		}
+		if strings.Contains(cmd, "UID STORE 501 +FLAGS.SILENT (\\Answered)") {
+			answeredAdd = true
+		}
+	}
+
+	if !seenAdd {
+		t.Errorf("expected UID STORE 501 +FLAGS.SILENT (\\Seen) command, got: %v", *commands)
+	}
+	if !seenRemove {
+		t.Errorf("expected UID STORE 501 -FLAGS.SILENT (\\Seen) command, got: %v", *commands)
+	}
+	if !tagAdd {
+		t.Errorf("expected UID STORE 501 +FLAGS.SILENT ($cl_1) command, got: %v", *commands)
+	}
+	if !tagRemove {
+		t.Errorf("expected UID STORE 501 -FLAGS.SILENT ($cl_2) command, got: %v", *commands)
+	}
+	if !answeredAdd {
+		t.Errorf("expected UID STORE 501 +FLAGS.SILENT (\\Answered) command, got: %v", *commands)
 	}
 }

@@ -1,16 +1,20 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
@@ -784,6 +788,146 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 	}
 	if !strings.Contains(fileStr, "token=REDACTED") {
 		t.Errorf("expected token=REDACTED in log file, got:\n%s", fileStr)
+	}
+}
+
+func startAPIMockIMAPServer(t *testing.T) (net.Listener, int, *[]string) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start mock IMAP server: %v", err)
+	}
+
+	var commands []string
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				fmt.Fprintf(c, "* OK [CAPABILITY IMAP4rev1] Mock IMAP Server Ready\r\n")
+				r := bufio.NewReader(c)
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimRight(line, "\r\n")
+					parts := strings.SplitN(line, " ", 3)
+					if len(parts) < 2 {
+						continue
+					}
+					tag := parts[0]
+					cmd := strings.ToUpper(parts[1])
+
+					mu.Lock()
+					commands = append(commands, line)
+					mu.Unlock()
+
+					switch cmd {
+					case "CAPABILITY":
+						fmt.Fprintf(c, "* CAPABILITY IMAP4rev1\r\n%s OK CAPABILITY completed\r\n", tag)
+					case "LOGIN":
+						fmt.Fprintf(c, "%s OK [CAPABILITY IMAP4rev1] LOGIN completed\r\n", tag)
+					case "SELECT":
+						fmt.Fprintf(c, "* 10 EXISTS\r\n* 0 RECENT\r\n* FLAGS (\\Seen \\Answered $cl_1 $cl_2 $cl_3)\r\n* OK [PERMANENTFLAGS (\\Seen \\Answered $cl_1 $cl_2 $cl_3 \\*)] Flags permitted.\r\n* OK [UIDVALIDITY 12345678] UIDs valid\r\n%s OK [READ-WRITE] SELECT completed\r\n", tag)
+					case "UID":
+						arg := ""
+						if len(parts) > 2 {
+							arg = parts[2]
+						}
+						fmt.Fprintf(c, "* 1 FETCH (UID 777 FLAGS (%s))\r\n%s OK UID STORE completed\r\n", arg, tag)
+					case "LOGOUT":
+						fmt.Fprintf(c, "* BYE Mock IMAP logging out\r\n%s OK LOGOUT completed\r\n", tag)
+						return
+					default:
+						fmt.Fprintf(c, "%s OK %s completed\r\n", tag, cmd)
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	return l, l.Addr().(*net.TCPAddr).Port, &commands
+}
+
+func TestAPIIMAPFlagAndTagSync(t *testing.T) {
+	listener, port, commands := startAPIMockIMAPServer(t)
+	defer listener.Close()
+
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	// Configure server.IMAP with mock IMAP connection
+	server.Config.IMAP.Host = "127.0.0.1"
+	server.Config.IMAP.Port = port
+	server.Config.IMAP.UseSSL = false
+	server.Config.IMAP.Username = "dev@example.com"
+	server.Config.IMAP.Password = "secret"
+	server.IMAP = imap.NewPoller(server.Config, server.Maildir, db)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	// Insert test message in folder INBOX with imap_uid 777
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	headers := []byte("Message-ID: <patch-imap-777@kernel.org>\r\n" +
+		"Date: Sat, 17 Oct 2026 12:00:00 +0000\r\n" +
+		"From: Kernel Developer <dev@example.com>\r\n" +
+		"Subject: [PATCH] test imap flag sync\r\n\r\n")
+
+	msgID, err := db.InsertHeaderSummary(folder.ID, 777, headers, false, "")
+	if err != nil {
+		t.Fatalf("failed to insert header summary: %v", err)
+	}
+
+	// 1. Mark as read
+	req, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/read", ts.URL, msgID), strings.NewReader(`{"is_read": true}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("read request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// 2. Set custom color tag $cl_3 (Green)
+	req, _ = http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/tag", ts.URL, msgID), strings.NewReader(`{"tag": "$cl_3"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("tag request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	// Wait briefly for background goroutines to finish
+	time.Sleep(100 * time.Millisecond)
+
+	var seenFound, tagFound bool
+	for _, cmd := range *commands {
+		if strings.Contains(cmd, "UID STORE 777 +FLAGS.SILENT (\\Seen)") {
+			seenFound = true
+		}
+		if strings.Contains(cmd, "UID STORE 777 +FLAGS.SILENT ($cl_3)") {
+			tagFound = true
+		}
+	}
+
+	if !seenFound {
+		t.Errorf("expected IMAP server to receive read flag (\\Seen), commands received: %v", *commands)
+	}
+	if !tagFound {
+		t.Errorf("expected IMAP server to receive custom tag ($cl_3), commands received: %v", *commands)
 	}
 }
 

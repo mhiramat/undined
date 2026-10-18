@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -303,6 +304,16 @@ func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
+		folderName := msg.FolderName
+		uid := *msg.IMAPUID
+		go func() {
+			if err := s.IMAP.MarkIMAPMessageRead(folderName, uid, isRead); err != nil {
+				log.Printf("Warning: failed to update IMAP read flag for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
+			}
+		}()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":       true,
@@ -347,6 +358,16 @@ func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request)
 		if flagErr == nil && newPath != msg.FilePath {
 			_ = s.DB.SetMessageFilePath(msg.ID, newPath)
 		}
+	}
+
+	if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
+		folderName := msg.FolderName
+		uid := *msg.IMAPUID
+		go func() {
+			if err := s.IMAP.MarkIMAPMessageReplied(folderName, uid, isReplied); err != nil {
+				log.Printf("Warning: failed to update IMAP replied flag for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
+			}
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -441,6 +462,42 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = s.DB.SetMessageFlags(msg.ID, newFlags)
+
+	if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
+		oldTokens := strings.Fields(msg.Flags)
+		newTokens := strings.Fields(newFlags)
+
+		oldMap := make(map[string]bool)
+		for _, t := range oldTokens {
+			oldMap[t] = true
+		}
+		newMap := make(map[string]bool)
+		for _, t := range newTokens {
+			newMap[t] = true
+		}
+
+		var addFlags, removeFlags []string
+		for _, t := range newTokens {
+			if !oldMap[t] {
+				addFlags = append(addFlags, t)
+			}
+		}
+		for _, t := range oldTokens {
+			if !newMap[t] {
+				removeFlags = append(removeFlags, t)
+			}
+		}
+
+		if len(addFlags) > 0 || len(removeFlags) > 0 {
+			folderName := msg.FolderName
+			uid := *msg.IMAPUID
+			go func() {
+				if err := s.IMAP.UpdateIMAPMessageCustomTags(folderName, uid, addFlags, removeFlags); err != nil {
+					log.Printf("Warning: failed to update IMAP custom tags for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
+				}
+			}()
+		}
+	}
 
 	var tagKey, tagName, tagColor any
 	if s.Config != nil {

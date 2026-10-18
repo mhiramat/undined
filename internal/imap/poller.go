@@ -558,9 +558,42 @@ func (p *Poller) FetchAndHydrateMessage(folderName string, folderID int64, imapU
 	return p.DB.GetMessageByID(messageDBID)
 }
 
+// MarkIMAPMessageRead updates the \Seen flag on the IMAP server for a message.
+func (p *Poller) MarkIMAPMessageRead(folderName string, imapUID uint32, isRead bool) error {
+	var addFlags, removeFlags []string
+	if isRead {
+		addFlags = []string{imap.SeenFlag}
+	} else {
+		removeFlags = []string{imap.SeenFlag}
+	}
+	return p.UpdateIMAPMessageFlags(folderName, imapUID, addFlags, removeFlags)
+}
+
+// MarkIMAPMessageReplied updates the \Answered flag on the IMAP server for a message.
+func (p *Poller) MarkIMAPMessageReplied(folderName string, imapUID uint32, isReplied bool) error {
+	var addFlags, removeFlags []string
+	if isReplied {
+		addFlags = []string{imap.AnsweredFlag}
+	} else {
+		removeFlags = []string{imap.AnsweredFlag}
+	}
+	return p.UpdateIMAPMessageFlags(folderName, imapUID, addFlags, removeFlags)
+}
+
+// UpdateIMAPMessageCustomTags synchronizes custom tag flag changes to the IMAP server.
+func (p *Poller) UpdateIMAPMessageCustomTags(folderName string, imapUID uint32, addTags, removeTags []string) error {
+	return p.UpdateIMAPMessageFlags(folderName, imapUID, addTags, removeTags)
+}
+
 // UpdateIMAPMessageFlags adds or removes flags on the IMAP server.
 func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFlags, removeFlags []string) error {
-	if p.Config.IMAP.Username == "" {
+	if p == nil || p.Config == nil || p.Config.IMAP.Username == "" {
+		return nil
+	}
+	if imapUID == 0 || folderName == "" {
+		return nil
+	}
+	if len(addFlags) == 0 && len(removeFlags) == 0 {
 		return nil
 	}
 
@@ -583,7 +616,9 @@ func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFl
 		for _, f := range removeFlags {
 			flagItems = append(flagItems, f)
 		}
-		_ = c.UidStore(seqSet, imap.RemoveFlags, flagItems, nil)
+		if err := c.UidStore(seqSet, imap.RemoveFlags, flagItems, nil); err != nil {
+			return fmt.Errorf("failed to remove flags %v: %w", removeFlags, err)
+		}
 	}
 
 	if len(addFlags) > 0 {
@@ -591,7 +626,9 @@ func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFl
 		for _, f := range addFlags {
 			flagItems = append(flagItems, f)
 		}
-		_ = c.UidStore(seqSet, imap.AddFlags, flagItems, nil)
+		if err := c.UidStore(seqSet, imap.AddFlags, flagItems, nil); err != nil {
+			return fmt.Errorf("failed to add flags %v: %w", addFlags, err)
+		}
 	}
 
 	return nil
