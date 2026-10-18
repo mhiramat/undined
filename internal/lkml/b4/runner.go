@@ -110,6 +110,22 @@ func SplitMbox(data []byte) [][]byte {
 	return messages
 }
 
+// IsValidGitRef verifies that a git refname or commit hash is syntactically safe
+// and does not start with a hyphen to prevent option flag injection.
+func IsValidGitRef(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "-") {
+		return false
+	}
+	for _, r := range ref {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == '.' || r == '_' || r == '-' || r == '/' || r == '+' || r == '~' || r == '^' || r == ':') {
+			return false
+		}
+	}
+	return true
+}
+
 // ImportThread downloads the mbox stream for msgID from lore via b4 and saves emails into b4-imports.
 func (b *B4Runner) ImportThread(msgIDOrURL string) ([]int64, error) {
 	cleanedID := parser.CleanMsgID(msgIDOrURL)
@@ -122,7 +138,7 @@ func (b *B4Runner) ImportThread(msgIDOrURL string) ([]int64, error) {
 		b4Cmd = constants.DefaultB4Cmd
 	}
 
-	cmd := exec.Command(b4Cmd, "mbox", "-o", "-", cleanedID)
+	cmd := exec.Command(b4Cmd, "mbox", "-o", "-", "--", cleanedID)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -215,13 +231,33 @@ func (b *B4Runner) ApplyPatch(
 
 	// 1. Create and checkout branch if specified
 	var branchLogs []string
-	if strings.TrimSpace(branchName) != "" || strings.TrimSpace(baseCommit) != "" {
+	cleanBranch := strings.TrimSpace(branchName)
+	cleanBase := strings.TrimSpace(baseCommit)
+
+	if cleanBranch != "" && !IsValidGitRef(cleanBranch) {
+		return &ApplyResult{
+			Success:       false,
+			ExitCode:      1,
+			Stderr:        fmt.Sprintf("invalid branch name %q: must be a valid git ref not starting with '-'", cleanBranch),
+			TargetGitRepo: repoPath,
+		}, nil
+	}
+	if cleanBase != "" && !IsValidGitRef(cleanBase) {
+		return &ApplyResult{
+			Success:       false,
+			ExitCode:      1,
+			Stderr:        fmt.Sprintf("invalid base commit %q: must be a valid git ref not starting with '-'", cleanBase),
+			TargetGitRepo: repoPath,
+		}, nil
+	}
+
+	if cleanBranch != "" || cleanBase != "" {
 		args := []string{"-C", repoPath, "checkout"}
-		if strings.TrimSpace(branchName) != "" {
-			args = append(args, "-b", strings.TrimSpace(branchName))
+		if cleanBranch != "" {
+			args = append(args, "-b", cleanBranch)
 		}
-		if strings.TrimSpace(baseCommit) != "" {
-			args = append(args, strings.TrimSpace(baseCommit))
+		if cleanBase != "" {
+			args = append(args, cleanBase)
 		}
 
 		coCmd := exec.Command("git", args...)
@@ -249,7 +285,7 @@ func (b *B4Runner) ApplyPatch(
 	}
 	b4Args := []string{"am", "-o", "-"}
 	b4Args = append(b4Args, extraArgs...)
-	b4Args = append(b4Args, cleanedID)
+	b4Args = append(b4Args, "--", cleanedID)
 
 	b4Exec := exec.Command(b4Cmd, b4Args...)
 	var b4Out, b4Err bytes.Buffer
@@ -380,18 +416,18 @@ func (b *B4Runner) AbortApply(targetGitRepo, branchName, baseCommit, originalBra
 	cleanBase := strings.TrimSpace(baseCommit)
 	checkoutRef := ""
 
-	if cleanBranch != "" {
-		if cleanBase != "" && strings.ToUpper(cleanBase) != "HEAD" && cleanBase != cleanBranch {
+	if cleanBranch != "" && IsValidGitRef(cleanBranch) {
+		if cleanBase != "" && strings.ToUpper(cleanBase) != "HEAD" && cleanBase != cleanBranch && IsValidGitRef(cleanBase) {
 			checkoutRef = cleanBase
-		} else if originalBranch != "" && originalBranch != cleanBranch {
+		} else if originalBranch != "" && originalBranch != cleanBranch && IsValidGitRef(originalBranch) {
 			checkoutRef = originalBranch
-		} else if headBefore != "" {
+		} else if headBefore != "" && IsValidGitRef(headBefore) {
 			checkoutRef = headBefore
 		} else {
 			checkoutRef = "HEAD~0"
 		}
 
-		if checkoutRef != "" {
+		if checkoutRef != "" && IsValidGitRef(checkoutRef) {
 			coOut, _ := exec.Command("git", "-C", repoPath, "checkout", checkoutRef).CombinedOutput()
 			if len(coOut) > 0 {
 				logs = append(logs, strings.TrimSpace(string(coOut)))
@@ -399,7 +435,7 @@ func (b *B4Runner) AbortApply(targetGitRepo, branchName, baseCommit, originalBra
 		}
 
 		// 3. Delete the review branch
-		delOut, _ := exec.Command("git", "-C", repoPath, "branch", "-D", cleanBranch).CombinedOutput()
+		delOut, _ := exec.Command("git", "-C", repoPath, "branch", "-D", "--", cleanBranch).CombinedOutput()
 		if len(delOut) > 0 {
 			logs = append(logs, strings.TrimSpace(string(delOut)))
 		}

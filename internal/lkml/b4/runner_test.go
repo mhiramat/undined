@@ -77,3 +77,37 @@ Body 2
 		t.Fatalf("expected 2 messages, got %d", len(msgs))
 	}
 }
+
+func TestIsValidGitRef(t *testing.T) {
+	validRefs := []string{
+		"main",
+		"review/patch-1",
+		"v6.10-rc1",
+		"HEAD",
+		"4ac73dd24e3123cdcdb3e938dc7bd74be66a3f77",
+		"feature+testing",
+		"HEAD~1",
+	}
+	for _, ref := range validRefs {
+		if !IsValidGitRef(ref) {
+			t.Errorf("expected %q to be valid git ref, got false", ref)
+		}
+	}
+
+	invalidRefs := []string{
+		"-b",
+		"--orphan",
+		"--config=core.editor=calc",
+		"-D",
+		"",
+		"   ",
+		"branch with space",
+		"branch;rm -rf",
+		"branch$(whoami)",
+	}
+	for _, ref := range invalidRefs {
+		if IsValidGitRef(ref) {
+			t.Errorf("expected %q to be invalid git ref, got true", ref)
+		}
+	}
+}
