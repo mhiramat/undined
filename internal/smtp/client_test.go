@@ -62,6 +62,39 @@ func TestBuildMessageStrictHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildMessageHeaderInjectionSanitization(t *testing.T) {
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.FromName = "Masami\r\nHiramatsu"
+	cfg.SMTP.FromEmail = "mhiramat@kernel.org\r\nBcc: evil@attacker.com"
+
+	client := NewClient(cfg, nil, nil)
+
+	raw := client.BuildMessage(
+		"to@example.com\r\nBcc: evil-to@attacker.com",
+		"Test Subject\r\nBcc: evil-subj@attacker.com",
+		"Test body",
+		"cc@example.com\r\nBcc: evil-cc@attacker.com",
+		"msgid123\r\nInjected: Header",
+		"<refs>\r\nInjected: Refs",
+		"",
+	)
+
+	// Verify no CRLF injection in headers
+	headersPart := raw
+	if idx := strings.Index(raw, "\r\n\r\n"); idx != -1 {
+		headersPart = raw[:idx]
+	}
+
+	for _, line := range strings.Split(headersPart, "\r\n") {
+		if strings.HasPrefix(strings.ToLower(line), "bcc:") {
+			t.Errorf("found injected Bcc header: %s", line)
+		}
+		if strings.HasPrefix(strings.ToLower(line), "injected:") {
+			t.Errorf("found injected header: %s", line)
+		}
+	}
+}
+
 func startMockSMTPServer(t *testing.T) (net.Listener, int) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

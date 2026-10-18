@@ -36,6 +36,13 @@ func NewClient(cfg *config.Config, store *maildir.MaildirStore, db *database.Dat
 	}
 }
 
+// sanitizeHeaderValue strips CR and LF characters to prevent SMTP/RFC822 header injection.
+func sanitizeHeaderValue(val string) string {
+	val = strings.ReplaceAll(val, "\r", "")
+	val = strings.ReplaceAll(val, "\n", "")
+	return strings.TrimSpace(val)
+}
+
 // BuildMessage constructs an RFC822 email enforcing LKML plaintext rules and project identity.
 func (c *Client) BuildMessage(
 	toAddr, subject, bodyText string,
@@ -51,6 +58,13 @@ func (c *Client) BuildMessage(
 			fromHdr = fromEmail
 		}
 	}
+
+	fromHdr = sanitizeHeaderValue(fromHdr)
+	toAddr = sanitizeHeaderValue(toAddr)
+	ccAddr = sanitizeHeaderValue(ccAddr)
+	subject = sanitizeHeaderValue(subject)
+	inReplyTo = sanitizeHeaderValue(inReplyTo)
+	references = sanitizeHeaderValue(references)
 
 	dateStr := time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700")
 
@@ -178,7 +192,7 @@ func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, str
 
 	// Set Recipients
 	for _, rcpt := range recipients {
-		cleanRcpt := strings.TrimSpace(rcpt)
+		cleanRcpt := sanitizeHeaderValue(rcpt)
 		if cleanRcpt != "" {
 			if err := smtpClient.Rcpt(cleanRcpt); err != nil {
 				return false, "", fmt.Errorf("SMTP RCPT TO failed for %s: %w", cleanRcpt, err)
