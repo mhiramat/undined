@@ -15,6 +15,7 @@ import {
   SaveDraftPayload,
   SendEmailPayload,
   PatchworkPatch,
+  KnownAddress,
 } from "./types";
 
 export class UndineRestClient {
@@ -303,5 +304,15 @@ export class UndineRestClient {
 
   public async getTags(): Promise<any> {
     return this.request<any>("/api/tags");
+  }
+
+  // --- Known Addresses ---
+
+  public async getKnownAddresses(query = "", limit = 20): Promise<KnownAddress[]> {
+    const params = new URLSearchParams();
+    if (query) params.append("query", query);
+    if (limit) params.append("limit", String(limit));
+    const qs = params.toString() ? `?${params.toString()}` : "";
+    return this.request<KnownAddress[]>(`/api/addresses${qs}`);
   }
 }

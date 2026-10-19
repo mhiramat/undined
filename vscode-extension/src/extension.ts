@@ -11,6 +11,7 @@ import { ThreadsTreeProvider } from "./views/threadsProvider";
 import { MessageHeaderViewProvider } from "./views/messageHeaderView";
 import { PatchContentProvider } from "./providers/patchContentProvider";
 import { UndineCommentController } from "./providers/commentController";
+import { AddressCompletionProvider } from "./providers/addressCompletionProvider";
 import { registerViewCommands } from "./commands/viewCommands";
 import { registerComposeCommands } from "./commands/composeCommands";
 import { registerB4Commands } from "./commands/b4Commands";
@@ -47,6 +48,29 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   const commentController = new UndineCommentController(context, client);
+
+  // Address Completion Provider for To: and Cc: headers in plaintext email drafts
+  const addressProvider = new AddressCompletionProvider(client);
+  context.subscriptions.push(
+    vscode.languages.registerCompletionItemProvider(
+      { scheme: "untitled", language: "plaintext" },
+      addressProvider,
+      " ",
+      ",",
+      ":",
+      "<",
+      "@"
+    ),
+    vscode.languages.registerCompletionItemProvider(
+      { scheme: "file", language: "plaintext" },
+      addressProvider,
+      " ",
+      ",",
+      ":",
+      "<",
+      "@"
+    )
+  );
 
   // Active message tracking for Copilot and commands
   let activeDetail: MessageDetail | null = null;

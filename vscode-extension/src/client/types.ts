@@ -188,3 +188,13 @@ export interface SaveDraftPayload {
   references?: string | null;
   custom_from?: string | null;
 }
+
+export interface KnownAddress {
+  id: number;
+  name: string;
+  address: string;
+  frequency: number;
+  last_seen: string;
+  created_at?: string;
+}
+
