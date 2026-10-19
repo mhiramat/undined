@@ -151,4 +151,53 @@ describe("MessageHeaderViewProvider", () => {
     assert.ok(mockWebviewView.webview.html.includes("No Message Selected"));
     assert.ok(typeof messageHandler === "function", "Message handler should be registered");
   });
+
+  it("should render AI review message header with reviewed target patch card and without empty lore link", async () => {
+    const aiReviewDetail: MessageDetail = {
+      message: {
+        id: 84,
+        message_id: "",
+        subject: "[Review] trace: optimize probe event lookup",
+        from_addr: "ai@undine.local",
+        from_name: "AI review",
+        date: "2026-10-18 11:00:00",
+        to_addr: "dev@example.com",
+        cc_addr: "",
+        is_patch: false,
+        is_read: false,
+        is_replied: false,
+        is_ai_review: true,
+        file_path: "AI-reviews/cur/84:2,S",
+        body_plain: "=== AI Review Report ===\n\nNo issues found.",
+      },
+      reviewed_message: {
+        id: 42,
+        message_id: "20261018090000.1234-1-dev@kernel.org",
+        folder_id: 1,
+        folder_name: "INBOX",
+        subject: "[PATCH v2] trace: optimize probe event lookup",
+      },
+    };
+
+    const provider = new MessageHeaderViewProvider(mockExtensionUri, client);
+    await provider.setMessage(aiReviewDetail);
+
+    const html = provider.getHtmlForWebview();
+
+    // AI Review badge & Subject
+    assert.ok(html.includes("AI REVIEW"), "AI REVIEW badge should be present");
+    assert.ok(html.includes("[Review] trace: optimize probe event lookup"), "Subject should be displayed");
+
+    // Local ID should be shown instead of lore link
+    assert.ok(html.includes("Local #84"), "Local message index should be displayed when message_id is empty");
+    assert.ok(!html.includes("https://lore.kernel.org/r/"), "Empty lore URL should not be rendered");
+
+    // Reviewed target patch card
+    assert.ok(html.includes("Reviewed Target Patch"), "Reviewed Target Patch card should be rendered");
+    assert.ok(html.includes("[PATCH v2] trace: optimize probe event lookup"), "Target patch subject should be in card");
+    assert.ok(html.includes("selectReviewedMessage(42)"), "Inspect button should call selectReviewedMessage with target patch ID");
+
+    // Review report action button
+    assert.ok(html.includes("View Review Report"), "View Review Report button should be rendered");
+  });
 });

@@ -146,9 +146,9 @@ export function activate(context: vscode.ExtensionContext) {
         // 3. Fetch message detail by numeric Mbox index
         const detail = await client.getMessageDetail(mboxIndex);
         activeDetail = detail;
-        cleanMsgId = detail.message.message_id.replace(/^<|>$/g, "");
+        cleanMsgId = (detail.message.message_id || "").replace(/^<|>$/g, "");
 
-        patchProvider.setCachedDetail(cleanMsgId, detail);
+        patchProvider.setCachedDetail(cleanMsgId || String(detail.message.id), detail);
         threadsProvider.setSelectedMessageId(detail.message.id);
 
         // Mark as read in background
@@ -163,17 +163,20 @@ export function activate(context: vscode.ExtensionContext) {
         // Auto-open diff only if explicitly configured (disabled by default)
         const autoOpenDiff = vscode.workspace.getConfiguration("undine").get<boolean>("autoOpenDiff", false);
         if (autoOpenDiff) {
+          const targetId = cleanMsgId || detail.message.id;
           if (detail.message.is_patch && detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0) {
             const firstFile = detail.parsed_diff.files[0];
             const targetFile = firstFile.new_path || firstFile.old_path;
-            vscode.commands.executeCommand("undine.openPatchDiff", cleanMsgId, targetFile);
+            vscode.commands.executeCommand("undine.openPatchDiff", targetId, targetFile);
           } else if (detail.message.is_patch) {
-            vscode.commands.executeCommand("undine.openCommitDescription", cleanMsgId);
+            vscode.commands.executeCommand("undine.openCommitDescription", targetId);
           }
         }
 
         // Load existing review comments
-        await commentController.loadCommentsForMessage(cleanMsgId);
+        if (cleanMsgId) {
+          await commentController.loadCommentsForMessage(cleanMsgId);
+        }
       } catch (err: any) {
         vscode.window.showErrorMessage(`Failed to open message: ${err.message}`);
       }

@@ -19,7 +19,16 @@ export class PatchContentProvider implements vscode.TextDocumentContentProvider 
   constructor(private readonly client: UndineRestClient) {}
 
   public setCachedDetail(messageId: string, detail: MessageDetail): void {
-    this.detailCache.set(messageId, detail);
+    if (messageId) {
+      this.detailCache.set(messageId, detail);
+    }
+    if (detail.message?.id) {
+      this.detailCache.set(String(detail.message.id), detail);
+    }
+    const clean = detail.message?.message_id ? detail.message.message_id.replace(/^<|>$/g, "") : "";
+    if (clean) {
+      this.detailCache.set(clean, detail);
+    }
   }
 
   public async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {

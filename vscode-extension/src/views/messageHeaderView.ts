@@ -59,13 +59,18 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
           case "openDescription":
             vscode.commands.executeCommand(
               "undine.openCommitDescription",
-              message.msgId || this._currentDetail?.message.message_id
+              message.msgId || this._currentDetail?.message.message_id || this._currentDetail?.message.id
             );
+            break;
+          case "selectReviewedMessage":
+            if (message.id) {
+              vscode.commands.executeCommand("undine.selectMessage", message.id);
+            }
             break;
           case "openDiff":
             vscode.commands.executeCommand(
               "undine.openPatchDiff",
-              message.msgId || this._currentDetail?.message.message_id,
+              message.msgId || this._currentDetail?.message.message_id || this._currentDetail?.message.id,
               message.file
             );
             break;
@@ -157,7 +162,13 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const isPatch = this._currentDetail?.message?.is_patch;
-    this._view.description = isPatch ? "Patch" : this._currentDetail ? "Email" : "";
+    const isAi = !!(
+      this._currentDetail?.message?.is_ai_review ||
+      this._currentDetail?.reviewed_message ||
+      this._currentDetail?.message?.from_name === "AI review" ||
+      this._currentDetail?.message?.from_addr === "ai@undine.local"
+    );
+    this._view.description = isAi ? "AI Review" : isPatch ? "Patch" : this._currentDetail ? "Email" : "";
     this._view.webview.html = this.getHtmlForWebview(this._view.webview);
   }
 
@@ -192,8 +203,14 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
     }
 
     const m = this._currentDetail.message;
-    const cleanMsgId = m.message_id.replace(/^<|>$/g, "");
-    const loreUrl = `https://lore.kernel.org/r/${encodeURIComponent(cleanMsgId)}`;
+    const cleanMsgId = (m.message_id || "").replace(/^<|>$/g, "").trim();
+    const loreUrl = cleanMsgId ? `https://lore.kernel.org/r/${encodeURIComponent(cleanMsgId)}` : "";
+    const isAiReview = !!(
+      m.is_ai_review ||
+      this._currentDetail.reviewed_message ||
+      m.from_name === "AI review" ||
+      m.from_addr === "ai@undine.local"
+    );
 
     // Missing parent banner
     let missingParentHtml = "";
@@ -202,6 +219,34 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
         <div class="warning-banner">
           <span>⚠️ Parent email missing from local store.</span>
           <button class="btn btn-warning btn-sm" onclick="sendMessage('importB4')">Hydrate via b4</button>
+        </div>
+      `;
+    }
+
+    // Reviewed target patch card (for AI reviews)
+    let reviewedPatchHtml = "";
+    if (this._currentDetail.reviewed_message) {
+      const rev = this._currentDetail.reviewed_message;
+      const revCleanId = (rev.message_id || "").replace(/^<|>$/g, "").trim();
+      reviewedPatchHtml = `
+        <div class="reviewed-card">
+          <div class="reviewed-header">
+            <span><strong>Reviewed Target Patch:</strong></span>
+          </div>
+          <div class="reviewed-body">
+            <div class="field-row">
+              <span class="field-label">Subject:</span>
+              <span class="field-value"><strong>${this.escapeHtml(rev.subject || "(No Subject)")}</strong></span>
+            </div>
+            ${revCleanId ? `
+            <div class="field-row">
+              <span class="field-label">Msg-ID:</span>
+              <span class="field-value"><code>&lt;${this.escapeHtml(revCleanId)}&gt;</code></span>
+            </div>` : ""}
+            <div style="margin-top: 6px;">
+              <button class="btn btn-secondary btn-sm" onclick="selectReviewedMessage(${rev.id})">🔍 Inspect Reviewed Patch</button>
+            </div>
+          </div>
         </div>
       `;
     }
@@ -267,7 +312,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
     ${missingParentHtml}
 
     <div class="badges-row">
-      ${m.is_patch ? '<span class="badge badge-patch">PATCH</span>' : '<span class="badge badge-email">EMAIL</span>'}
+      ${isAiReview ? '<span class="badge badge-ai">AI REVIEW</span>' : (m.is_patch ? '<span class="badge badge-patch">PATCH</span>' : '<span class="badge badge-email">EMAIL</span>')}
       ${!m.is_read ? '<span class="badge badge-unread">UNREAD</span>' : ""}
       ${m.is_replied ? '<span class="badge badge-replied">REPLIED</span>' : ""}
       ${m.tag ? `<span class="badge badge-tag">${this.escapeHtml(m.tag)}</span>` : ""}
@@ -300,6 +345,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
         <span class="field-value">${this.escapeHtml(m.date)}</span>
       </div>
 
+      ${cleanMsgId ? `
       <div class="field-row">
         <span class="field-label">Msg-ID:</span>
         <span class="field-value">
@@ -308,15 +354,26 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
           <button class="btn-icon" onclick="copyText('&lt;${this.escapeHtml(cleanMsgId)}&gt;')" title="Copy Message-ID">📋</button>
         </span>
       </div>
+      ` : `
+      <div class="field-row">
+        <span class="field-label">ID:</span>
+        <span class="field-value">
+          <code>Local #${m.id}</code>
+        </span>
+      </div>
+      `}
     </div>
 
+    ${reviewedPatchHtml}
     ${patchworkHtml}
     ${filesHtml}
 
     <div class="actions-container">
       <div class="actions-row">
         ${m.is_patch && this._currentDetail.parsed_diff?.files?.length ? '<button class="btn btn-primary" onclick="sendMessage(\'openDiff\')">🔍 View Diff</button>' : ""}
-        <button class="btn btn-primary" onclick="sendMessage('openDescription')">📝 Description</button>
+        <button class="btn btn-primary" onclick="sendMessage('openDescription')">
+          ${m.is_patch ? "📝 Description" : (isAiReview ? "📄 View Review Report" : "📄 View Body")}
+        </button>
       </div>
       <div class="actions-row">
         ${m.is_patch ? '<button class="btn btn-primary" onclick="sendMessage(\'applyPatch\')">📥 Apply (b4 am)</button>' : ""}
@@ -329,6 +386,9 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     function sendMessage(command) {
       vscode.postMessage({ command });
+    }
+    function selectReviewedMessage(id) {
+      vscode.postMessage({ command: 'selectReviewedMessage', id });
     }
     function openFileDiff(file) {
       vscode.postMessage({ command: 'openDiff', file });
@@ -454,6 +514,30 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       .badge-tag {
         background-color: #7c3aed;
         color: #fff;
+      }
+      .badge-ai {
+        background-color: #8957e5;
+        color: #fff;
+      }
+      .reviewed-card {
+        padding: 8px 10px;
+        border-radius: 4px;
+        background-color: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.04));
+        border: 1px solid var(--vscode-widget-border, rgba(128, 128, 128, 0.2));
+        font-size: 0.85em;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .reviewed-header {
+        font-weight: 600;
+        color: var(--vscode-editorInfo-foreground, #3794ff);
+        margin-bottom: 2px;
+      }
+      .reviewed-body {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
       }
       .meta-table {
         display: flex;

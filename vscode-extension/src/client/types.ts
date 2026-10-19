@@ -32,6 +32,7 @@ export interface MessageSummary {
   in_reply_to?: string;
   references?: string;
   has_notes?: boolean;
+  is_ai_review?: boolean;
 }
 
 export interface DiffCell {
@@ -101,7 +102,13 @@ export interface MessageDetail {
   };
   comments?: PatchComment[];
   parsed_diff?: ParsedEmailDiff;
-  reviewed_message?: MessageSummary;
+  reviewed_message?: {
+    id: number;
+    message_id: string;
+    folder_id?: number;
+    folder_name?: string;
+    subject: string;
+  };
   parent_info?: {
     found: boolean;
     folder_name?: string;

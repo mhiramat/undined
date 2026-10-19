@@ -95,4 +95,57 @@ describe("ThreadsTreeProvider", () => {
     const prev2 = provider.getPrevMessage();
     assert.strictEqual(prev2?.id, 1);
   });
+
+  it("should handle messages with empty message_id (e.g. AI-reviews) without collisions or duplicate tree items", () => {
+    const tm = new TokenManager();
+    const client = new UndineRestClient("http://127.0.0.1:8080", tm);
+    const provider = new ThreadsTreeProvider(client);
+
+    const aiReviews: MessageSummary[] = [
+      {
+        id: 84,
+        message_id: "",
+        subject: "[Review] trace: optimize probe event lookup",
+        from_addr: "ai@undine.local",
+        from_name: "AI review",
+        date: "2026-10-18 11:00:00",
+        is_patch: false,
+        is_read: false,
+        is_replied: false,
+        is_ai_review: true,
+      },
+      {
+        id: 85,
+        message_id: "",
+        subject: "[Review] mm/damon: fix race condition",
+        from_addr: "ai@undine.local",
+        from_name: "AI review",
+        date: "2026-10-18 11:30:00",
+        is_patch: false,
+        is_read: true,
+        is_replied: false,
+        is_ai_review: true,
+      },
+    ];
+
+    const roots = provider.buildThreadHierarchy(aiReviews);
+
+    // Both messages should be distinct root items without collapsing or duplicating
+    assert.strictEqual(roots.length, 2, "Should have 2 distinct root items");
+    assert.strictEqual(roots[0].id, "msg-84");
+    assert.strictEqual(roots[1].id, "msg-85");
+    assert.strictEqual(roots[0].message.id, 84);
+    assert.strictEqual(roots[1].message.id, 85);
+    assert.strictEqual(roots[0].contextValue, "ai-review");
+    assert.strictEqual(roots[0].command?.arguments?.[0]?.id, 84);
+    assert.strictEqual(roots[1].command?.arguments?.[0]?.id, 85);
+
+    // Flat list lookup by numeric ID
+    (provider as any).flatList = aiReviews;
+    const found84 = provider.findMessageByMsgId("84");
+    assert.strictEqual(found84?.id, 84);
+
+    const foundMsg85 = provider.findMessageByMsgId("msg-85");
+    assert.strictEqual(foundMsg85?.id, 85);
+  });
 });

@@ -21,7 +21,8 @@ export class MessageTreeItem extends vscode.TreeItem {
     );
 
     this.id = `msg-${message.id}`;
-    this.contextValue = message.is_patch ? "patch" : "message";
+    const isAi = message.is_ai_review || message.from_name === "AI review" || message.from_addr === "ai@undine.local";
+    this.contextValue = isAi ? "ai-review" : (message.is_patch ? "patch" : "message");
 
     // Format sender and date in description
     const sender = message.from_name || message.from_addr || "Unknown";
@@ -32,15 +33,19 @@ export class MessageTreeItem extends vscode.TreeItem {
     }
     this.description = desc;
 
-    this.tooltip = new vscode.MarkdownString(
+    let tooltipText =
       `**${message.subject}**\n\n` +
       `*From*: ${message.from_name ? `${message.from_name} <${message.from_addr}>` : message.from_addr}\n\n` +
-      `*Date*: ${message.date}\n\n` +
-      `*ID*: \`${message.message_id}\``
-    );
+      `*Date*: ${message.date}`;
+    if (message.message_id) {
+      tooltipText += `\n\n*ID*: \`${message.message_id}\``;
+    }
+    this.tooltip = new vscode.MarkdownString(tooltipText);
 
     // Icons
-    if (message.is_patch) {
+    if (isAi) {
+      this.iconPath = new vscode.ThemeIcon("hubot");
+    } else if (message.is_patch) {
       this.iconPath = new vscode.ThemeIcon("diff");
     } else if (!message.is_read) {
       this.iconPath = new vscode.ThemeIcon("mail-unread");
@@ -89,7 +94,15 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
 
   public findMessageByMsgId(msgId: string): MessageSummary | undefined {
     const clean = this.cleanMsgId(msgId);
-    return this.flatList.find((m) => this.cleanMsgId(m.message_id) === clean);
+    if (clean) {
+      const found = this.flatList.find((m) => this.cleanMsgId(m.message_id) === clean);
+      if (found) return found;
+    }
+    const num = parseInt(msgId.replace(/^msg-/, ""), 10);
+    if (!isNaN(num)) {
+      return this.flatList.find((m) => m.id === num);
+    }
+    return undefined;
   }
 
   public getTreeItem(element: MessageTreeItem): vscode.TreeItem {
@@ -126,21 +139,21 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
   public buildThreadHierarchy(messages: MessageSummary[]): MessageTreeItem[] {
     const itemMap = new Map<string, MessageTreeItem>();
     const roots: MessageTreeItem[] = [];
+    const items: MessageTreeItem[] = [];
 
-    // Pre-create items
+    // Pre-create distinct items
     for (const msg of messages) {
-      const cleanId = this.cleanMsgId(msg.message_id);
       const item = new MessageTreeItem(msg, false);
-      itemMap.set(cleanId, item);
+      items.push(item);
+      const cleanId = this.cleanMsgId(msg.message_id);
+      if (cleanId) {
+        itemMap.set(cleanId, item);
+      }
     }
 
     // Link parents and children
-    for (const msg of messages) {
-      const cleanId = this.cleanMsgId(msg.message_id);
-      const item = itemMap.get(cleanId);
-      if (!item) continue;
-
-      const parentId = this.findParentId(msg);
+    for (const item of items) {
+      const parentId = this.findParentId(item.message);
       if (parentId && itemMap.has(parentId)) {
         const parent = itemMap.get(parentId)!;
         parent.children.push(item);
