@@ -857,3 +857,48 @@ Retrieves tag mappings and keyboard shortcuts.
     "$cl_2": {"tag": "Bug", "color": "#fab387", "shortcut": "2"}
   }
   ```
+
+---
+
+## 12. Known Addresses & Autocomplete Endpoints
+
+### `GET /api/addresses`
+Queries the Known Addresses database to retrieve email addresses and display names collected from past emails' `To` and `Cc` headers. Results are ordered with prefix matches first, followed by historical frequency and last-seen timestamps.
+
+- **Query Parameters**:
+  - `query` / `q` (string, optional): Search query to filter by email address or display name.
+  - `limit` (integer, optional, default `20`, max `100`): Maximum number of matching records to return.
+- **Response `200 OK`**:
+  ```json
+  [
+    {
+      "id": 1,
+      "name": "Kernel Developer",
+      "address": "dev@example.com",
+      "frequency": 12,
+      "last_seen": "2026-10-18 10:00:00",
+      "created_at": "2026-10-01 08:00:00"
+    },
+    {
+      "id": 2,
+      "name": "Steven Rostedt",
+      "address": "rostedt@goodmis.org",
+      "frequency": 8,
+      "last_seen": "2026-10-17 14:30:00",
+      "created_at": "2026-10-02 09:15:00"
+    }
+  ]
+  ```
+
+### `POST /api/addresses/collect`
+Triggers a re-scan of all indexed emails in the `messages` table, extracting and harvesting addresses from the `to_addr` and `cc_addr` fields into the `known_addresses` database.
+
+- **Response `200 OK`**:
+  ```json
+  {
+    "success": true,
+    "processed": 142,
+    "total": 58
+  }
+  ```
+

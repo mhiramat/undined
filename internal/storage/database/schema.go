@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS patch_comments (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS known_addresses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL DEFAULT '',
+    address TEXT UNIQUE NOT NULL COLLATE NOCASE,
+    frequency INTEGER NOT NULL DEFAULT 1,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_in_reply_to ON messages(in_reply_to);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id);
 CREATE INDEX IF NOT EXISTS idx_messages_epoch ON messages(epoch_timestamp DESC);
@@ -70,6 +79,10 @@ CREATE INDEX IF NOT EXISTS idx_patch_comments_msgid ON patch_comments(message_id
 CREATE INDEX IF NOT EXISTS idx_patch_comments_msg_db_id ON patch_comments(message_db_id);
 CREATE INDEX IF NOT EXISTS idx_patch_comments_state ON patch_comments(state);
 CREATE INDEX IF NOT EXISTS idx_patch_comments_file_line ON patch_comments(message_id, file_path, line_no);
+
+CREATE INDEX IF NOT EXISTS idx_known_addresses_address ON known_addresses(address);
+CREATE INDEX IF NOT EXISTS idx_known_addresses_name ON known_addresses(name);
+CREATE INDEX IF NOT EXISTS idx_known_addresses_freq ON known_addresses(frequency DESC, last_seen DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     message_id UNINDEXED,

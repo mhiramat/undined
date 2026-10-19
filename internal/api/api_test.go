@@ -949,4 +949,92 @@ func TestAPIIMAPFlagAndTagSync(t *testing.T) {
 	}
 }
 
+func TestKnownAddressesAPI(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	// Seed known addresses
+	_ = db.RecordKnownAddress("Kernel Developer", "dev@example.com")
+	_ = db.RecordKnownAddress("Reviewer One", "reviewer1@kernel.org")
+	_ = db.RecordKnownAddress("Reviewer One", "reviewer1@kernel.org") // freq 2
+	_ = db.RecordKnownAddress("", "linux-trace-kernel@vger.kernel.org")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1. Query addresses with filter
+	req, _ := http.NewRequest("GET", ts.URL+"/api/addresses?query=reviewer", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/addresses failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var results []struct {
+		ID        int64  `json:"id"`
+		Name      string `json:"name"`
+		Address   string `json:"address"`
+		Frequency int    `json:"frequency"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		t.Fatalf("failed to decode addresses: %v", err)
+	}
+
+	if len(results) != 1 || results[0].Address != "reviewer1@kernel.org" {
+		t.Errorf("expected reviewer1@kernel.org, got %+v", results)
+	}
+	if results[0].Frequency != 2 {
+		t.Errorf("expected frequency=2, got %d", results[0].Frequency)
+	}
+
+	// 2. Query all addresses (no query param)
+	reqAll, _ := http.NewRequest("GET", ts.URL+"/api/addresses?limit=10", nil)
+	reqAll.Header.Set("Authorization", "Bearer "+token)
+	respAll, err := client.Do(reqAll)
+	if err != nil {
+		t.Fatalf("GET /api/addresses (all) failed: %v", err)
+	}
+	defer respAll.Body.Close()
+
+	var allResults []struct {
+		Address   string `json:"address"`
+		Frequency int    `json:"frequency"`
+	}
+	_ = json.NewDecoder(respAll.Body).Decode(&allResults)
+	if len(allResults) != 3 {
+		t.Errorf("expected 3 addresses, got %d", len(allResults))
+	}
+	if allResults[0].Address != "reviewer1@kernel.org" {
+		t.Errorf("expected highest frequency first, got %s", allResults[0].Address)
+	}
+
+	// 3. POST /api/addresses/collect
+	reqCollect, _ := http.NewRequest("POST", ts.URL+"/api/addresses/collect", nil)
+	reqCollect.Header.Set("Authorization", "Bearer "+token)
+	respCollect, err := client.Do(reqCollect)
+	if err != nil {
+		t.Fatalf("POST /api/addresses/collect failed: %v", err)
+	}
+	defer respCollect.Body.Close()
+
+	if respCollect.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for collect, got %d", respCollect.StatusCode)
+	}
+
+	var collectRes map[string]any
+	_ = json.NewDecoder(respCollect.Body).Decode(&collectRes)
+	if collectRes["success"] != true {
+		t.Errorf("expected success=true, got %+v", collectRes)
+	}
+}
+
+
 

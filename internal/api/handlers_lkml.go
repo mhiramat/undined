@@ -334,6 +334,10 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.DB != nil && (toAddr != "" || ccAddr != "") {
+		_ = s.DB.RecordKnownAddressesFromHeaders(toAddr, ccAddr)
+	}
+
 	// If this message was replying to an existing email, mark the original email as replied
 	origRef := body.OrigMsgID
 	if origRef == "" {

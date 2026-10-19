@@ -155,6 +155,10 @@ func (s *Server) setupRoutes() {
 		api.Post("/composer/save-draft", s.handleSaveDraft)
 		api.Post("/smtp/send", s.handleSMTPSend)
 
+		// Known Addresses
+		api.Get("/addresses", s.handleGetAddresses)
+		api.Post("/addresses/collect", s.handleCollectAddresses)
+
 		// Patchwork
 		api.Get("/patchwork/info", s.handlePatchworkInfo)
 		api.Get("/patchwork/my-patches", s.handlePatchworkMyPatches)

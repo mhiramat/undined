@@ -85,3 +85,33 @@ func TestBuildReplyRecipients(t *testing.T) {
 		t.Errorf("Cc should include reviewer: %s", cc)
 	}
 }
+
+func TestExtractAddresses(t *testing.T) {
+	to := `"Kernel Developer" <dev@example.com>, linux-trace-kernel@vger.kernel.org`
+	cc := `Reviewer <reviewer@kernel.org>, dev@example.com; <extra@kernel.org>`
+
+	addrs := ExtractAddresses(to, cc)
+
+	if len(addrs) != 4 {
+		t.Fatalf("expected 4 unique addresses, got %d: %+v", len(addrs), addrs)
+	}
+
+	expected := map[string]string{
+		"dev@example.com":                  "Kernel Developer",
+		"linux-trace-kernel@vger.kernel.org": "",
+		"reviewer@kernel.org":              "Reviewer",
+		"extra@kernel.org":                 "",
+	}
+
+	for _, a := range addrs {
+		expName, ok := expected[a.Address]
+		if !ok {
+			t.Errorf("unexpected address: %s", a.Address)
+			continue
+		}
+		if a.Name != expName {
+			t.Errorf("expected name %q for %s, got %q", expName, a.Address, a.Name)
+		}
+	}
+}
+

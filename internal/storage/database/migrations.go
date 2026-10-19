@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"undined-go/internal/constants"
+	"undined-go/internal/storage/parser"
 )
 
 // initDB runs safe schema migrations, creates tables and indexes, and seeds standard folders.
@@ -87,7 +88,54 @@ func initDB(db *sql.DB) error {
 		_, _ = db.Exec("UPDATE folders SET name = ? WHERE id = ?;", constants.FolderTODO, outboxID.Int64)
 	}
 
+	// 6. Seed known_addresses from existing messages if table is empty
+	var addrCount int
+	_ = db.QueryRow("SELECT COUNT(*) FROM known_addresses;").Scan(&addrCount)
+	if addrCount == 0 {
+		seedKnownAddresses(db)
+	}
+
 	return nil
+}
+
+func seedKnownAddresses(db *sql.DB) {
+	rows, err := db.Query("SELECT to_addr, cc_addr FROM messages WHERE (to_addr IS NOT NULL AND to_addr != '') OR (cc_addr IS NOT NULL AND cc_addr != '');")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+	INSERT INTO known_addresses (name, address, frequency, last_seen)
+	VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+	ON CONFLICT(address) DO UPDATE SET
+		frequency = known_addresses.frequency + 1,
+		last_seen = CURRENT_TIMESTAMP,
+		name = CASE WHEN excluded.name != '' THEN excluded.name ELSE known_addresses.name END;
+	`)
+	if err != nil {
+		return
+	}
+	defer stmt.Close()
+
+	for rows.Next() {
+		var toAddr, ccAddr sql.NullString
+		if err := rows.Scan(&toAddr, &ccAddr); err != nil {
+			continue
+		}
+		addrs := parser.ExtractAddresses(toAddr.String, ccAddr.String)
+		for _, a := range addrs {
+			_, _ = stmt.Exec(a.Name, a.Address)
+		}
+	}
+
+	_ = tx.Commit()
 }
 
 func getTableColumns(db *sql.DB, tableName string) (map[string]struct{}, error) {

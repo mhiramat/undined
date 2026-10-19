@@ -138,6 +138,10 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 		return 0, fmt.Errorf("failed to insert/update message in db: %w", err)
 	}
 
+	if parsed.ToAddr != "" || parsed.CcAddr != "" {
+		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
+	}
+
 	id, err := res.LastInsertId()
 	if err != nil || id == 0 {
 		// If ON CONFLICT updated an existing row, fetch its ID
@@ -515,6 +519,10 @@ func (d *Database) InsertHeaderSummary(
 	)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert header summary: %w", err)
+	}
+
+	if parsed.ToAddr != "" || parsed.CcAddr != "" {
+		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
 	}
 
 	id, err := res.LastInsertId()

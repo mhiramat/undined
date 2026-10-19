@@ -247,3 +247,71 @@ func BuildReplyRecipients(origFrom, origTo, origCc, myEmail string) (toAddr, ccA
 
 	return toAddr, strings.Join(ccList, ", ")
 }
+
+// ExtractedAddress represents a parsed email address and optional display name.
+type ExtractedAddress struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+}
+
+// ExtractAddresses parses one or more RFC 5322 header strings (such as To or Cc)
+// and extracts all valid, de-duplicated email addresses and names.
+func ExtractAddresses(headers ...string) []ExtractedAddress {
+	var results []ExtractedAddress
+	seen := make(map[string]int) // address -> index in results
+
+	for _, header := range headers {
+		if strings.TrimSpace(header) == "" {
+			continue
+		}
+
+		addrs, err := mail.ParseAddressList(header)
+		if err != nil {
+			// Fallback: split by comma or newline and try parsing individually
+			parts := strings.FieldsFunc(header, func(r rune) bool {
+				return r == ',' || r == '\n' || r == '\r' || r == ';'
+			})
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				if parsed, err := mail.ParseAddress(p); err == nil {
+					addrs = append(addrs, parsed)
+				} else {
+					cleaned := strings.Trim(p, "<>")
+					if strings.Contains(cleaned, "@") {
+						addrs = append(addrs, &mail.Address{
+							Address: cleaned,
+						})
+					}
+				}
+			}
+		}
+
+		for _, addr := range addrs {
+			cleanEmail := strings.ToLower(strings.TrimSpace(addr.Address))
+			cleanEmail = strings.Trim(cleanEmail, "<>")
+			if cleanEmail == "" || !strings.Contains(cleanEmail, "@") {
+				continue
+			}
+			name := decodeHeader(strings.TrimSpace(addr.Name))
+			name = strings.Trim(name, `"'`)
+
+			if idx, exists := seen[cleanEmail]; exists {
+				if name != "" && results[idx].Name == "" {
+					results[idx].Name = name
+				}
+			} else {
+				seen[cleanEmail] = len(results)
+				results = append(results, ExtractedAddress{
+					Name:    name,
+					Address: cleanEmail,
+				})
+			}
+		}
+	}
+
+	return results
+}
+
