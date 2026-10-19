@@ -463,4 +463,24 @@ export async function cancelAiReview(idOrMsgId = null) {
   return res.json();
 }
 
+export async function fetchKnownAddresses(query = "", limit = 20) {
+  const params = new URLSearchParams();
+  if (query) params.append("query", query);
+  if (limit) params.append("limit", limit);
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${BASE_URL}/api/addresses${qs}`);
+  if (!res.ok) throw new Error("Failed to fetch addresses");
+  return res.json();
+}
+
+export async function collectKnownAddresses() {
+  const res = await fetch(`${BASE_URL}/api/addresses/collect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error("Failed to collect addresses");
+  return res.json();
+}
+
+
 

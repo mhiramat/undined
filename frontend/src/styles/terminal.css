@@ -1621,6 +1621,72 @@ body.undine-app {
   border-color: var(--accent-blue);
 }
 
+.composer-input-wrapper {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
+.composer-input-wrapper .composer-input {
+  width: 100%;
+}
+
+.composer-autocomplete-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  background-color: var(--bg-surface, #1e1e2e);
+  border: 1px solid var(--border-color, #45475a);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  margin-top: 2px;
+}
+
+.composer-autocomplete-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-primary, #cdd6f4);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.composer-autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.composer-autocomplete-item:hover,
+.composer-autocomplete-item.active {
+  background-color: rgba(137, 180, 250, 0.2);
+  color: var(--accent-blue, #89b4fa);
+}
+
+.comp-ac-name {
+  font-weight: 600;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.comp-ac-addr {
+  color: #a6adc8;
+  font-size: 11px;
+}
+
+.comp-ac-freq {
+  margin-left: auto;
+  font-size: 10px;
+  color: #6c7086;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .composer-toolbar {
   display: flex;
   align-items: center;

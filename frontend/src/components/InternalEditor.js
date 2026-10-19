@@ -4,7 +4,7 @@
  * and direct SMTP dispatch / Drafts saving.
  */
 
-import { fetchConfig, fetchFolders, fetchMessages, openEditor, previewQuote, saveDraft, sendEmail } from "../api.js";
+import { fetchConfig, fetchFolders, fetchKnownAddresses, fetchMessages, openEditor, previewQuote, saveDraft, sendEmail } from "../api.js";
 import { store } from "../store.js";
 
 let activeModal = null;
@@ -49,11 +49,17 @@ export function openInternalEditor({
       <div class="composer-meta-form">
         <div class="composer-field-row">
           <label class="composer-field-label">To:</label>
-          <input type="text" class="composer-input" id="comp-to" value="${escapeAttr(to)}" placeholder="developer@kernel.org" />
+          <div class="composer-input-wrapper">
+            <input type="text" class="composer-input" id="comp-to" value="${escapeAttr(to)}" placeholder="developer@kernel.org" autocomplete="off" />
+            <div class="composer-autocomplete-dropdown" id="comp-to-autocomplete" style="display: none;"></div>
+          </div>
         </div>
         <div class="composer-field-row">
           <label class="composer-field-label">Cc:</label>
-          <input type="text" class="composer-input" id="comp-cc" value="${escapeAttr(cc)}" placeholder="linux-kernel@vger.kernel.org" />
+          <div class="composer-input-wrapper">
+            <input type="text" class="composer-input" id="comp-cc" value="${escapeAttr(cc)}" placeholder="linux-kernel@vger.kernel.org" autocomplete="off" />
+            <div class="composer-autocomplete-dropdown" id="comp-cc-autocomplete" style="display: none;"></div>
+          </div>
         </div>
         <div class="composer-field-row">
           <label class="composer-field-label">Subject:</label>
@@ -122,6 +128,15 @@ export function openInternalEditor({
   const insertAckedBtn = modalEl.querySelector("#btn-insert-acked");
   const insertReviewedBtn = modalEl.querySelector("#btn-insert-reviewed");
   const eraseAfterCursorBtn = modalEl.querySelector("#btn-erase-after-cursor");
+
+  const toAutocomplete = modalEl.querySelector("#comp-to-autocomplete");
+  const ccAutocomplete = modalEl.querySelector("#comp-cc-autocomplete");
+  if (toInput && toAutocomplete) {
+    setupAddressAutocomplete(toInput, toAutocomplete);
+  }
+  if (ccInput && ccAutocomplete) {
+    setupAddressAutocomplete(ccInput, ccAutocomplete);
+  }
 
   // Focus textarea
   setTimeout(() => {
@@ -767,3 +782,148 @@ function showToast(message, type = "info") {
   container.appendChild(toast);
   setTimeout(() => toast.remove(), 4000);
 }
+
+function setupAddressAutocomplete(inputEl, dropdownEl) {
+  let activeIndex = -1;
+  let items = [];
+  let debounceTimer = null;
+
+  function getCurrentToken() {
+    const val = inputEl.value;
+    const cursorPos = inputEl.selectionStart ?? val.length;
+    // Find segment around cursor separated by comma
+    const beforeCursor = val.substring(0, cursorPos);
+    const lastComma = beforeCursor.lastIndexOf(",");
+    const start = lastComma === -1 ? 0 : lastComma + 1;
+    const afterCursor = val.substring(cursorPos);
+    const nextComma = afterCursor.indexOf(",");
+    const end = nextComma === -1 ? val.length : cursorPos + nextComma;
+
+    const token = val.substring(start, end).trim();
+    return { token, start, end };
+  }
+
+  function hideDropdown() {
+    dropdownEl.style.display = "none";
+    dropdownEl.innerHTML = "";
+    items = [];
+    activeIndex = -1;
+  }
+
+  function renderDropdown(addresses) {
+    if (!addresses || addresses.length === 0) {
+      hideDropdown();
+      return;
+    }
+    items = addresses;
+    activeIndex = 0;
+    dropdownEl.innerHTML = addresses
+      .map(
+        (a, idx) => `
+        <div class="composer-autocomplete-item ${idx === 0 ? "active" : ""}" data-idx="${idx}">
+          <span class="comp-ac-name">${escapeHtml(a.name || a.address)}</span>
+          ${a.name ? `<span class="comp-ac-addr">&lt;${escapeHtml(a.address)}&gt;</span>` : ""}
+          <span class="comp-ac-freq" title="Used in ${a.frequency} email(s)">${a.frequency}x</span>
+        </div>
+      `
+      )
+      .join("");
+    dropdownEl.style.display = "block";
+
+    dropdownEl.querySelectorAll(".composer-autocomplete-item").forEach((el) => {
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // prevent input blur
+        const idx = parseInt(el.getAttribute("data-idx"), 10);
+        selectItem(items[idx]);
+      });
+    });
+  }
+
+  function selectItem(item) {
+    if (!item) return;
+    const formatted = item.name ? `"${item.name}" <${item.address}>` : item.address;
+    const { start, end } = getCurrentToken();
+    const val = inputEl.value;
+
+    const before = val.substring(0, start).trim();
+    const after = val.substring(end).trim();
+
+    let newVal = "";
+    if (before.length > 0) {
+      newVal = before.endsWith(",") ? `${before} ${formatted}` : `${before}, ${formatted}`;
+    } else {
+      newVal = formatted;
+    }
+
+    if (after.length > 0) {
+      newVal = after.startsWith(",") ? `${newVal}${after}` : `${newVal}, ${after}`;
+    }
+
+    inputEl.value = newVal;
+    const newPos = (before.length > 0 ? (before.endsWith(",") ? before.length + 1 : before.length + 2) : 0) + formatted.length;
+    inputEl.setSelectionRange(newPos, newPos);
+    hideDropdown();
+    inputEl.focus();
+  }
+
+  inputEl.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const { token } = getCurrentToken();
+    const cleanToken = token.replace(/^[<"']+|[>"']+$/g, "").trim();
+    if (cleanToken.length === 0) {
+      hideDropdown();
+      return;
+    }
+
+    debounceTimer = setTimeout(async () => {
+      try {
+        const results = await fetchKnownAddresses(cleanToken, 10);
+        renderDropdown(results);
+      } catch {
+        hideDropdown();
+      }
+    }, 150);
+  });
+
+  inputEl.addEventListener("keydown", (e) => {
+    if (dropdownEl.style.display === "none") return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (items.length > 0) {
+        activeIndex = (activeIndex + 1) % items.length;
+        updateActiveItem();
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (items.length > 0) {
+        activeIndex = (activeIndex - 1 + items.length) % items.length;
+        updateActiveItem();
+      }
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      if (activeIndex >= 0 && activeIndex < items.length) {
+        e.preventDefault();
+        selectItem(items[activeIndex]);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      hideDropdown();
+    }
+  });
+
+  function updateActiveItem() {
+    dropdownEl.querySelectorAll(".composer-autocomplete-item").forEach((el, idx) => {
+      if (idx === activeIndex) {
+        el.classList.add("active");
+        el.scrollIntoView({ block: "nearest" });
+      } else {
+        el.classList.remove("active");
+      }
+    });
+  }
+
+  inputEl.addEventListener("blur", () => {
+    setTimeout(hideDropdown, 200);
+  });
+}
+
