@@ -96,6 +96,7 @@ type SMTPConfig struct {
 	Port             int    `toml:"port" json:"port"`
 	UseSSL           bool   `toml:"use_ssl" json:"use_ssl"`
 	UseSTARTTLS      bool   `toml:"use_starttls" json:"use_starttls"`
+	UseSMTPUTF8      bool   `toml:"use_smtputf8" json:"use_smtputf8"`
 	VerifyCert       bool   `toml:"verify_cert" json:"verify_cert"`
 	CACertPath       string `toml:"ca_cert_path" json:"ca_cert_path"`
 	Username         string `toml:"username" json:"username"`
@@ -394,6 +395,7 @@ func NewDefaultConfig() *Config {
 			Port:             constants.DefaultSMTPPort,
 			UseSSL:           false,
 			UseSTARTTLS:      true,
+			UseSMTPUTF8:      false,
 			VerifyCert:       true,
 			Username:         "dev@example.com",
 			FromName:         constants.DefaultFromName,

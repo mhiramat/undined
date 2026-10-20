@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"undined-go/internal/config"
@@ -207,5 +208,203 @@ func TestSendRawMessageWithMockSMTP(t *testing.T) {
 
 	if sentMsgs[0].Subject != "Test Subject" {
 		t.Errorf("Expected Subject 'Test Subject', got %s", sentMsgs[0].Subject)
+	}
+}
+
+func startRecordingMockSMTPServer(t *testing.T, advertiseSMTPUTF8 bool) (net.Listener, int, func() []string) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start mock SMTP server: %v", err)
+	}
+
+	var mu sync.Mutex
+	var commands []string
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				fmt.Fprintf(c, "220 mock.undined.local SMTP Service Ready\r\n")
+				inData := false
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimRight(line, "\r\n")
+					if inData {
+						if line == "." {
+							inData = false
+							fmt.Fprintf(c, "250 2.0.0 OK: message queued\r\n")
+						}
+						continue
+					}
+					mu.Lock()
+					commands = append(commands, line)
+					mu.Unlock()
+
+					upper := strings.ToUpper(line)
+					if strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO") {
+						if advertiseSMTPUTF8 {
+							fmt.Fprintf(c, "250-mock.undined.local\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250 HELP\r\n")
+						} else {
+							fmt.Fprintf(c, "250-mock.undined.local\r\n250-8BITMIME\r\n250 HELP\r\n")
+						}
+					} else if strings.HasPrefix(upper, "MAIL FROM:") {
+						fmt.Fprintf(c, "250 2.1.0 OK\r\n")
+					} else if strings.HasPrefix(upper, "RCPT TO:") {
+						fmt.Fprintf(c, "250 2.1.5 OK\r\n")
+					} else if upper == "DATA" {
+						inData = true
+						fmt.Fprintf(c, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
+					} else if upper == "QUIT" {
+						fmt.Fprintf(c, "221 2.0.0 Bye\r\n")
+						return
+					} else {
+						fmt.Fprintf(c, "500 Syntax error, command unrecognized\r\n")
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	addr := l.Addr().(*net.TCPAddr)
+	getCommands := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		cp := make([]string, len(commands))
+		copy(cp, commands)
+		return cp
+	}
+	return l, addr.Port, getCommands
+}
+
+func TestSMTPUTF8NotSentByDefault(t *testing.T) {
+	listener, port, getCommands := startRecordingMockSMTPServer(t, true)
+	defer listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.Host = "127.0.0.1"
+	cfg.SMTP.Port = port
+	cfg.SMTP.UseSSL = false
+	cfg.SMTP.UseSTARTTLS = false
+	cfg.SMTP.FromEmail = "dev@example.com"
+	cfg.SMTP.UseSMTPUTF8 = false
+
+	client := NewClient(cfg, nil, nil)
+	ok, msg, err := client.SendMessage(
+		"linux-trace-kernel@vger.kernel.org",
+		"Test Subject",
+		"Hello world",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Expected success, got false: %s", msg)
+	}
+
+	cmds := getCommands()
+	var mailFromCmd string
+	for _, cmd := range cmds {
+		if strings.HasPrefix(strings.ToUpper(cmd), "MAIL FROM:") {
+			mailFromCmd = cmd
+			break
+		}
+	}
+
+	if mailFromCmd == "" {
+		t.Fatalf("No MAIL FROM command recorded: %v", cmds)
+	}
+	if strings.Contains(mailFromCmd, "SMTPUTF8") {
+		t.Errorf("MAIL FROM should not include SMTPUTF8 by default, got: %s", mailFromCmd)
+	}
+	if !strings.Contains(mailFromCmd, "BODY=8BITMIME") {
+		t.Errorf("MAIL FROM should include BODY=8BITMIME, got: %s", mailFromCmd)
+	}
+}
+
+func TestSMTPUTF8SentWhenConfigured(t *testing.T) {
+	listener, port, getCommands := startRecordingMockSMTPServer(t, true)
+	defer listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.Host = "127.0.0.1"
+	cfg.SMTP.Port = port
+	cfg.SMTP.UseSSL = false
+	cfg.SMTP.UseSTARTTLS = false
+	cfg.SMTP.FromEmail = "dev@example.com"
+	cfg.SMTP.UseSMTPUTF8 = true
+
+	client := NewClient(cfg, nil, nil)
+	ok, msg, err := client.SendMessage(
+		"linux-trace-kernel@vger.kernel.org",
+		"Test Subject",
+		"Hello world",
+		"",
+		"",
+		"",
+	)
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Expected success, got false: %s", msg)
+	}
+
+	cmds := getCommands()
+	var mailFromCmd string
+	for _, cmd := range cmds {
+		if strings.HasPrefix(strings.ToUpper(cmd), "MAIL FROM:") {
+			mailFromCmd = cmd
+			break
+		}
+	}
+
+	if mailFromCmd == "" {
+		t.Fatalf("No MAIL FROM command recorded: %v", cmds)
+	}
+	if !strings.Contains(mailFromCmd, "SMTPUTF8") {
+		t.Errorf("MAIL FROM should include SMTPUTF8 when configured, got: %s", mailFromCmd)
+	}
+}
+
+func TestBuildMessageRFC2047Encoding(t *testing.T) {
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.FromName = "Reviewer Björn"
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+
+	body := "Plain text body with UTF-8: こんにちは"
+	raw := client.BuildMessage(
+		"Recipient <dev@example.org>",
+		"[PATCH] tracing: Fix 日本語 issue",
+		body,
+		"",
+		"",
+		"",
+		"",
+	)
+
+	// From display name should be RFC 2047 encoded
+	if !strings.Contains(raw, "From: =?utf-8?q?Reviewer_Bj=C3=B6rn?= <dev@example.com>") {
+		t.Errorf("From header not properly RFC 2047 encoded: %s", raw)
+	}
+	// Subject should be RFC 2047 encoded
+	if !strings.Contains(raw, "=?utf-8?q?") || !strings.Contains(raw, "Subject:") {
+		t.Errorf("Subject header not RFC 2047 encoded: %s", raw)
+	}
+	// Raw UTF-8 body must be preserved without distortion
+	if !strings.Contains(raw, body) {
+		t.Errorf("Body content was altered: %s", raw)
 	}
 }

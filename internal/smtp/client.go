@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"mime"
 	"net"
 	"net/smtp"
 	"os"
@@ -43,6 +45,33 @@ func sanitizeHeaderValue(val string) string {
 	return strings.TrimSpace(val)
 }
 
+// encodeHeaderValue encodes a header value using RFC 2047 Q-encoding if it contains non-ASCII characters.
+func encodeHeaderValue(val string) string {
+	val = sanitizeHeaderValue(val)
+	return mime.QEncoding.Encode("utf-8", val)
+}
+
+// encodeAddressList sanitizes an address list and encodes any non-ASCII display names per RFC 2047.
+func encodeAddressList(addrs string) string {
+	addrs = sanitizeHeaderValue(addrs)
+	if addrs == "" {
+		return ""
+	}
+	parts := strings.Split(addrs, ",")
+	encodedParts := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if idx := strings.Index(p, "<"); idx > 0 {
+			name := strings.TrimSpace(p[:idx])
+			addr := strings.TrimSpace(p[idx:])
+			encodedParts = append(encodedParts, fmt.Sprintf("%s %s", mime.QEncoding.Encode("utf-8", name), addr))
+		} else {
+			encodedParts = append(encodedParts, p)
+		}
+	}
+	return strings.Join(encodedParts, ", ")
+}
+
 // BuildMessage constructs an RFC822 email enforcing LKML plaintext rules and project identity.
 func (c *Client) BuildMessage(
 	toAddr, subject, bodyText string,
@@ -50,19 +79,20 @@ func (c *Client) BuildMessage(
 ) string {
 	fromHdr := customFrom
 	if fromHdr == "" {
-		fromName := c.Config.SMTP.FromName
-		fromEmail := c.Config.SMTP.FromEmail
+		fromName := sanitizeHeaderValue(c.Config.SMTP.FromName)
+		fromEmail := sanitizeHeaderValue(c.Config.SMTP.FromEmail)
 		if fromName != "" {
-			fromHdr = fmt.Sprintf("%s <%s>", fromName, fromEmail)
+			fromHdr = fmt.Sprintf("%s <%s>", mime.QEncoding.Encode("utf-8", fromName), fromEmail)
 		} else {
 			fromHdr = fromEmail
 		}
+	} else {
+		fromHdr = encodeAddressList(fromHdr)
 	}
 
-	fromHdr = sanitizeHeaderValue(fromHdr)
-	toAddr = sanitizeHeaderValue(toAddr)
-	ccAddr = sanitizeHeaderValue(ccAddr)
-	subject = sanitizeHeaderValue(subject)
+	toAddr = encodeAddressList(toAddr)
+	ccAddr = encodeAddressList(ccAddr)
+	subject = encodeHeaderValue(subject)
 	inReplyTo = sanitizeHeaderValue(inReplyTo)
 	references = sanitizeHeaderValue(references)
 
@@ -133,6 +163,40 @@ func (c *Client) getTLSConfig() *tls.Config {
 	return tlsConf
 }
 
+// mailFrom issues a MAIL FROM command. Unlike Go's standard net/smtp.Client.Mail(), which
+// unconditionally appends the SMTPUTF8 parameter whenever the server advertises it,
+// mailFrom only appends SMTPUTF8 if explicitly configured (use_smtputf8 = true).
+// This prevents outgoing mail from being bounced by intermediate relays (e.g., Postfix
+// bouncing with "SMTPUTF8 is required, but was not offered by host") when forwarding LKML
+// patches to downstream servers (such as vger.kernel.org) that do not support RFC 6531 SMTPUTF8.
+func (c *Client) mailFrom(smtpClient *smtp.Client, fromAddr string) error {
+	fromAddr = sanitizeHeaderValue(fromAddr)
+	if strings.ContainsAny(fromAddr, "\r\n") {
+		return errors.New("smtp: A line must not contain CR or LF")
+	}
+
+	cleanFrom := strings.Trim(strings.TrimSpace(fromAddr), "<>")
+
+	cmdStr := fmt.Sprintf("MAIL FROM:<%s>", cleanFrom)
+	if ok, _ := smtpClient.Extension("8BITMIME"); ok {
+		cmdStr += " BODY=8BITMIME"
+	}
+	if c.Config != nil && c.Config.SMTP.UseSMTPUTF8 {
+		if ok, _ := smtpClient.Extension("SMTPUTF8"); ok {
+			cmdStr += " SMTPUTF8"
+		}
+	}
+
+	id, err := smtpClient.Text.Cmd(cmdStr)
+	if err != nil {
+		return err
+	}
+	smtpClient.Text.StartResponse(id)
+	defer smtpClient.Text.EndResponse(id)
+	_, _, err = smtpClient.Text.ReadResponse(250)
+	return err
+}
+
 // SendRawMessage sends raw RFC822 bytes to SMTP recipients and saves a copy into Sent.
 func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, string, error) {
 	cfg := c.Config.SMTP
@@ -186,13 +250,14 @@ func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, str
 
 	// Set From
 	fromAddr := cfg.FromEmail
-	if err := smtpClient.Mail(fromAddr); err != nil {
+	if err := c.mailFrom(smtpClient, fromAddr); err != nil {
 		return false, "", fmt.Errorf("SMTP MAIL FROM failed: %w", err)
 	}
 
 	// Set Recipients
 	for _, rcpt := range recipients {
 		cleanRcpt := sanitizeHeaderValue(rcpt)
+		cleanRcpt = strings.Trim(strings.TrimSpace(cleanRcpt), "<>")
 		if cleanRcpt != "" {
 			if err := smtpClient.Rcpt(cleanRcpt); err != nil {
 				return false, "", fmt.Errorf("SMTP RCPT TO failed for %s: %w", cleanRcpt, err)

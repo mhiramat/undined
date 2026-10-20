@@ -68,6 +68,10 @@ host = "smtp.example.com"
 port = 587
 use_ssl = false
 use_starttls = true
+# LKML and vger.kernel.org do not support RFC 6531 SMTPUTF8.
+# When enabled or offered by a relay host (e.g. Postfix), downstream hops may bounce
+# with "SMTPUTF8 is required, but was not offered by host". Keep false for LKML.
+use_smtputf8 = false
 verify_cert = true
 
 username = "dev@example.com"
