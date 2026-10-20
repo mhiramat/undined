@@ -9,8 +9,6 @@
 
 **UndineD** is a headless email daemon and web workstation tailored specifically for Linux kernel maintainers and contributors. Inspired by the classic Sylpheed email client, it adheres strictly to Linux kernel mailing list (LKML) conventions: **strict plain-text UTF-8**, real tab retention (`tab-size: 8`), zero HTML, and automated inline review quote generation.
 
-The Golang implementation (`undined-go`) provides a high-performance, single-binary daemon with native goroutine concurrency, zero Python virtualenv dependencies, minimal memory footprint, and 100% protocol and data compatibility with the original Python version.
-
 ```
                     +------------------------------------+
                     |  Web Browser Interface (:8080)    |
@@ -33,7 +31,6 @@ The Golang implementation (`undined-go`) provides a high-performance, single-bin
 ```
 
 ### Core Design Principles
-* **Single Standalone Executable**: Eliminates Python virtual environments, pip dependencies, and runtime startup latency.
 * **Strict Plain-Text LKML Delivery**: Guarantees pure 8-bit UTF-8 plain-text, exact tab character retention (`\t`), no line wrapping, no `multipart/alternative`, and injects the canonical `X-Mailer: UndineD 0.1` header.
 * **Two-Stage On-Demand IMAP Sync**: Background polling fetches lightweight envelope summaries (`BODY.PEEK[HEADER.FIELDS]`) to populate folders and thread trees instantly. Full message bodies are hydrated on demand.
 * **On-Demand Hydration via b4**: Solitary kernel replies or patch series are dynamically completed from [lore.kernel.org](https://lore.kernel.org) via `b4 mbox`.
@@ -77,8 +74,8 @@ sudo pacman -S go base-devel git b4
 
 ### 3.1 Clone Repository
 ```bash
-git clone https://github.com/your-username/undined-go.git
-cd undined-go
+git clone https://github.com/mhiramat/undined.git
+cd undined
 ```
 
 ### 3.2 Build Standalone Binary

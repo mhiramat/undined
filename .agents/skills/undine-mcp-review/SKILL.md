@@ -28,7 +28,7 @@ In STDIO mode, the client spawns Undine's MCP server as a subprocess and communi
 
 - **Command**:
   ```bash
-  /path/to/undined-go/bin/undined --mcp-stdio
+  /path/to/undined/bin/undined --mcp-stdio
   ```
   *(or `undined --mcp-stdio` if installed on `PATH`)*
 - **Standard I/O Invariant**:
@@ -266,7 +266,7 @@ tail -f ~/.cache/undined/undined.log | grep --line-buffered "\[undine.mcp\]"
 ### agy CLI Configuration
 Register Undine's MCP server with `agy`:
 ```bash
-agy mcp add undine -- /path/to/undined-go/bin/undined --mcp-stdio
+agy mcp add undine -- /path/to/undined/bin/undined --mcp-stdio
 ```
 
 ### Antigravity / Claude Desktop Configuration (`mcp_config.json`)
@@ -274,7 +274,7 @@ agy mcp add undine -- /path/to/undined-go/bin/undined --mcp-stdio
 {
   "mcpServers": {
     "undine": {
-      "command": "/path/to/undined-go/bin/undined",
+      "command": "/path/to/undined/bin/undined",
       "args": ["--mcp-stdio"]
     }
   }

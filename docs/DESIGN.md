@@ -89,7 +89,7 @@ UndineD decouples the traditional MUA into:
 ### **Directory Layout**
 
 ```
-undined-go/
+undined/
 ├── cmd/
 │   └── undined/
 │       └── main.go                  # CLI entrypoint, flag parsing, daemon bootstrap

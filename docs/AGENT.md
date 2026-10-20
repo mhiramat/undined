@@ -44,7 +44,7 @@ The client spawns the compiled binary as a subprocess communicating via JSON-RPC
 
 * **Command**:
   ```bash
-  /path/to/undined-go/bin/undined --mcp-stdio
+  /path/to/undined/bin/undined --mcp-stdio
   ```
 * **Standard I/O Invariant**:
   * `stdout` is strictly reserved for newline-delimited JSON-RPC 2.0 messages.
@@ -238,5 +238,5 @@ UndineD records structured access logs for every MCP tool invocation:
 Register the compiled Go binary into `agy`:
 
 ```bash
-agy mcp add undine /path/to/undined-go/bin/undined --mcp-stdio
+agy mcp add undine /path/to/undined/bin/undined --mcp-stdio
 ```
