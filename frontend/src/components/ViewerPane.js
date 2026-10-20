@@ -1015,7 +1015,9 @@ export function renderViewerPane(container) {
         }
 
         // If patchwork data is already loaded in the bar for this message, just show it
-        if (pwBar.getAttribute("data-msgid") === m.message_id && pwBar.innerHTML.trim() !== "") {
+        const cleanMsgId = String(m.message_id || "").trim().replace(/^<|>$/g, "");
+        const barMsgId = pwBar.getAttribute("data-msgid");
+        if (barMsgId && (barMsgId === cleanMsgId || barMsgId === m.message_id) && pwBar.innerHTML.trim() !== "") {
           showPatchwork = true;
           pwBar.style.display = "flex";
           togglePwBtn.classList.add("active");
@@ -1028,7 +1030,7 @@ export function renderViewerPane(container) {
         togglePwBtn.innerHTML = `⏳ Loading patchwork...`;
         try {
           showPatchwork = true;
-          const found = await loadPatchworkStatus(m, container);
+          const found = await loadPatchworkStatus(m, container, true);
           if (found) {
             pwBar.style.display = "flex";
             togglePwBtn.classList.add("active");
@@ -1104,19 +1106,21 @@ export function renderViewerPane(container) {
     }
   }
 
-  async function loadPatchworkStatus(m, container) {
+  async function loadPatchworkStatus(m, container, refresh = false) {
     const currentMsgId = m.message_id;
+    const cleanMsgId = String(currentMsgId || "").trim().replace(/^<|>$/g, "");
     const pwBar = container.querySelector("#patchwork-bar");
     const pwBtn = container.querySelector("#btn-toggle-patchwork");
     if (!pwBar) return false;
 
     try {
-      const pw = await fetchPatchworkInfo(currentMsgId);
+      const pw = await fetchPatchworkInfo(currentMsgId, refresh);
       // Ensure the message hasn't changed while request was in-flight
-      if (!currentDetail || currentDetail.message?.message_id !== currentMsgId) {
+      if (!currentDetail || (currentDetail.message?.id !== m.id && currentDetail.message?.message_id !== currentMsgId)) {
         return false;
       }
-      if (!pw || !pw.found) {
+      const isFound = pw && (pw.found === true || (pw.found !== false && (pw.id != null || pw.state != null)));
+      if (!isFound) {
         pwBar.style.display = "none";
         pwBar.removeAttribute("data-msgid");
         pwBar.innerHTML = "";
@@ -1126,7 +1130,7 @@ export function renderViewerPane(container) {
         return false;
       }
 
-      pwBar.setAttribute("data-msgid", currentMsgId);
+      pwBar.setAttribute("data-msgid", cleanMsgId || currentMsgId);
       if (pwBtn) {
         pwBtn.classList.toggle("active", showPatchwork);
       }
@@ -1244,9 +1248,10 @@ export function renderViewerPane(container) {
 
       // Series Summary Badge
       let seriesHtml = "";
-      if (pw.series) {
-        const v = pw.series.version || 1;
-        const total = pw.total_series_patches || pw.series.total || 1;
+      const seriesObj = Array.isArray(pw.series) ? (pw.series[0] || null) : pw.series;
+      if (seriesObj) {
+        const v = seriesObj.version || 1;
+        const total = pw.total_series_patches || seriesObj.total || (Array.isArray(seriesObj.patches) ? seriesObj.patches.length : 1);
         const myCount = pw.my_delegated_series_count || 0;
         let myNote = "";
         if (myCount > 0) {
@@ -1287,7 +1292,7 @@ export function renderViewerPane(container) {
           ${seriesHtml}
         </div>
         <div class="pw-bar-right">
-          <a href="${escapeHtml(pw.web_url)}" target="_blank" rel="noopener noreferrer" class="pw-link" title="Open patch on patchwork.kernel.org">
+          <a href="${escapeHtml(pw.web_url || pw.url || '#')}" target="_blank" rel="noopener noreferrer" class="pw-link" title="Open patch on patchwork.kernel.org">
             patchwork ↗
           </a>
         </div>
@@ -1383,9 +1388,10 @@ export function renderViewerPane(container) {
       if (toggleChecksBtn && checksDrawer) {
         toggleChecksBtn.addEventListener("click", () => {
           if (checksDrawer.style.display === "none") {
-            if (pw.checks && pw.checks.length > 0) {
-              let chkHtml = `<div class="pw-checks-list"><div class="pw-drawer-title">CI Test Checks (${pw.checks.length}):</div>`;
-              for (const c of pw.checks) {
+            const checksList = Array.isArray(pw.checks) ? pw.checks : [];
+            if (checksList.length > 0) {
+              let chkHtml = `<div class="pw-checks-list"><div class="pw-drawer-title">CI Test Checks (${checksList.length}):</div>`;
+              for (const c of checksList) {
                 const cState = c.state || "pending";
                 const cIcon = cState === "success" ? "✅" : (cState === "fail" ? "❌" : (cState === "warning" ? "⚠️" : "⏳"));
                 const cName = c.context || "Check";
@@ -1420,9 +1426,10 @@ export function renderViewerPane(container) {
       if (toggleSeriesBtn && seriesDrawer) {
         toggleSeriesBtn.addEventListener("click", () => {
           if (seriesDrawer.style.display === "none") {
-            const sPatches = pw.series_patches || (pw.series?.patches) || [];
+            const seriesObj = Array.isArray(pw.series) ? (pw.series[0] || null) : pw.series;
+            const sPatches = pw.series_patches || (seriesObj?.patches) || [];
             let sHtml = `<div class="pw-series-list">`;
-            sHtml += `<div class="pw-drawer-title">Series: ${escapeHtml(pw.series?.name || m.subject)} (${sPatches.length} patches):</div>`;
+            sHtml += `<div class="pw-drawer-title">Series: ${escapeHtml(seriesObj?.name || m.subject)} (${sPatches.length} patches):</div>`;
             if (sPatches.length > 0) {
               for (const sp of sPatches) {
                 const isCurrent = sp.id === pw.id;

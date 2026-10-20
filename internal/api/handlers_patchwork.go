@@ -17,19 +17,57 @@ func (s *Server) handlePatchworkInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := r.URL.Query().Get("project")
+	refresh := r.URL.Query().Get("refresh") == "true"
 
 	if s.Patchwork == nil {
-		http.Error(w, "Patchwork client not configured", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled": false,
+			"found":   false,
+			"error":   "Patchwork client not configured",
+			"msgid":   msgID,
+		})
 		return
+	}
+
+	if refresh {
+		s.Patchwork.ClearCache(msgID)
 	}
 
 	info, err := s.Patchwork.GetPatchInfo(msgID, project)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled": true,
+			"found":   false,
+			"error":   err.Error(),
+			"msgid":   msgID,
+		})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if info == nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"enabled": true,
+			"found":   false,
+			"msgid":   msgID,
+		})
+		return
+	}
+
+	// In case info was retrieved from raw cache without enrichment
+	info["enabled"] = true
+	info["found"] = true
+	info["can_update"] = s.Config.Patchwork.GetToken() != ""
+	if info["type"] == nil {
+		info["type"] = "patch"
+	}
+	info["is_delegated_to_me"] = s.Config.Patchwork.IsMe(info["delegate"], s.Config.SMTP.FromEmail)
+	info["delegate_users"] = s.Config.Patchwork.GetDelegateUsers()
+
 	_ = json.NewEncoder(w).Encode(info)
 }
 

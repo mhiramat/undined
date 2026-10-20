@@ -179,6 +179,21 @@ func (c *Client) ChoosePreferredItem(items []map[string]any, fallbackEmail strin
 	return items[bestIdx]
 }
 
+// ClearCache removes cached patchwork info for a message ID (or clears all if empty).
+func (c *Client) ClearCache(msgID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if msgID == "" {
+		c.cache = make(map[string]map[string]any)
+		return
+	}
+	cleaned := parser.CleanMsgID(msgID)
+	if cleaned == "" {
+		cleaned = msgID
+	}
+	delete(c.cache, cleaned)
+}
+
 // GetPatchInfo queries Patchwork by message-id and optional project.
 func (c *Client) GetPatchInfo(msgID string, project string) (map[string]any, error) {
 	cleaned := parser.CleanMsgID(msgID)
@@ -235,10 +250,71 @@ func (c *Client) GetPatchInfo(msgID string, project string) (map[string]any, err
 	}
 
 	if len(items) == 0 {
+		// Try cover-letters fallback in case message is a series cover letter
+		bracketed := fmt.Sprintf("<%s>", cleaned)
+		paramsCover := url.Values{}
+		paramsCover.Set("msgid", bracketed)
+		if project != "" {
+			paramsCover.Set("project", project)
+		}
+		reqCover, _ := c.newRequest("GET", fmt.Sprintf("/cover-letters/?%s", paramsCover.Encode()), nil)
+		if reqCover != nil {
+			respCover, errCover := c.HTTPClient.Do(reqCover)
+			if errCover == nil {
+				defer respCover.Body.Close()
+				if respCover.StatusCode == http.StatusOK {
+					var coverItems []map[string]any
+					if err := json.NewDecoder(respCover.Body).Decode(&coverItems); err == nil && len(coverItems) > 0 {
+						for _, it := range coverItems {
+							it["type"] = "cover"
+						}
+						items = coverItems
+					}
+				}
+			}
+		}
+	}
+
+	if len(items) == 0 {
 		return nil, nil
 	}
 
 	chosen := c.ChoosePreferredItem(items, c.Config.SMTP.FromEmail)
+	if chosen != nil {
+		chosen["found"] = true
+		chosen["enabled"] = true
+		if chosen["type"] == nil {
+			chosen["type"] = "patch"
+		}
+		chosen["is_delegated_to_me"] = c.Config.Patchwork.IsMe(chosen["delegate"], c.Config.SMTP.FromEmail)
+		chosen["delegate_users"] = c.Config.Patchwork.GetDelegateUsers()
+		chosen["can_update"] = c.Config.Patchwork.GetToken() != ""
+		if chosen["check_summary"] == nil && chosen["check"] != nil {
+			chosen["check_summary"] = chosen["check"]
+		}
+
+		// Handle series array: if series is an array of objects, extract the first series
+		if sArr, ok := chosen["series"].([]any); ok && len(sArr) > 0 {
+			if sMap, ok := sArr[0].(map[string]any); ok {
+				chosen["series"] = sMap
+				chosen["series_list"] = sArr
+			}
+		}
+
+		if len(items) > 1 {
+			var otherProjects []map[string]any
+			for _, it := range items {
+				if fmt.Sprintf("%v", it["id"]) != fmt.Sprintf("%v", chosen["id"]) {
+					if proj, ok := it["project"].(map[string]any); ok {
+						otherProjects = append(otherProjects, proj)
+					}
+				}
+			}
+			if len(otherProjects) > 0 {
+				chosen["other_projects"] = otherProjects
+			}
+		}
+	}
 
 	c.mu.Lock()
 	c.cache[cleaned] = chosen

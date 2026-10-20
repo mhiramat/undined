@@ -1150,5 +1150,91 @@ func TestGetMessageRawHeader(t *testing.T) {
 	}
 }
 
+func TestPatchworkInfoEndpoint(t *testing.T) {
+	mockPatchwork := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/") {
+			msgid := r.URL.Query().Get("msgid")
+			if msgid == "patchwork-test@kernel.org" || msgid == "<patchwork-test@kernel.org>" {
+				w.Write([]byte(`[{
+					"id": 12345,
+					"name": "[PATCH] tracing: Fix test",
+					"msgid": "<patchwork-test@kernel.org>",
+					"state": "under-review",
+					"check": "success",
+					"delegate": {"username": "dev"},
+					"project": {"link_name": "linux-trace-kernel"}
+				}]`))
+				return
+			}
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer mockPatchwork.Close()
+
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	server.Config.Patchwork.URL = mockPatchwork.URL
+	server.Config.Patchwork.APIVersion = "1.4"
+	server.Config.Patchwork.Username = "dev"
+	server.Config.Patchwork.Email = "dev@example.com"
+	server.Config.Patchwork.Token = "token"
+	server.Patchwork = patchwork.NewClient(server.Config, db, server.Maildir)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	// 1. Successful lookup
+	req, _ := http.NewRequest("GET", ts.URL+"/api/patchwork/info?msgid=patchwork-test@kernel.org", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/patchwork/info failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+	}
+
+	var res map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if res["found"] != true {
+		t.Errorf("expected found=true, got %v", res["found"])
+	}
+	if res["enabled"] != true {
+		t.Errorf("expected enabled=true, got %v", res["enabled"])
+	}
+	if res["is_delegated_to_me"] != true {
+		t.Errorf("expected is_delegated_to_me=true, got %v", res["is_delegated_to_me"])
+	}
+
+	// 2. Not found lookup
+	reqNF, _ := http.NewRequest("GET", ts.URL+"/api/patchwork/info?msgid=notfound@kernel.org", nil)
+	reqNF.Header.Set("Authorization", "Bearer "+token)
+	respNF, err := client.Do(reqNF)
+	if err != nil {
+		t.Fatalf("GET not found failed: %v", err)
+	}
+	defer respNF.Body.Close()
+
+	if respNF.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for not found, got %d", respNF.StatusCode)
+	}
+
+	var resNF map[string]any
+	_ = json.NewDecoder(respNF.Body).Decode(&resNF)
+	if resNF["found"] != false {
+		t.Errorf("expected found=false for not found patch, got %v", resNF["found"])
+	}
+}
+
 
 

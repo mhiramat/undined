@@ -253,7 +253,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 
     // Patchwork status card (if available)
     let patchworkHtml = "";
-    if (this._patchworkInfo) {
+    if (this._patchworkInfo && this._patchworkInfo.found !== false && this._patchworkInfo.id) {
       const pw = this._patchworkInfo;
       const delegateName = pw.delegate?.username || "unassigned";
       const checkBadge = this.renderPatchworkCheck(pw);

@@ -310,17 +310,33 @@ const patchworkCache = new Map();
 export async function fetchPatchworkInfo(msgid, refresh = false) {
   if (!msgid) return { enabled: false, found: false };
   const clean = String(msgid).trim().replace(/^<|>$/g, "");
-  if (!refresh && patchworkCache.has(clean)) {
+  if (refresh) {
+    patchworkCache.delete(clean);
+  } else if (patchworkCache.has(clean)) {
     return patchworkCache.get(clean);
   }
 
   try {
     const res = await fetch(`${BASE_URL}/api/patchwork/info?msgid=${encodeURIComponent(clean)}${refresh ? "&refresh=true" : ""}`);
-    if (!res.ok) return { enabled: false, found: false };
+    if (!res.ok) {
+      let errDetail = "Patchwork request failed";
+      try {
+        const errJson = await res.json();
+        errDetail = errJson.error || errJson.detail || errDetail;
+      } catch {
+        const text = await res.text().catch(() => "");
+        if (text) errDetail = text;
+      }
+      throw new Error(errDetail);
+    }
     const data = await res.json();
-    patchworkCache.set(clean, data);
-    return data;
+    const result = data || { enabled: true, found: false, msgid: clean };
+    patchworkCache.set(clean, result);
+    return result;
   } catch (err) {
+    if (err.message && (err.message.includes("configured") || err.message.includes("failed") || err.message.includes("status"))) {
+      throw err;
+    }
     return { enabled: false, found: false, error: err.message };
   }
 }

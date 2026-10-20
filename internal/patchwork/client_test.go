@@ -174,3 +174,87 @@ func TestSyncTodoFromPatchwork(t *testing.T) {
 		t.Errorf("Expected message_id 'patch-777@kernel.org', got %s", msgs[0].MessageID)
 	}
 }
+
+func TestGetPatchInfoEnrichmentAndCache(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/") {
+			msgid := r.URL.Query().Get("msgid")
+			if msgid == "test-msgid@kernel.org" || msgid == "<test-msgid@kernel.org>" {
+				w.Write([]byte(`[{
+					"id": 555,
+					"name": "[PATCH] tracing: Fix test",
+					"msgid": "<test-msgid@kernel.org>",
+					"state": "under-review",
+					"check": "success",
+					"delegate": {"username": "dev"},
+					"project": {"link_name": "linux-trace-kernel"}
+				}]`))
+				return
+			}
+		}
+		w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = server.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
+	cfg.Patchwork.Token = "test-token"
+
+	client := NewClient(cfg, nil, nil)
+
+	// 1. Fetch info and verify enrichment
+	info, err := client.GetPatchInfo("test-msgid@kernel.org", "")
+	if err != nil {
+		t.Fatalf("GetPatchInfo failed: %v", err)
+	}
+	if info == nil {
+		t.Fatalf("expected patch info, got nil")
+	}
+	if info["found"] != true {
+		t.Errorf("expected found=true, got %v", info["found"])
+	}
+	if info["enabled"] != true {
+		t.Errorf("expected enabled=true, got %v", info["enabled"])
+	}
+	if info["is_delegated_to_me"] != true {
+		t.Errorf("expected is_delegated_to_me=true, got %v", info["is_delegated_to_me"])
+	}
+	if info["can_update"] != true {
+		t.Errorf("expected can_update=true, got %v", info["can_update"])
+	}
+	if info["type"] != "patch" {
+		t.Errorf("expected type=patch, got %v", info["type"])
+	}
+
+	// 2. Cache hit: callCount should remain unchanged
+	prevCalls := callCount
+	info2, err := client.GetPatchInfo("test-msgid@kernel.org", "")
+	if err != nil || info2 == nil {
+		t.Fatalf("GetPatchInfo cached failed: %v", err)
+	}
+	if callCount != prevCalls {
+		t.Errorf("expected cache hit with 0 additional calls, got callCount=%d vs %d", callCount, prevCalls)
+	}
+
+	// 3. ClearCache: next query should invoke upstream
+	client.ClearCache("test-msgid@kernel.org")
+	_, _ = client.GetPatchInfo("test-msgid@kernel.org", "")
+	if callCount <= prevCalls {
+		t.Errorf("expected upstream call after ClearCache, got callCount=%d", callCount)
+	}
+
+	// 4. Non-existent patch returns nil, nil
+	notfound, err := client.GetPatchInfo("does-not-exist@kernel.org", "")
+	if err != nil {
+		t.Fatalf("expected nil err for not found, got %v", err)
+	}
+	if notfound != nil {
+		t.Errorf("expected nil for not found, got %+v", notfound)
+	}
+}
