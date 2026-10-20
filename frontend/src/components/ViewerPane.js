@@ -1861,7 +1861,7 @@ export function openRawHeaderModal(detail) {
     if (!rawHeaderText) {
       try {
         const res = await fetchRawHeaders(m.id);
-        rawHeaderText = res.raw_headers || "";
+        rawHeaderText = typeof res === "string" ? res : (res.raw_headers || "");
         detail.raw_headers = rawHeaderText;
       } catch (err) {
         if (loadingEl) loadingEl.innerText = `Failed to load raw headers: ${err.message}`;

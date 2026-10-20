@@ -266,7 +266,16 @@ export async function setMessageReplied(messageId, isReplied = true) {
 export async function fetchRawHeaders(messageId) {
   const res = await fetch(`${BASE_URL}/api/messages/${messageId}/raw-header`);
   if (!res.ok) throw new Error("Failed to fetch raw headers");
-  return res.json();
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return res.json();
+  }
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw_headers: text };
+  }
 }
 
 export async function saveDraft({ to_addr, cc_addr = null, subject, body_text, in_reply_to = null, references = null }) {

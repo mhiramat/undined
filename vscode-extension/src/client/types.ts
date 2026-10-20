@@ -116,6 +116,11 @@ export interface MessageDetail {
   };
 }
 
+export interface RawHeaderResponse {
+  message_id: string;
+  raw_headers: string;
+}
+
 export interface PatchworkUser {
   id: number;
   username: string;

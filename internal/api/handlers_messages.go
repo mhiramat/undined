@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -226,25 +227,46 @@ func (s *Server) handleGetMessageRawHeader(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	var rawHeaders string
 	if msg.FilePath != "" {
 		if content, err := os.ReadFile(msg.FilePath); err == nil {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			// Return headers portion (up to first blank line)
-			idx := strings.Index(string(content), "\n\n")
-			if idx > 0 {
-				w.Write(content[:idx])
+			if idx := bytes.Index(content, []byte("\r\n\r\n")); idx != -1 {
+				rawHeaders = string(content[:idx])
+			} else if idx := bytes.Index(content, []byte("\n\n")); idx != -1 {
+				rawHeaders = string(content[:idx])
 			} else {
-				w.Write(content)
+				rawHeaders = string(content)
 			}
-			return
 		}
 	}
 
-	// Fallback synthesized headers
-	headers := fmt.Sprintf("From: %s <%s>\nTo: %s\nSubject: %s\nDate: %s\nMessage-ID: <%s>\n",
-		msg.FromName, msg.FromAddr, msg.ToAddr, msg.Subject, msg.Date, msg.MessageID)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte(headers))
+	if rawHeaders == "" {
+		// Fallback synthesized headers
+		msgID := msg.MessageID
+		if msgID != "" && !strings.HasPrefix(msgID, "<") && !strings.HasSuffix(msgID, ">") {
+			msgID = fmt.Sprintf("<%s>", msgID)
+		}
+		rawHeaders = fmt.Sprintf("From: %s <%s>\nTo: %s\nSubject: %s\nDate: %s\nMessage-ID: %s\n",
+			msg.FromName, msg.FromAddr, msg.ToAddr, msg.Subject, msg.Date, msgID)
+	}
+
+	// Client explicitly requested plain text
+	if r.Header.Get("Accept") == "text/plain" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(rawHeaders))
+		return
+	}
+
+	msgID := msg.MessageID
+	if msgID != "" && !strings.HasPrefix(msgID, "<") && !strings.HasSuffix(msgID, ">") {
+		msgID = fmt.Sprintf("<%s>", msgID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"message_id":  msgID,
+		"raw_headers": rawHeaders,
+	})
 }
 
 func (s *Server) handleGetMessageMboxPath(w http.ResponseWriter, r *http.Request) {

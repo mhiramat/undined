@@ -16,6 +16,7 @@ import {
   SendEmailPayload,
   PatchworkPatch,
   KnownAddress,
+  RawHeaderResponse,
 } from "./types";
 
 export class UndineRestClient {
@@ -106,6 +107,12 @@ export class UndineRestClient {
 
   public async getMessageDetail(idOrIndex: string | number): Promise<MessageDetail> {
     return this.request<MessageDetail>(`/api/messages/${encodeURIComponent(String(idOrIndex))}`);
+  }
+
+  public async getRawHeaders(messageIdOrDbId: string | number): Promise<RawHeaderResponse> {
+    return this.request<RawHeaderResponse>(
+      `/api/messages/${encodeURIComponent(String(messageIdOrDbId))}/raw-header`
+    );
   }
 
   public async getMessageByMsgId(msgId: string): Promise<MessageSummary | null> {

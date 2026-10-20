@@ -1036,5 +1036,119 @@ func TestKnownAddressesAPI(t *testing.T) {
 	}
 }
 
+func TestGetMessageRawHeader(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	testEml := []byte("Message-ID: <patch-header-test@kernel.org>\r\n" +
+		"From: Kernel Developer <dev@example.com>\r\n" +
+		"To: maintainer@kernel.org\r\n" +
+		"Cc: list@kernel.org\r\n" +
+		"Subject: [PATCH] tracing: Fix header viewer\r\n" +
+		"Date: Sat, 17 Oct 2026 12:00:00 +0000\r\n\r\n" +
+		"This is body text that should not appear in raw headers.\r\n")
+
+	emlPath := filepath.Join(tmpDir, "msg_headers.eml")
+	_ = os.WriteFile(emlPath, testEml, 0644)
+	msgID, err := db.IndexEmailFile(folder.ID, emlPath)
+	if err != nil {
+		t.Fatalf("Failed to index message: %v", err)
+	}
+
+	// 1. GET /api/messages/{id}/raw-header (JSON default)
+	reqJSON, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/raw-header", ts.URL, msgID), nil)
+	reqJSON.Header.Set("Authorization", "Bearer "+token)
+	respJSON, err := client.Do(reqJSON)
+	if err != nil {
+		t.Fatalf("GET /api/messages/{id}/raw-header failed: %v", err)
+	}
+	defer respJSON.Body.Close()
+
+	if respJSON.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respJSON.StatusCode)
+	}
+	contentType := respJSON.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		t.Errorf("expected application/json Content-Type, got %s", contentType)
+	}
+
+	var jsonRes struct {
+		MessageID  string `json:"message_id"`
+		RawHeaders string `json:"raw_headers"`
+	}
+	if err := json.NewDecoder(respJSON.Body).Decode(&jsonRes); err != nil {
+		t.Fatalf("failed to decode JSON response: %v", err)
+	}
+
+	if jsonRes.MessageID != "<patch-header-test@kernel.org>" {
+		t.Errorf("expected <patch-header-test@kernel.org>, got %s", jsonRes.MessageID)
+	}
+	if !strings.Contains(jsonRes.RawHeaders, "Subject: [PATCH] tracing: Fix header viewer") {
+		t.Errorf("raw headers missing Subject line: %s", jsonRes.RawHeaders)
+	}
+	if !strings.Contains(jsonRes.RawHeaders, "From: Kernel Developer <dev@example.com>") {
+		t.Errorf("raw headers missing From line: %s", jsonRes.RawHeaders)
+	}
+	if strings.Contains(jsonRes.RawHeaders, "This is body text") {
+		t.Errorf("raw headers leaked body content: %s", jsonRes.RawHeaders)
+	}
+
+	// 2. Query by Message-ID (without angle brackets)
+	reqMsgID, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/patch-header-test@kernel.org/raw-header", ts.URL), nil)
+	reqMsgID.Header.Set("Authorization", "Bearer "+token)
+	respMsgID, err := client.Do(reqMsgID)
+	if err != nil {
+		t.Fatalf("GET by msgid failed: %v", err)
+	}
+	defer respMsgID.Body.Close()
+	if respMsgID.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for msgid lookup, got %d", respMsgID.StatusCode)
+	}
+
+	// 3. GET /api/messages/{id}/raw-header with Accept: text/plain
+	reqPlain, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/raw-header", ts.URL, msgID), nil)
+	reqPlain.Header.Set("Authorization", "Bearer "+token)
+	reqPlain.Header.Set("Accept", "text/plain")
+	respPlain, err := client.Do(reqPlain)
+	if err != nil {
+		t.Fatalf("GET with Accept: text/plain failed: %v", err)
+	}
+	defer respPlain.Body.Close()
+
+	if respPlain.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respPlain.StatusCode)
+	}
+	plainContentType := respPlain.Header.Get("Content-Type")
+	if !strings.Contains(plainContentType, "text/plain") {
+		t.Errorf("expected text/plain Content-Type, got %s", plainContentType)
+	}
+	plainBytes, _ := io.ReadAll(respPlain.Body)
+	if !strings.Contains(string(plainBytes), "Subject: [PATCH] tracing: Fix header viewer") {
+		t.Errorf("plain text missing Subject line: %s", string(plainBytes))
+	}
+
+	// 4. Non-existent message returns 404
+	req404, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/nonexistent-99999/raw-header", ts.URL), nil)
+	req404.Header.Set("Authorization", "Bearer "+token)
+	resp404, err := client.Do(req404)
+	if err != nil {
+		t.Fatalf("GET 404 failed: %v", err)
+	}
+	defer resp404.Body.Close()
+	if resp404.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 Not Found, got %d", resp404.StatusCode)
+	}
+}
+
 
 
