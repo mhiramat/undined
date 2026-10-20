@@ -90,7 +90,7 @@ const (
 
 	// AI Review Defaults
 	DefaultReviewCmd    = "agy --print"
-	DefaultReviewPrompt = "Review patch for message {message_id} (commit {commit_id}). Post diff review comments using the Undine MCP review comment tool."
+	DefaultReviewPrompt = "Review patch for message {message_id} (commit {commit_id}). Post diff review comments using the Undine MCP review comment tool or write a draft review response using write_draft_message."
 
 	// Database Defaults
 	DefaultSQLiteTimeoutSeconds = 30.0

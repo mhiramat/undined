@@ -173,29 +173,63 @@ Array of matching messages containing matched headline snippets, subject, and se
 
 ---
 
-### 3.5 `create_review_draft`
-Aggregates inline review comments and general feedback into a canonical LKML quoted reply email, saving it into the local Maildir `Drafts` folder.
+### 3.5 `write_draft_message`
+**Aliases**: `write_draft`, `save_draft`
+
+Writes a draft email message into the local Maildir `Drafts` folder and indexes it in SQLite so the user can review, edit, and send it from Undine's UI or external editor.
+
+Supports drafting replies to existing messages (auto-deriving `to`, `cc`, `subject`, `in_reply_to`, and `references`) as well as standalone new messages. Optionally merges structured `inline_notes` into LKML quote format if supplied.
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `target_message_id` | `str` | Yes | — | Message-ID being replied to. |
-| `general_feedback` | `str` | Yes | — | High-level review summary or greeting text. |
-| `inline_notes` | `list[dict]` | Yes | — | Array of note objects: `[{"file": "...", "line_no": 123, "comment": "..."}]`. Set `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body. |
+| `body` | `str` | Yes | — | Plain-text draft email body. (Aliases: `body_text`, `general_feedback`). |
+| `in_reply_to` | `str` | No | `null` | Message-ID (e.g. `<20261003...-1-author@kernel.org>`) or DB ID being replied to. (Aliases: `target_message_id`, `reply_to`). |
+| `to` | `str` | No | Auto | Recipient email address(es). Automatically derived from parent email if `in_reply_to` is given. (Alias: `to_addr`). |
+| `subject` | `str` | No | Auto | Subject line. Automatically defaults to `"Re: <parent subject>"` if `in_reply_to` is given. |
+| `cc` | `str` | No | Auto | CC email address(es). Automatically derived if `in_reply_to` is given. (Alias: `cc_addr`). |
+| `references` | `str` | No | Auto | References header string. Automatically derived if `in_reply_to` is given. |
+| `inline_notes` | `list[dict]` | No | `null` | Optional array of structured review comments `[{"file": "...", "line_no": 123, "comment": "..."}]` to merge into LKML quote format. |
+| `append_signature` | `bool` | No | `false` | Whether to append the user's configured signature from `~/.signature`. |
 
 #### Returns:
 ```json
 {
   "success": true,
   "draft_id": 55,
-  "file_path": "/home/user/.local/share/undined/maildir/Drafts/cur/1791745088.M12345P6789.host,S=1024:2,D",
+  "message_id": "<undine-1791745088-abc@undined.local>",
+  "subject": "Re: [PATCH] ftrace: improve kprobe handling",
+  "to": "author@kernel.org",
+  "cc": "linux-trace-kernel@vger.kernel.org",
+  "file_path": ".../maildir/Drafts/cur/1791745088.M12345P6789.host,S=1024:2,D"
+}
+```
+
+---
+
+### 3.6 `create_review_draft`
+Aggregates inline review comments and general feedback into a canonical LKML quoted reply email, saving it into the local Maildir `Drafts` folder. (Convenience wrapper around `write_draft_message`).
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `target_message_id` | `str` | Yes | — | Message-ID being replied to. |
+| `general_feedback` | `str` | Yes | — | High-level review summary or greeting text. |
+| `inline_notes` | `list[dict]` | No | `[]` | Array of note objects: `[{"file": "...", "line_no": 123, "comment": "..."}]`. Set `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body. |
+
+#### Returns:
+```json
+{
+  "success": true,
+  "draft_id": 55,
+  "file_path": ".../maildir/Drafts/cur/1791745088.M12345P6789.host,S=1024:2,D",
   "subject": "Re: [PATCH] ftrace: improve kprobe handling"
 }
 ```
 
 ---
 
-### 3.6 `import_patch_series_b4`
+### 3.7 `import_patch_series_b4`
 Downloads an entire patch series or discussion thread from `lore.kernel.org` via `b4` and imports it into the local Maildir store and SQLite index.
 
 #### Parameters:

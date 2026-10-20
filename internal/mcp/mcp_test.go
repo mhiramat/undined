@@ -570,8 +570,8 @@ func TestMCPSTDIOJSONRPC(t *testing.T) {
 	var toolsResp map[string]interface{}
 	_ = json.Unmarshal([]byte(lines[2]), &toolsResp)
 	toolsList := toolsResp["result"].(map[string]interface{})["tools"].([]interface{})
-	if len(toolsList) != 11 {
-		t.Errorf("expected 11 tools, got %d", len(toolsList))
+	if len(toolsList) != 14 {
+		t.Errorf("expected 14 tools, got %d", len(toolsList))
 	}
 
 	// Verify tools/call
@@ -671,6 +671,109 @@ func TestMCPPatchworkAndB4Tools(t *testing.T) {
 	}
 	if b4Map["message_id"] != "nonexistent-b4-url" {
 		t.Errorf("expected message_id reflected, got %v", b4Map)
+	}
+}
+
+func TestMCPWriteDraftMessage(t *testing.T) {
+	server, db, _, _, _, _ := setupTestMCPEnv(t)
+	ctx := context.Background()
+
+	// 1. Write draft as a reply to an existing patch (auto-deriving To, Cc, Subject)
+	replyRes, err := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+		"in_reply_to": "ftrace-patch-1@kernel.org",
+		"body":        "Looks good to me.\n\nReviewed-by: Kernel Developer <dev@example.com>",
+	})
+	if err != nil {
+		t.Fatalf("write_draft_message failed: %v", err)
+	}
+	replyMap, ok := replyRes.(map[string]interface{})
+	if !ok || replyMap["success"] != true {
+		t.Fatalf("expected write_draft_message success, got %v", replyRes)
+	}
+	draftID := int64(replyMap["draft_id"].(int64))
+	draftMsg, err := db.GetMessageByID(draftID)
+	if err != nil || draftMsg == nil {
+		t.Fatalf("failed to retrieve draft message %d: %v", draftID, err)
+	}
+	if !strings.HasPrefix(draftMsg.Subject, "Re: ") {
+		t.Errorf("expected subject prefixed with 'Re: ', got %s", draftMsg.Subject)
+	}
+	if !strings.Contains(draftMsg.BodyPlain, "Reviewed-by: Kernel Developer") {
+		t.Errorf("expected draft body to contain review tag, got %s", draftMsg.BodyPlain)
+	}
+	if !strings.Contains(draftMsg.InReplyTo, "ftrace-patch-1@kernel.org") {
+		t.Errorf("expected in_reply_to to contain parent msgid, got %s", draftMsg.InReplyTo)
+	}
+
+	// 2. Write standalone new draft with explicit To and Subject
+	newDraftRes, err := server.CallTool(ctx, "save_draft", map[string]interface{}{
+		"to":      "linux-trace-kernel@vger.kernel.org",
+		"subject": "[RFC] tracing: Proposal for new probe feature",
+		"body":    "Hi all,\n\nHere is a proposal for discussion.",
+	})
+	if err != nil {
+		t.Fatalf("save_draft failed: %v", err)
+	}
+	newMap, ok := newDraftRes.(map[string]interface{})
+	if !ok || newMap["success"] != true {
+		t.Fatalf("expected save_draft success, got %v", newDraftRes)
+	}
+	newDraftID := int64(newMap["draft_id"].(int64))
+	newMsg, err := db.GetMessageByID(newDraftID)
+	if err != nil || newMsg == nil {
+		t.Fatalf("failed to retrieve new draft %d: %v", newDraftID, err)
+	}
+	if newMsg.Subject != "[RFC] tracing: Proposal for new probe feature" {
+		t.Errorf("expected exact subject, got %s", newMsg.Subject)
+	}
+	if newMsg.ToAddr != "linux-trace-kernel@vger.kernel.org" {
+		t.Errorf("expected exact to_addr, got %s", newMsg.ToAddr)
+	}
+
+	// 3. Write draft via write_draft alias
+	aliasRes, err := server.CallTool(ctx, "write_draft", map[string]interface{}{
+		"to":      "dev@example.org",
+		"subject": "Ping on patch status",
+		"body":    "Any update on this?",
+	})
+	if err != nil {
+		t.Fatalf("write_draft alias failed: %v", err)
+	}
+	aliasMap, ok := aliasRes.(map[string]interface{})
+	if !ok || aliasMap["success"] != true {
+		t.Fatalf("expected write_draft success, got %v", aliasRes)
+	}
+}
+
+func TestMCPWriteDraftValidation(t *testing.T) {
+	server, _, _, _, _, _ := setupTestMCPEnv(t)
+	ctx := context.Background()
+
+	// 1. Missing body
+	emptyRes, err := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+		"to":      "dev@example.com",
+		"subject": "Empty body test",
+		"body":    "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected fatal error: %v", err)
+	}
+	emptyMap := emptyRes.(map[string]interface{})
+	if emptyMap["success"] == true {
+		t.Errorf("expected failure on empty body, got %v", emptyMap)
+	}
+
+	// 2. Nonexistent parent message when to/subject omitted
+	missingRes, err := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+		"in_reply_to": "nonexistent-message-id@example.com",
+		"body":        "Reply to nothing",
+	})
+	if err != nil {
+		t.Fatalf("unexpected fatal error: %v", err)
+	}
+	missingMap := missingRes.(map[string]interface{})
+	if missingMap["success"] == true {
+		t.Errorf("expected failure on nonexistent parent message, got %v", missingMap)
 	}
 }
 

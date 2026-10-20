@@ -65,15 +65,26 @@ Retrieves the complete thread conversation and patch diff content.
   - `message_id` (*str*, required): Root or member message ID of the thread.
 - **Returns**: List of messages in thread hierarchy with full `body_plain` content and patch diffs.
 
-### 5. `create_review_draft`
+### 5. `write_draft_message` (and aliases `write_draft`, `save_draft`)
+Writes a complete draft response into the local `Drafts` folder for human review, editing, and transmission.
+- **Parameters**:
+  - `in_reply_to` (*str*, optional): Target Message-ID being replied to (auto-derives To, Cc, Subject, and References if omitted).
+  - `body` (*str*, required): The draft message body content.
+  - `to` (*str*, optional): Recipient email address(es).
+  - `subject` (*str*, optional): Subject line.
+  - `cc` (*str*, optional): CC email address(es).
+  - `inline_notes` (*list[dict]*, optional): Optional structured inline review comments to merge as LKML quotes into the draft.
+- **Returns**: `{"success": true, "draft_id": int, "message_id": str, "subject": str, "file_path": str}`.
+
+### 6. `create_review_draft`
 Aggregates inline review comments into an LKML quoted reply email saved to the local `Drafts` folder.
 - **Parameters**:
   - `target_message_id` (*str*, required): Message-ID being replied to.
   - `general_feedback` (*str*, required): High-level series summary or general review remarks.
-  - `inline_notes` (*list[dict]*, required): Array of `{"file": "...", "line_no": 123, "comment": "..."}` dicts. Use `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body.
+  - `inline_notes` (*list[dict]*, optional): Array of `{"file": "...", "line_no": 123, "comment": "..."}` dicts. Use `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body.
 - **Returns**: `{"success": true, "draft_id": int, "subject": str, "file_path": str}`.
 
-### 6. `import_patch_series_b4`
+### 7. `import_patch_series_b4`
 Downloads a patch series or thread from `lore.kernel.org` via `b4`.
 - **Parameters**:
   - `message_id_or_url` (*str*, required): Lore Message-ID or public inbox URL.
@@ -86,7 +97,7 @@ When performing an automated or assisted patch review, follow this 4-step sequen
 
 ```
 [1. Discover] ---> [2. Inspect] ---> [3. Critique & Post] ---> [4. Draft Response]
-list_recent_emails  get_thread_context  post_review_comment       create_review_draft
+list_recent_emails  get_thread_context  post_review_comment       write_draft_message / create_review_draft
 ```
 
 ### Step 1: Discover Target Patches

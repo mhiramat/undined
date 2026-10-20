@@ -24,6 +24,7 @@ import (
 	"undined-go/internal/lkml/patch"
 	"undined-go/internal/lkml/quote"
 	"undined-go/internal/patchwork"
+	"undined-go/internal/smtp"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
@@ -271,11 +272,119 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"items": map[string]interface{}{"type": "object", "additionalProperties": true},
 					},
 				},
-				"required": []string{"target_message_id", "general_feedback", "inline_notes"},
+				"required": []string{"target_message_id"},
 			},
 			"outputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "create_review_draftOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name": "write_draft_message",
+			"description": "Write a draft email message into the local Maildir Drafts folder for user review, editing, and dispatch.\n\n" +
+				"Supports drafting replies to existing messages (auto-deriving To, Cc, Subject, In-Reply-To, References) or composing new standalone messages.\n" +
+				"If in_reply_to (or target_message_id) is provided, recipient addresses and subject are automatically derived from the target message if omitted.\n" +
+				"Optionally accepts inline_notes to automatically format and merge line-specific review comments into LKML quote format.\n\n" +
+				"Args:\n" +
+				"  body: Plain-text body of the draft email (or use body_text / general_feedback).\n" +
+				"  in_reply_to: Message-ID (or DB ID) of the message being replied to (optional, alias: target_message_id).\n" +
+				"  to: Recipient email address(es) (optional if in_reply_to is given, alias: to_addr).\n" +
+				"  subject: Subject line (optional if in_reply_to is given).\n" +
+				"  cc: CC recipient email address(es) (optional, alias: cc_addr).\n" +
+				"  references: References header value (optional, auto-derived if replying).\n" +
+				"  inline_notes: Optional array of [{\"file\": \"...\", \"line_no\": 123, \"comment\": \"...\"}] to merge as LKML quotes into the draft.\n" +
+				"  append_signature: Boolean, whether to append configured ~/.signature (default: false).\n",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "write_draft_messageArguments",
+				"properties": map[string]interface{}{
+					"body":              map[string]interface{}{"title": "Body", "type": "string"},
+					"body_text":         map[string]interface{}{"title": "Body Text", "type": "string"},
+					"general_feedback":  map[string]interface{}{"title": "General Feedback", "type": "string"},
+					"in_reply_to":       map[string]interface{}{"title": "In Reply To", "type": "string"},
+					"target_message_id": map[string]interface{}{"title": "Target Message Id", "type": "string"},
+					"reply_to":          map[string]interface{}{"title": "Reply To", "type": "string"},
+					"to":                map[string]interface{}{"title": "To", "type": "string"},
+					"to_addr":           map[string]interface{}{"title": "To Addr", "type": "string"},
+					"subject":           map[string]interface{}{"title": "Subject", "type": "string"},
+					"cc":                map[string]interface{}{"title": "Cc", "type": "string"},
+					"cc_addr":           map[string]interface{}{"title": "Cc Addr", "type": "string"},
+					"references":        map[string]interface{}{"title": "References", "type": "string"},
+					"inline_notes": map[string]interface{}{
+						"title": "Inline Notes",
+						"type":  "array",
+						"items": map[string]interface{}{"type": "object", "additionalProperties": true},
+					},
+					"append_signature": map[string]interface{}{"title": "Append Signature", "type": "boolean", "default": false},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "write_draft_messageOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "write_draft",
+			"description": "Write a draft email message into the local Maildir Drafts folder (alias for write_draft_message).",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "write_draftArguments",
+				"properties": map[string]interface{}{
+					"body":              map[string]interface{}{"title": "Body", "type": "string"},
+					"in_reply_to":       map[string]interface{}{"title": "In Reply To", "type": "string"},
+					"target_message_id": map[string]interface{}{"title": "Target Message Id", "type": "string"},
+					"to":                map[string]interface{}{"title": "To", "type": "string"},
+					"subject":           map[string]interface{}{"title": "Subject", "type": "string"},
+					"cc":                map[string]interface{}{"title": "Cc", "type": "string"},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "write_draftOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "save_draft",
+			"description": "Save an email draft to the local Drafts folder (alias for write_draft_message).",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "save_draftArguments",
+				"properties": map[string]interface{}{
+					"body":              map[string]interface{}{"title": "Body", "type": "string"},
+					"in_reply_to":       map[string]interface{}{"title": "In Reply To", "type": "string"},
+					"target_message_id": map[string]interface{}{"title": "Target Message Id", "type": "string"},
+					"to":                map[string]interface{}{"title": "To", "type": "string"},
+					"subject":           map[string]interface{}{"title": "Subject", "type": "string"},
+					"cc":                map[string]interface{}{"title": "Cc", "type": "string"},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "save_draftOutput",
 				"properties": map[string]interface{}{
 					"result": map[string]interface{}{
 						"title":                "Result",
@@ -466,6 +575,8 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 		return s.toolGetThreadContext(args)
 	case "import_patch_series_b4":
 		return s.toolImportPatchSeriesB4(ctx, args)
+	case "write_draft_message", "write_draft", "save_draft", "create_draft", "save_draft_message":
+		return s.toolWriteDraftMessage(name, args)
 	case "create_review_draft":
 		return s.toolCreateReviewDraft(args)
 	case "get_patchwork_patch_info":
@@ -610,110 +721,155 @@ func (s *Server) toolImportPatchSeriesB4(ctx context.Context, args map[string]in
 	}, nil
 }
 
-func (s *Server) toolCreateReviewDraft(args map[string]interface{}) (interface{}, error) {
+func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interface{}) (interface{}, error) {
 	t0 := time.Now()
-	targetMsgID := getString(args, "target_message_id")
-	generalFeedback := getString(args, "general_feedback")
+	targetMsgID := getString(args, "in_reply_to", "target_message_id", "reply_to", "reply_to_message_id", "message_id")
+	bodyText := getString(args, "body", "body_text", "general_feedback", "text", "content")
+	toAddr := getString(args, "to", "to_addr")
+	ccAddr := getString(args, "cc", "cc_addr")
+	subject := getString(args, "subject")
+	references := getString(args, "references")
+	customFrom := getString(args, "custom_from", "from")
 	rawNotes := getSlice(args, "inline_notes")
+	appendSig := getBool(args, "append_signature", false)
 
 	if s.DB == nil || s.Maildir == nil {
 		durMs := time.Since(t0).Seconds() * 1000.0
-		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: create_review_draft(target_message_id=%q) -> REJECTED (Storage not initialized) (%.1fms)", targetMsgID, durMs))
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s() -> REJECTED (Storage not initialized) (%.1fms)", toolName, durMs))
 		return map[string]interface{}{"success": false, "error": "Storage not initialized"}, nil
 	}
 
-	orig, _ := s.DB.GetMessageByMsgID(targetMsgID)
-	if orig == nil {
-		orig, _ = s.DB.GetMessageByMsgID(parser.CleanMsgID(targetMsgID))
-	}
-	if orig == nil {
-		if idVal, err := strconv.ParseInt(targetMsgID, 10, 64); err == nil {
-			orig, _ = s.DB.GetMessageByID(idVal)
+	var orig *database.Message
+	if targetMsgID != "" {
+		orig, _ = s.DB.GetMessageByMsgID(targetMsgID)
+		if orig == nil {
+			orig, _ = s.DB.GetMessageByMsgID(parser.CleanMsgID(targetMsgID))
+		}
+		if orig == nil {
+			if idVal, err := strconv.ParseInt(targetMsgID, 10, 64); err == nil {
+				orig, _ = s.DB.GetMessageByID(idVal)
+			}
 		}
 	}
-	if orig == nil {
+
+	if targetMsgID != "" && orig == nil && (toAddr == "" || subject == "") {
 		durMs := time.Since(t0).Seconds() * 1000.0
-		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: create_review_draft(target_message_id=%q) -> REJECTED (Message not found) (%.1fms)", targetMsgID, durMs))
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s(target_message_id=%q) -> REJECTED (Message not found) (%.1fms)", toolName, targetMsgID, durMs))
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("Message not found: %s", targetMsgID)}, nil
 	}
 
-	var notes []quote.InlineNote
-	for _, n := range rawNotes {
-		if m, ok := n.(map[string]interface{}); ok {
-			file := getString(m, "file", "path")
-			if strings.EqualFold(file, "DESCRIPTION") {
-				file = "DESCRIPTION"
-			}
-			lineNo := getInt(m, "line_no", 0)
-			if lineNo == 0 {
-				lineNo = getInt(m, "lineNo", 0)
-			}
-			side := getString(m, "side")
-			text := getString(m, "comment", "text")
-			notes = append(notes, quote.InlineNote{
-				File:   file,
-				LineNo: lineNo,
-				Side:   side,
-				Text:   text,
-			})
-		}
+	fromEmail := "dev@example.com"
+	if s.Config != nil && s.Config.SMTP.FromEmail != "" {
+		fromEmail = s.Config.SMTP.FromEmail
 	}
 
-	parsed := patch.ParsePatch(orig.BodyPlain)
-	sig := ""
-	fromEmail := "user@example.com"
-	fromName := "Maintainer"
-	if s.Config != nil {
-		sig = s.Config.SMTP.GetSignature()
-		if s.Config.SMTP.FromEmail != "" {
-			fromEmail = s.Config.SMTP.FromEmail
-		}
-		if s.Config.SMTP.FromName != "" {
-			fromName = s.Config.SMTP.FromName
-		}
-	}
-
-	quoteBody := quote.MergePatchReviewQuote(
-		orig.Date, orig.FromName, orig.FromAddr, orig.BodyPlain,
-		parsed, notes, generalFeedback, sig,
-	)
-
-	cleanSubj := strings.TrimSpace(orig.Subject)
-	subject := cleanSubj
-	if !strings.HasPrefix(strings.ToLower(cleanSubj), "re:") {
-		subject = "Re: " + cleanSubj
-	}
-
-	toAddr, ccAddr := parser.BuildReplyRecipients(orig.FromAddr, orig.ToAddr, orig.CcAddr, fromEmail)
-	parentID := parser.CleanMsgID(orig.MessageID)
 	inReplyToHdr := ""
-	if parentID != "" {
-		inReplyToHdr = fmt.Sprintf("<%s>", parentID)
+	if orig != nil {
+		if toAddr == "" {
+			autoTo, autoCc := parser.BuildReplyRecipients(orig.FromAddr, orig.ToAddr, orig.CcAddr, fromEmail)
+			toAddr = autoTo
+			if ccAddr == "" {
+				ccAddr = autoCc
+			}
+		}
+		if subject == "" {
+			cleanSubj := strings.TrimSpace(orig.Subject)
+			if !strings.HasPrefix(strings.ToLower(cleanSubj), "re:") {
+				subject = "Re: " + cleanSubj
+			} else {
+				subject = cleanSubj
+			}
+		}
+		parentID := parser.CleanMsgID(orig.MessageID)
+		if parentID != "" {
+			inReplyToHdr = fmt.Sprintf("<%s>", parentID)
+		}
+		if references == "" {
+			parentRefs := strings.TrimSpace(orig.ReferencesHeader)
+			if parentRefs != "" {
+				if parentID != "" && !strings.Contains(parentRefs, parentID) {
+					references = fmt.Sprintf("%s <%s>", parentRefs, parentID)
+				} else {
+					references = parentRefs
+				}
+			} else if parentID != "" {
+				references = fmt.Sprintf("<%s>", parentID)
+			}
+		}
+	} else if targetMsgID != "" {
+		cleaned := parser.CleanMsgID(targetMsgID)
+		if cleaned != "" {
+			inReplyToHdr = fmt.Sprintf("<%s>", cleaned)
+			if references == "" {
+				references = fmt.Sprintf("<%s>", cleaned)
+			}
+		}
 	}
 
-	var draftLines []string
-	draftLines = append(draftLines, fmt.Sprintf("From: %s <%s>", fromName, fromEmail))
-	draftLines = append(draftLines, fmt.Sprintf("To: %s", toAddr))
-	if ccAddr != "" {
-		draftLines = append(draftLines, fmt.Sprintf("Cc: %s", ccAddr))
+	// Merge structured inline notes if provided and original message exists
+	if len(rawNotes) > 0 && orig != nil {
+		var notes []quote.InlineNote
+		for _, n := range rawNotes {
+			if m, ok := n.(map[string]interface{}); ok {
+				file := getString(m, "file", "path")
+				if strings.EqualFold(file, "DESCRIPTION") {
+					file = "DESCRIPTION"
+				}
+				lineNo := getInt(m, "line_no", 0)
+				if lineNo == 0 {
+					lineNo = getInt(m, "lineNo", 0)
+				}
+				side := getString(m, "side")
+				text := getString(m, "comment", "text")
+				notes = append(notes, quote.InlineNote{
+					File:   file,
+					LineNo: lineNo,
+					Side:   side,
+					Text:   text,
+				})
+			}
+		}
+		if len(notes) > 0 {
+			parsed := patch.ParsePatch(orig.BodyPlain)
+			sig := ""
+			if s.Config != nil {
+				sig = s.Config.SMTP.GetSignature()
+			}
+			bodyText = quote.MergePatchReviewQuote(
+				orig.Date, orig.FromName, orig.FromAddr, orig.BodyPlain,
+				parsed, notes, bodyText, sig,
+			)
+		}
 	}
-	draftLines = append(draftLines, fmt.Sprintf("Subject: %s", subject))
-	if inReplyToHdr != "" {
-		draftLines = append(draftLines, fmt.Sprintf("In-Reply-To: %s", inReplyToHdr))
+
+	if appendSig && s.Config != nil {
+		sig := s.Config.SMTP.GetSignature()
+		if sig != "" && !strings.Contains(bodyText, strings.TrimSpace(sig)) {
+			bodyText = strings.TrimRight(bodyText, "\n") + "\n\n" + sig + "\n"
+		}
 	}
-	draftLines = append(draftLines, "Content-Type: text/plain; charset=utf-8")
-	draftLines = append(draftLines, "Content-Transfer-Encoding: 8bit")
-	draftLines = append(draftLines, "")
-	draftLines = append(draftLines, quoteBody)
 
-	draftContent := strings.Join(draftLines, "\n") + "\n"
+	if strings.TrimSpace(bodyText) == "" {
+		durMs := time.Since(t0).Seconds() * 1000.0
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s() -> REJECTED (Empty body) (%.1fms)", toolName, durMs))
+		return map[string]interface{}{"success": false, "error": "Draft body text is required"}, nil
+	}
 
+	if strings.TrimSpace(subject) == "" {
+		subject = "(no subject)"
+	}
+
+	// Construct RFC 822 email via SMTP Client's BuildMessage
+	smtpClient := smtp.NewClient(s.Config, s.Maildir, s.DB)
+	rawMsg := smtpClient.BuildMessage(toAddr, subject, bodyText, ccAddr, inReplyToHdr, references, customFrom)
+
+	_ = s.Maildir.EnsureFolder(constants.FolderDrafts)
 	draftFolder, err := s.DB.GetOrCreateFolder(constants.FolderDrafts, false)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}, nil
 	}
 
-	savedPath, err := s.Maildir.AddMessage(constants.FolderDrafts, []byte(draftContent), constants.FlagDraft)
+	savedPath, err := s.Maildir.AddMessage(constants.FolderDrafts, []byte(rawMsg), constants.FlagDraft)
 	if err != nil {
 		return map[string]interface{}{"success": false, "error": err.Error()}, nil
 	}
@@ -723,16 +879,28 @@ func (s *Server) toolCreateReviewDraft(args map[string]interface{}) (interface{}
 		return map[string]interface{}{"success": false, "error": err.Error()}, nil
 	}
 
+	msgID := ""
+	if savedMsg, _ := s.DB.GetMessageByID(dbID); savedMsg != nil {
+		msgID = savedMsg.MessageID
+	}
+
 	durMs := time.Since(t0).Seconds() * 1000.0
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: create_review_draft(target_message_id=%q, notes=%d) -> SUCCESS (draft_id=%d, subject=%q) (%.1fms)",
-		targetMsgID, len(notes), dbID, subject, durMs))
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: %s(subject=%q, to=%q) -> SUCCESS (draft_id=%d, msg_id=%q) (%.1fms)",
+		toolName, subject, toAddr, dbID, msgID, durMs))
 
 	return map[string]interface{}{
-		"success":   true,
-		"draft_id":  dbID,
-		"file_path": savedPath,
-		"subject":   subject,
+		"success":    true,
+		"draft_id":   dbID,
+		"message_id": msgID,
+		"subject":    subject,
+		"to":         toAddr,
+		"cc":         ccAddr,
+		"file_path":  savedPath,
 	}, nil
+}
+
+func (s *Server) toolCreateReviewDraft(args map[string]interface{}) (interface{}, error) {
+	return s.toolWriteDraftMessage("create_review_draft", args)
 }
 
 func (s *Server) toolGetPatchworkPatchInfo(ctx context.Context, args map[string]interface{}) (interface{}, error) {
