@@ -2,6 +2,7 @@ package patchwork
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -159,6 +160,9 @@ func TestSyncTodoFromPatchwork(t *testing.T) {
 	if res.SyncedCount != 1 {
 		t.Errorf("Expected 1 synced patch, got %d", res.SyncedCount)
 	}
+	if res.TotalDelegated != 1 {
+		t.Errorf("Expected 1 total delegated patch, got %d", res.TotalDelegated)
+	}
 
 	todoFolder, err := db.GetFolderByName(constants.FolderTODO)
 	if err != nil || todoFolder == nil {
@@ -256,5 +260,116 @@ func TestGetPatchInfoEnrichmentAndCache(t *testing.T) {
 	}
 	if notfound != nil {
 		t.Errorf("expected nil for not found, got %+v", notfound)
+	}
+}
+
+func TestListMyPatchesPagination(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/users/") {
+			w.Write([]byte(`[{"id": 10, "username": "dev", "email": "dev@example.com"}]`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/") {
+			page := r.URL.Query().Get("page")
+			if page == "2" {
+				var items []map[string]any
+				for i := 101; i <= 110; i++ {
+					items = append(items, map[string]any{
+						"id":    i,
+						"name":  fmt.Sprintf("[PATCH] Test %d", i),
+						"msgid": fmt.Sprintf("patch-%d@kernel.org", i),
+						"state": "new",
+					})
+				}
+				_ = json.NewEncoder(w).Encode(items)
+				return
+			}
+			// Page 1: returns 100 items
+			var items []map[string]any
+			for i := 1; i <= 100; i++ {
+				items = append(items, map[string]any{
+					"id":    i,
+					"name":  fmt.Sprintf("[PATCH] Test %d", i),
+					"msgid": fmt.Sprintf("patch-%d@kernel.org", i),
+					"state": "new",
+				})
+			}
+			_ = json.NewEncoder(w).Encode(items)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = server.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+
+	// Fetch all patches (unlimited)
+	all, err := client.ListMyPatches([]string{"new"}, "", 0, "dev@example.com")
+	if err != nil {
+		t.Fatalf("ListMyPatches failed: %v", err)
+	}
+	if len(all) != 110 {
+		t.Errorf("Expected 110 patches across 2 pages, got %d", len(all))
+	}
+
+	// Fetch with limit 50
+	limited, err := client.ListMyPatches([]string{"new"}, "", 50, "dev@example.com")
+	if err != nil {
+		t.Fatalf("ListMyPatches with limit failed: %v", err)
+	}
+	if len(limited) != 50 {
+		t.Errorf("Expected 50 patches with limit, got %d", len(limited))
+	}
+}
+
+func TestDownloadPatchMboxFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/direct-mbox/123" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("From: dev@kernel.org\nSubject: Direct Mbox\n\nContent\n"))
+			return
+		}
+		if r.URL.Path == "/patch/456/mbox/" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("From: dev@kernel.org\nSubject: Web Mbox\n\nContent\n"))
+			return
+		}
+		if r.URL.Path == "/api/1.4/patches/789/mbox/" {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("From: dev@kernel.org\nSubject: API Mbox\n\nContent\n"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = server.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	client := NewClient(cfg, nil, nil)
+
+	// 1. Direct mboxURL
+	data1, err := client.DownloadPatchMbox(123, server.URL+"/direct-mbox/123")
+	if err != nil || !strings.Contains(string(data1), "Direct Mbox") {
+		t.Errorf("Direct mboxURL download failed: %v, got %s", err, string(data1))
+	}
+
+	// 2. Web fallback /patch/{id}/mbox/
+	data2, err := client.DownloadPatchMbox(456)
+	if err != nil || !strings.Contains(string(data2), "Web Mbox") {
+		t.Errorf("Web mbox fallback failed: %v, got %s", err, string(data2))
+	}
+
+	// 3. API endpoint fallback /api/1.4/patches/{id}/mbox/
+	data3, err := client.DownloadPatchMbox(789)
+	if err != nil || !strings.Contains(string(data3), "API Mbox") {
+		t.Errorf("API mbox fallback failed: %v, got %s", err, string(data3))
 	}
 }

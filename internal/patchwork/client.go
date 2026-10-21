@@ -553,49 +553,80 @@ func (c *Client) ListMyPatches(states []string, project string, limit int, fallb
 	var allPatches []map[string]any
 
 	for _, st := range states {
-		params := url.Values{}
-		params.Set("delegate", strconv.Itoa(*uid))
-		if st != "" {
-			params.Set("state", st)
-		}
-		if project != "" {
-			params.Set("project", project)
-		}
-
-		endpoint := fmt.Sprintf("/patches/?%s", params.Encode())
-		req, err := c.newRequest("GET", endpoint, nil)
-		if err != nil {
-			continue
-		}
-
-		resp, err := c.HTTPClient.Do(req)
-		if err != nil {
-			continue
-		}
-
-		var items []map[string]any
-		_ = json.NewDecoder(resp.Body).Decode(&items)
-		resp.Body.Close()
-
-		for _, item := range items {
-			idVal, ok := item["id"]
-			if !ok {
-				continue
+		page := 1
+		for {
+			params := url.Values{}
+			params.Set("delegate", strconv.Itoa(*uid))
+			if st != "" {
+				params.Set("state", st)
 			}
-			var pID int
-			if f, ok := idVal.(float64); ok {
-				pID = int(f)
-			} else if i, ok := idVal.(int); ok {
-				pID = i
+			if project != "" {
+				params.Set("project", project)
 			}
-			if !seenIDs[pID] {
-				seenIDs[pID] = true
-				allPatches = append(allPatches, item)
+			params.Set("page", strconv.Itoa(page))
+			params.Set("per_page", "100")
+			params.Set("order", "-date")
+
+			endpoint := fmt.Sprintf("/patches/?%s", params.Encode())
+			req, err := c.newRequest("GET", endpoint, nil)
+			if err != nil {
+				break
 			}
+
+			resp, err := c.HTTPClient.Do(req)
+			if err != nil {
+				break
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				resp.Body.Close()
+				break
+			}
+
+			var items []map[string]any
+			_ = json.NewDecoder(resp.Body).Decode(&items)
+			resp.Body.Close()
+
+			if len(items) == 0 {
+				break
+			}
+
+			newItemsAdded := 0
+			for _, item := range items {
+				idVal, ok := item["id"]
+				if !ok {
+					continue
+				}
+				var pID int
+				if f, ok := idVal.(float64); ok {
+					pID = int(f)
+				} else if i, ok := idVal.(int); ok {
+					pID = i
+				}
+				if !seenIDs[pID] {
+					seenIDs[pID] = true
+					allPatches = append(allPatches, item)
+					newItemsAdded++
+				}
+				if limit > 0 && len(allPatches) >= limit {
+					break
+				}
+			}
+
+			if limit > 0 && len(allPatches) >= limit {
+				allPatches = allPatches[:limit]
+				break
+			}
+
+			// If no new items were added or fewer than per_page items returned, stop paginating
+			if newItemsAdded == 0 || len(items) < 100 {
+				break
+			}
+
+			page++
 		}
 
 		if limit > 0 && len(allPatches) >= limit {
-			allPatches = allPatches[:limit]
 			break
 		}
 	}
@@ -654,7 +685,56 @@ func (c *Client) GetChecks(patchID int) ([]map[string]any, error) {
 }
 
 // DownloadPatchMbox downloads raw patch mbox from Patchwork.
-func (c *Client) DownloadPatchMbox(patchID int) ([]byte, error) {
+// If mboxURL is provided (e.g. from patch["mbox"]), it fetches directly from that URL.
+// Otherwise it falls back to /patch/{id}/mbox/ on base URL, and then /api/{version}/patches/{id}/mbox/.
+func (c *Client) DownloadPatchMbox(patchID int, mboxURL ...string) ([]byte, error) {
+	// 1. If explicit mbox URL is provided, try downloading directly
+	if len(mboxURL) > 0 && strings.TrimSpace(mboxURL[0]) != "" {
+		rawURL := strings.TrimSpace(mboxURL[0])
+		req, err := http.NewRequest("GET", rawURL, nil)
+		if err == nil {
+			if token := c.Config.Patchwork.GetToken(); token != "" {
+				req.Header.Set("Authorization", fmt.Sprintf("Token %s", token))
+			}
+			req.Header.Set("User-Agent", constants.DefaultXMailer)
+			resp, err := c.HTTPClient.Do(req)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					data, readErr := io.ReadAll(resp.Body)
+					if readErr == nil && len(data) > 0 {
+						return data, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Try web endpoint /patch/{id}/mbox/ on baseURL (outside /api/...)
+	baseURL := strings.TrimRight(c.Config.Patchwork.URL, "/")
+	if idx := strings.Index(baseURL, "/api/"); idx != -1 {
+		baseURL = baseURL[:idx]
+	}
+	webURL := fmt.Sprintf("%s/patch/%d/mbox/", baseURL, patchID)
+	reqWeb, err := http.NewRequest("GET", webURL, nil)
+	if err == nil {
+		if token := c.Config.Patchwork.GetToken(); token != "" {
+			reqWeb.Header.Set("Authorization", fmt.Sprintf("Token %s", token))
+		}
+		reqWeb.Header.Set("User-Agent", constants.DefaultXMailer)
+		resp, err := c.HTTPClient.Do(reqWeb)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				data, readErr := io.ReadAll(resp.Body)
+				if readErr == nil && len(data) > 0 {
+					return data, nil
+				}
+			}
+		}
+	}
+
+	// 3. Fallback to API endpoint /patches/{id}/mbox/ (used by mock servers/tests)
 	endpoint := fmt.Sprintf("/patches/%d/mbox/", patchID)
 	req, err := c.newRequest("GET", endpoint, nil)
 	if err != nil {
@@ -676,9 +756,10 @@ func (c *Client) DownloadPatchMbox(patchID int) ([]byte, error) {
 
 // SyncTodoResult holds summary counts and patches updated by SyncTodoFromPatchwork.
 type SyncTodoResult struct {
-	SyncedCount  int              `json:"synced_count"`
-	RemovedCount int              `json:"removed_count"`
-	Patches      []map[string]any `json:"patches"`
+	SyncedCount    int              `json:"synced_count"`
+	RemovedCount   int              `json:"removed_count"`
+	TotalDelegated int              `json:"total_delegated"`
+	Patches        []map[string]any `json:"patches"`
 }
 
 // SyncTodoFromPatchwork synchronizes delegated patches from Patchwork into the TODO mailbox.
@@ -750,7 +831,12 @@ func (c *Client) SyncTodoFromPatchwork(states []string) (*SyncTodoResult, error)
 			pID = i
 		}
 
-		rawBytes, err := c.DownloadPatchMbox(pID)
+		var mboxURL string
+		if u, ok := p["mbox"].(string); ok {
+			mboxURL = u
+		}
+
+		rawBytes, err := c.DownloadPatchMbox(pID, mboxURL)
 		if err != nil || len(rawBytes) == 0 {
 			// Fallback: check if we already have the email file locally in another folder
 			localMsg, _ := c.DB.GetMessageByMsgID(cleanID)
@@ -782,8 +868,9 @@ func (c *Client) SyncTodoFromPatchwork(states []string) (*SyncTodoResult, error)
 	}
 
 	return &SyncTodoResult{
-		SyncedCount:  syncedCount,
-		RemovedCount: removedCount,
-		Patches:      syncedPatches,
+		SyncedCount:    syncedCount,
+		RemovedCount:   removedCount,
+		TotalDelegated: len(validMsgIDs),
+		Patches:        syncedPatches,
 	}, nil
 }

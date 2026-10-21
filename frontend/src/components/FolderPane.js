@@ -320,8 +320,9 @@ export function renderFolderPane(container) {
           }
           const updatedFolders = await fetchFolders();
           store.setFolders(updatedFolders);
-          if (selectedFolderId) {
-            const msgs = await fetchMessages(selectedFolderId);
+          const currentFolderId = store.getState().selectedFolderId;
+          if (currentFolderId) {
+            const msgs = await fetchMessages(currentFolderId);
             store.setMessages(msgs);
           }
         } catch (err) {
@@ -344,8 +345,9 @@ export function renderFolderPane(container) {
         try {
           const updatedFolders = await fetchFolders();
           store.setFolders(updatedFolders);
-          if (selectedFolderId) {
-            const msgs = await fetchMessages(selectedFolderId);
+          const currentFolderId = store.getState().selectedFolderId;
+          if (currentFolderId) {
+            const msgs = await fetchMessages(currentFolderId);
             store.setMessages(msgs);
           }
           showToast("Mailboxes refreshed.", "success");
