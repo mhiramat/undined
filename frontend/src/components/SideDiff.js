@@ -61,7 +61,7 @@ export function renderSideDiff(container, parsedDiff) {
     }
 
     // Render each changed file
-    for (const file of parsedDiff.files) {
+    for (const file of (parsedDiff.files || [])) {
       const fileName = file.new_path || file.old_path;
       html += `
         <div class="diff-file-card" data-file="${escapeHtml(fileName)}">
@@ -73,7 +73,7 @@ export function renderSideDiff(container, parsedDiff) {
           </div>
       `;
 
-      for (const hunk of file.hunks) {
+      for (const hunk of (file.hunks || [])) {
         html += `<div class="diff-hunk-header">${escapeHtml(hunk.header)} ${escapeHtml(hunk.section || "")}</div>`;
 
         if (isSideBySide) {
@@ -89,7 +89,7 @@ export function renderSideDiff(container, parsedDiff) {
               <tbody>
           `;
 
-          for (const row of hunk.paired_rows) {
+          for (const row of (hunk.paired_rows || [])) {
             const leftNoteKey = `${fileName}:${row.left.line_no}`;
             const rightNoteKey = `${fileName}:${row.right.line_no}`;
             const leftHasNote = row.left.line_no && notes[leftNoteKey];
@@ -120,7 +120,7 @@ export function renderSideDiff(container, parsedDiff) {
               <tbody>
           `;
 
-          for (const u of hunk.unified_lines) {
+          for (const u of (hunk.unified_lines || [])) {
             const targetLine = u.new_no || u.old_no;
             const noteKey = `${fileName}:${targetLine}`;
             const hasNote = targetLine && notes[noteKey];

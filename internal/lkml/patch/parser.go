@@ -2,6 +2,7 @@
 package patch
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -55,10 +56,12 @@ type DiffFile struct {
 
 // ParsedEmailDiff represents the complete parsed diff structure of an email.
 type ParsedEmailDiff struct {
-	IsPatch    bool        `json:"is_patch"`
-	Preamble   string      `json:"preamble"`
-	Files      []*DiffFile `json:"files"`
-	Postscript string      `json:"postscript"`
+	IsPatch         bool        `json:"is_patch"`
+	IsCorrupted     bool        `json:"is_corrupted"`
+	CorruptedReason string      `json:"corrupted_reason,omitempty"`
+	Preamble        string      `json:"preamble"`
+	Files           []*DiffFile `json:"files"`
+	Postscript      string      `json:"postscript"`
 }
 
 // NormalizePath strips leading a/ and b/ from file paths.
@@ -86,8 +89,8 @@ func intPtr(i int) *int {
 
 // AlignHunkLines pairs additions and deletions horizontally for Side-by-Side rendering.
 func AlignHunkLines(rawLines []string, oldStart, newStart int) ([]PairedRow, []UnifiedLine) {
-	var paired []PairedRow
-	var unified []UnifiedLine
+	paired := make([]PairedRow, 0)
+	unified := make([]UnifiedLine, 0)
 
 	curOld := oldStart
 	curNew := newStart
@@ -217,7 +220,7 @@ func AlignHunkLines(rawLines []string, oldStart, newStart int) ([]PairedRow, []U
 func ParsePatch(text string) *ParsedEmailDiff {
 	lines := strings.Split(text, "\n")
 	var preambleLines []string
-	var files []*DiffFile
+	files := make([]*DiffFile, 0)
 	var postscriptLines []string
 
 	state := "PREAMBLE"
@@ -225,9 +228,31 @@ func ParsePatch(text string) *ParsedEmailDiff {
 	var currentHunk *Hunk
 	var hunkRawLines []string
 
+	isCorrupted := false
+	corruptedReason := ""
+
+	checkLineForNonASCII := func(line string) {
+		if isCorrupted {
+			return
+		}
+		for _, r := range line {
+			if r > 127 {
+				isCorrupted = true
+				corruptedReason = fmt.Sprintf("non-ASCII character detected in patch diff (U+%04X)", r)
+				return
+			}
+		}
+	}
+
 	commitHunk := func() {
 		if currentHunk != nil {
 			paired, unif := AlignHunkLines(hunkRawLines, currentHunk.OldStart, currentHunk.NewStart)
+			if paired == nil {
+				paired = make([]PairedRow, 0)
+			}
+			if unif == nil {
+				unif = make([]UnifiedLine, 0)
+			}
 			currentHunk.PairedRows = paired
 			currentHunk.UnifiedLines = unif
 			if currentFile != nil {
@@ -241,6 +266,9 @@ func ParsePatch(text string) *ParsedEmailDiff {
 	commitFile := func() {
 		commitHunk()
 		if currentFile != nil {
+			if currentFile.Hunks == nil {
+				currentFile.Hunks = make([]*Hunk, 0)
+			}
 			files = append(files, currentFile)
 			currentFile = nil
 		}
@@ -256,15 +284,18 @@ func ParsePatch(text string) *ParsedEmailDiff {
 			if m := diffGitRegex.FindStringSubmatch(line); len(m) > 2 {
 				state = "DIFF"
 				commitFile()
-				currentFile = &DiffFile{OldPath: NormalizePath(m[1]), NewPath: NormalizePath(m[2])}
+				checkLineForNonASCII(line)
+				currentFile = &DiffFile{OldPath: NormalizePath(m[1]), NewPath: NormalizePath(m[2]), Hunks: make([]*Hunk, 0)}
 				idx++
 				continue
 			} else if strings.HasPrefix(line, "--- a/") && idx+1 < total && strings.HasPrefix(lines[idx+1], "+++ b/") {
 				state = "DIFF"
 				commitFile()
+				checkLineForNonASCII(line)
+				checkLineForNonASCII(lines[idx+1])
 				oldP := NormalizePath(strings.TrimPrefix(line, "--- a/"))
 				newP := NormalizePath(strings.TrimPrefix(lines[idx+1], "+++ b/"))
-				currentFile = &DiffFile{OldPath: oldP, NewPath: newP}
+				currentFile = &DiffFile{OldPath: oldP, NewPath: newP, Hunks: make([]*Hunk, 0)}
 				idx += 2
 				continue
 			} else {
@@ -281,14 +312,17 @@ func ParsePatch(text string) *ParsedEmailDiff {
 				continue
 			}
 
+			checkLineForNonASCII(line)
+
 			if m := diffGitRegex.FindStringSubmatch(line); len(m) > 2 {
 				commitFile()
-				currentFile = &DiffFile{OldPath: NormalizePath(m[1]), NewPath: NormalizePath(m[2])}
+				currentFile = &DiffFile{OldPath: NormalizePath(m[1]), NewPath: NormalizePath(m[2]), Hunks: make([]*Hunk, 0)}
 				idx++
 				continue
 			}
 
 			if strings.HasPrefix(line, "--- a/") && idx+1 < total && strings.HasPrefix(lines[idx+1], "+++ b/") {
+				checkLineForNonASCII(lines[idx+1])
 				oldP := NormalizePath(strings.TrimPrefix(line, "--- a/"))
 				newP := NormalizePath(strings.TrimPrefix(lines[idx+1], "+++ b/"))
 				if currentFile != nil && len(currentFile.Hunks) == 0 {
@@ -296,7 +330,7 @@ func ParsePatch(text string) *ParsedEmailDiff {
 					currentFile.NewPath = newP
 				} else {
 					commitFile()
-					currentFile = &DiffFile{OldPath: oldP, NewPath: newP}
+					currentFile = &DiffFile{OldPath: oldP, NewPath: newP, Hunks: make([]*Hunk, 0)}
 				}
 				idx += 2
 				continue
@@ -320,12 +354,14 @@ func ParsePatch(text string) *ParsedEmailDiff {
 				}
 
 				currentHunk = &Hunk{
-					Header:   line,
-					OldStart: oldS,
-					OldCount: oldC,
-					NewStart: newS,
-					NewCount: newC,
-					Section:  sec,
+					Header:       line,
+					OldStart:     oldS,
+					OldCount:     oldC,
+					NewStart:     newS,
+					NewCount:     newC,
+					Section:      sec,
+					PairedRows:   make([]PairedRow, 0),
+					UnifiedLines: make([]UnifiedLine, 0),
 				}
 				idx++
 				continue
@@ -351,19 +387,21 @@ func ParsePatch(text string) *ParsedEmailDiff {
 
 	commitFile()
 
-	isPatch := len(files) > 0 && func() bool {
-		for _, f := range files {
-			if len(f.Hunks) > 0 {
-				return true
-			}
+	hasHunks := false
+	for _, f := range files {
+		if len(f.Hunks) > 0 {
+			hasHunks = true
+			break
 		}
-		return false
-	}()
+	}
+	isPatch := len(files) > 0 && (hasHunks || isCorrupted)
 
 	return &ParsedEmailDiff{
-		IsPatch:    isPatch,
-		Preamble:   strings.TrimSpace(strings.Join(preambleLines, "\n")),
-		Files:      files,
-		Postscript: strings.TrimSpace(strings.Join(postscriptLines, "\n")),
+		IsPatch:         isPatch,
+		IsCorrupted:     isCorrupted,
+		CorruptedReason: corruptedReason,
+		Preamble:        strings.TrimSpace(strings.Join(preambleLines, "\n")),
+		Files:           files,
+		Postscript:      strings.TrimSpace(strings.Join(postscriptLines, "\n")),
 	}
 }

@@ -10,7 +10,7 @@ import { renderSideDiff } from "./SideDiff.js";
 import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNewMessage } from "./InternalEditor.js";
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
 import { openReviewResultDialog } from "./ReviewResultDialog.js";
-import { linkifyUrls } from "../linkify.js";
+import { linkifyUrls, linkifyUrlsWithUnicode } from "../linkify.js";
 import {
   FOLDER_B4_IMPORTS,
   FOLDER_AI_REVIEWS,
@@ -403,6 +403,7 @@ export function renderViewerPane(container) {
     const reviewTargetStatus = store.getAiReviewStatusForTarget
       ? (store.getAiReviewStatusForTarget(m.id) || store.getAiReviewStatusForTarget(m.message_id))
       : (store.isAiReviewTarget && (store.isAiReviewTarget(m.id) || store.isAiReviewTarget(m.message_id)) ? "in-progress" : null);
+    const isPatchCorrupted = !!(detail.parsed_diff && detail.parsed_diff.is_corrupted);
 
     let patchActionButton = "";
     if (commitId) {
@@ -422,7 +423,12 @@ export function renderViewerPane(container) {
         patchActionButton = `<button type="button" class="action-btn" id="btn-ai-review" title="Trigger background AI review with agy --print">🤖 AI review</button>`;
       }
     } else if (m.is_patch && !isDraftMessage(m)) {
-      patchActionButton = `<button type="button" class="action-btn" id="btn-apply-git">📥 Apply with git am</button>`;
+      if (isPatchCorrupted) {
+        const reason = detail.parsed_diff.corrupted_reason || "Non-ASCII characters detected in patch diff";
+        patchActionButton = `<button type="button" class="action-btn text-muted" id="btn-apply-git" disabled title="Cannot apply corrupted patch: ${escapeHtml(reason)}">⚠️ Corrupted patch</button>`;
+      } else {
+        patchActionButton = `<button type="button" class="action-btn" id="btn-apply-git">📥 Apply with git am</button>`;
+      }
     }
 
     const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft") : [];
@@ -548,8 +554,20 @@ export function renderViewerPane(container) {
 
     // Mount Patch or Plain Text Body
     const bodyContainer = container.querySelector("#viewer-diff-body");
-    if (detail.parsed_diff && detail.parsed_diff.is_patch) {
+    if (detail.parsed_diff && detail.parsed_diff.is_patch && !isPatchCorrupted) {
       renderSideDiff(bodyContainer, detail.parsed_diff);
+    } else if (isPatchCorrupted) {
+      const reason = detail.parsed_diff.corrupted_reason || "Non-ASCII characters detected in patch diff.";
+      bodyContainer.innerHTML = `
+        <div class="summary-sync-banner patch-corrupted-banner" id="patch-corrupted-banner">
+          <span style="font-size: 18px; line-height: 1;">⚠️</span>
+          <div>
+            <strong>This patch is corrupted.</strong>
+            <div class="corrupted-desc">${escapeHtml(reason)} SideDiff has been disabled and non-ASCII characters are highlighted below.</div>
+          </div>
+        </div>
+        <pre class="plaintext-email">${linkifyUrlsWithUnicode(m.body_plain || "")}</pre>
+      `;
     } else {
       bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(m.body_plain || "")}</pre>`;
     }
@@ -597,7 +615,7 @@ export function renderViewerPane(container) {
 
     // Event: Apply git am (opens modal to configure branch & base commit)
     const applyBtn = container.querySelector("#btn-apply-git");
-    if (applyBtn) {
+    if (applyBtn && !isPatchCorrupted) {
       applyBtn.addEventListener("click", () => {
         openApplyPatchDialog(m, async (applyRes) => {
           try {

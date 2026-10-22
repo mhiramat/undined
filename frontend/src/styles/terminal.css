@@ -1501,6 +1501,55 @@ body.undine-app {
   background-color: #fff;
 }
 
+/* Corrupted Patch Warning Banner & Escaped Unicode Badges */
+.patch-corrupted-banner {
+  background-color: var(--diff-del-bg);
+  border: 1px solid var(--accent-red);
+  border-radius: 4px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-main);
+  margin-bottom: 16px;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.patch-corrupted-banner strong {
+  color: var(--accent-red);
+  font-size: 13px;
+}
+
+.patch-corrupted-banner .corrupted-desc {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.unicode-escape {
+  display: inline-block;
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 1px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  font-weight: 600;
+  line-height: 1.3;
+  user-select: text;
+  cursor: help;
+}
+
+.unicode-escape:hover {
+  background-color: rgba(239, 68, 68, 0.35);
+  border-color: var(--accent-red);
+  color: #ffffff;
+}
+
 /* Internal Editor (Composer Modal) */
 .composer-backdrop {
   position: fixed;

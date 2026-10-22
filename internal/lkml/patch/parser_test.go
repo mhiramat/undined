@@ -1,6 +1,8 @@
 package patch
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -78,5 +80,108 @@ func TestFileMatches(t *testing.T) {
 	}
 	if FileMatches("other.c", "kernel/trace/ftrace.c") {
 		t.Errorf("unexpected match for different file")
+	}
+}
+
+func TestParsePatch_CorruptedUnicodeInDiff(t *testing.T) {
+	// Diff lines with non-breaking space (\u00a0) and en-space (\u2002) as found in webmail-corrupted patches
+	diffText := `Commit preamble text.
+
+Signed-off-by: Kernel Developer <dev@example.com>
+---
+diff --git a/drivers/perf/arm_cspmu/arm_cspmu.c b/drivers/perf/arm_cspmu/arm_cspmu.c
+index 28df8ad4d13c..61a586d34eec 100644
+--- a/drivers/perf/arm_cspmu/arm_cspmu.c
++++ b/drivers/perf/arm_cspmu/arm_cspmu.c
+@@ -1115,7 +1115,7 @@ static int arm_cspmu_get_filter_idx(struct arm_cspmu *cspmu,
+` + "\u00a0\u2002\u2002\u2002const struct arm_cspmu_filter_ops *ops)\n" +
+		`{
+-- 
+2.43.0
+`
+
+	parsed := ParsePatch(diffText)
+	if !parsed.IsPatch {
+		t.Fatalf("expected is_patch to be true for patch with diff headers")
+	}
+	if !parsed.IsCorrupted {
+		t.Fatalf("expected is_corrupted to be true")
+	}
+	if !strings.Contains(parsed.CorruptedReason, "U+00A0") {
+		t.Errorf("expected corrupted_reason to mention U+00A0, got: %s", parsed.CorruptedReason)
+	}
+
+	// Verify JSON marshaling produces empty arrays rather than null for paired_rows and unified_lines
+	data, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatalf("failed to marshal parsed diff: %v", err)
+	}
+	jsonStr := string(data)
+	if strings.Contains(jsonStr, `"paired_rows":null`) {
+		t.Errorf("paired_rows serialized as null in JSON: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, `"unified_lines":null`) {
+		t.Errorf("unified_lines serialized as null in JSON: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, `"hunks":null`) {
+		t.Errorf("hunks serialized as null in JSON: %s", jsonStr)
+	}
+}
+
+func TestParsePatch_UnicodeInPreambleNotCorrupted(t *testing.T) {
+	// Unicode in preamble / commit message (e.g. author name with umlauts or accents)
+	diffText := `Subject: [PATCH] perf/arm: Fix filter ops
+
+This fixes an issue reported by Björn <dev@kernel.org>.
+
+Signed-off-by: Kernel Developer <dev@example.com>
+---
+diff --git a/drivers/perf/arm_cspmu/arm_cspmu.c b/drivers/perf/arm_cspmu/arm_cspmu.c
+index 28df8ad4d13c..61a586d34eec 100644
+--- a/drivers/perf/arm_cspmu/arm_cspmu.c
++++ b/drivers/perf/arm_cspmu/arm_cspmu.c
+@@ -1115,7 +1115,7 @@ static int arm_cspmu_get_filter_idx(struct arm_cspmu *cspmu,
+ 	const struct arm_cspmu_filter_ops *ops)
+ {
+-- 
+2.43.0
+`
+
+	parsed := ParsePatch(diffText)
+	if !parsed.IsPatch {
+		t.Fatalf("expected is_patch to be true")
+	}
+	if parsed.IsCorrupted {
+		t.Fatalf("preamble unicode should not mark patch as corrupted: %s", parsed.CorruptedReason)
+	}
+	if parsed.CorruptedReason != "" {
+		t.Errorf("expected empty corrupted_reason, got: %s", parsed.CorruptedReason)
+	}
+}
+
+func TestParsePatch_EmptyHunkPairedRowsNotNull(t *testing.T) {
+	diffText := `Commit preamble text.
+
+Signed-off-by: Kernel Developer <dev@example.com>
+---
+diff --git a/test.c b/test.c
+--- a/test.c
++++ b/test.c
+@@ -1,1 +1,1 @@
+-- 
+2.43.0
+`
+
+	parsed := ParsePatch(diffText)
+	data, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	jsonStr := string(data)
+	if strings.Contains(jsonStr, `"paired_rows":null`) {
+		t.Errorf("expected paired_rows:[], got null in: %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, `"unified_lines":null`) {
+		t.Errorf("expected unified_lines:[], got null in: %s", jsonStr)
 	}
 }
