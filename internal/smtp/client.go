@@ -187,7 +187,7 @@ func (c *Client) mailFrom(smtpClient *smtp.Client, fromAddr string) error {
 		}
 	}
 
-	id, err := smtpClient.Text.Cmd(cmdStr)
+	id, err := smtpClient.Text.Cmd("%s", cmdStr)
 	if err != nil {
 		return err
 	}
