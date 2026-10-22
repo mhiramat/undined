@@ -42,7 +42,7 @@
 ## 2. Prerequisites & System Requirements
 
 * **Operating System**: Linux (x86_64 or aarch64; Debian, Ubuntu, Fedora, Arch, etc.)
-* **Go Compiler**: Go 1.22 or newer (tested on Go 1.22.2 and 1.27.3)
+* **Go Compiler**: Go 1.27 or newer (tested on Go 1.27.3)
 * **C Toolchain**: `gcc` / `build-essential` (required for CGO SQLite FTS5 compilation)
 * **Kernel & Git Utilities**:
   * `git` (2.25+)
@@ -55,18 +55,30 @@
 #### Debian / Ubuntu:
 ```bash
 sudo apt update
-sudo apt install -y golang-go build-essential git b4
+sudo apt install -y build-essential git b4
+# Ensure Go 1.27+ is installed. If apt provides an older version,
+# install the official Go binary from https://go.dev/dl/ or via snap:
+# sudo snap install go --classic
 ```
 
 #### Fedora / RHEL:
 ```bash
-sudo dnf install -y golang gcc git b4
+sudo dnf install -y gcc git b4 golang
+# Ensure 'go version' >= 1.27
 ```
 
 #### Arch Linux:
 ```bash
 sudo pacman -S go base-devel git b4
 ```
+
+### Key Go Dependencies
+Managed automatically via `go.mod`:
+* `github.com/go-chi/chi/v5` (v5.5.0) — Lightweight HTTP REST router
+* `github.com/mattn/go-sqlite3` (v1.14.52) — SQLite3 engine with FTS5 virtual tables
+* `github.com/jhillyerd/enmime` (v1.3.0) — MIME email parsing and attachment decoding
+* `github.com/emersion/go-imap` (v1.2.1) — IMAP4rev1 client for selective synchronization
+* `github.com/pelletier/go-toml/v2` (v2.4.3) — Strict TOML v1.0 configuration loader
 
 ---
 

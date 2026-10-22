@@ -76,15 +76,15 @@ UndineD decouples the traditional MUA into:
 
 ## **3. Technology Stack & Directory Structure**
 
-* **Language**: Go 1.22+
-* **HTTP Routing**: `github.com/go-chi/chi/v5`
-* **Database**: SQLite 3 with FTS5 virtual tables and WAL mode (`github.com/mattn/go-sqlite3`)
-* **Configuration**: TOML v1.0 (`github.com/pelletier/go-toml/v2`)
-* **Email & MIME Parsing**: `github.com/jhillyerd/enmime` & `net/mail`
+* **Language**: Go 1.27+
+* **HTTP Routing**: `github.com/go-chi/chi/v5` (v5.5.0)
+* **Database**: SQLite 3 with FTS5 virtual tables and WAL mode (`github.com/mattn/go-sqlite3` v1.14.52)
+* **Configuration**: TOML v1.0 (`github.com/pelletier/go-toml/v2` v2.4.3)
+* **Email & MIME Parsing**: `github.com/jhillyerd/enmime` (v1.3.0) & `net/mail`
 * **Protocols**:
-  * Selective IMAP: `github.com/emersion/go-imap/v2`
+  * Selective IMAP: `github.com/emersion/go-imap` (v1.2.1)
   * Strict Plaintext SMTP: Standard `net/smtp` + `crypto/tls`
-  * Model Context Protocol: `github.com/mark3labs/mcp-go`
+  * Model Context Protocol: Native JSON-RPC 2.0 over STDIO
 * **Subprocess Orchestration**: `os/exec` for `b4`, `git`, `agy`, and `$EDITOR`
 
 ### **Directory Layout**
