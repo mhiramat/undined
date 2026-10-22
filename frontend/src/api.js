@@ -507,5 +507,26 @@ export async function collectKnownAddresses() {
   return res.json();
 }
 
+export async function downloadAttachment(messageId, index, filename) {
+  const url = `${BASE_URL}/api/messages/${messageId}/attachments/${index}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to download attachment" }));
+    throw new Error(err.detail || `Failed to download attachment (HTTP ${res.status})`);
+  }
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.style.display = "none";
+  a.href = blobUrl;
+  a.download = filename || `attachment-${index}`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    window.URL.revokeObjectURL(blobUrl);
+    document.body.removeChild(a);
+  }, 100);
+}
+
 
 

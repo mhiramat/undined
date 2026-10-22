@@ -125,6 +125,8 @@ func (s *Server) setupRoutes() {
 		api.Get("/messages/{id}", s.handleGetMessageDetail)
 		api.Get("/messages/{id}/raw-header", s.handleGetMessageRawHeader)
 		api.Get("/messages/{id}/mbox-path", s.handleGetMessageMboxPath)
+		api.Get("/messages/{id}/attachments/{index}", s.handleGetAttachment)
+		api.Get("/messages/{id}/attachments/{index}/{filename}", s.handleGetAttachment)
 		api.Delete("/messages/{id}", s.handleDeleteMessage)
 		api.Post("/messages/{id}/read", s.handleSetMessageRead)
 		api.Post("/messages/{id}/replied", s.handleSetMessageReplied)

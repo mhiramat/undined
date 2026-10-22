@@ -115,3 +115,112 @@ func TestExtractAddresses(t *testing.T) {
 	}
 }
 
+func TestExtractAttachments(t *testing.T) {
+	raw := `From: "Kernel Developer" <dev@example.com>
+To: linux-trace-kernel@vger.kernel.org
+Subject: Test with multiple attachments
+Date: Fri, 24 Oct 2026 10:00:00 +0000
+Message-ID: <test-attachments@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="BOUNDARY_TEST"
+
+--BOUNDARY_TEST
+Content-Type: text/plain; charset=utf-8
+
+Please find the attached patches and logs.
+
+--BOUNDARY_TEST
+Content-Type: text/x-diff; name="0001-fix.patch"
+Content-Disposition: attachment; filename="0001-fix.patch"
+Content-Transfer-Encoding: base64
+
+ZGlmZiAtLWdpdCBhL2Zvby5jIGIvZm9vLmMKLS0tIGEvZm9vLmMKKysrIGIvZm9vLmMKQEAg
+LTEgKzEgQEAKLWZvbwoKK2Jhcgo=
+
+--BOUNDARY_TEST
+Content-Type: text/plain; name="syslog.txt"
+Content-Disposition: attachment; filename*=utf-8''syslog%20report.txt
+Content-Transfer-Encoding: quoted-printable
+
+Error in module X=0D=0AStatus: Failed=0D=0A
+
+--BOUNDARY_TEST
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="../../dangerous/path/exploit.bin"
+Content-Transfer-Encoding: base64
+
+AQIDBAU=
+
+--BOUNDARY_TEST
+Content-Type: image/png; name="diagram.png"
+Content-Disposition: inline; filename="diagram.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+
+--BOUNDARY_TEST--
+`
+
+	attachments, err := ExtractAttachments([]byte(raw))
+	if err != nil {
+		t.Fatalf("ExtractAttachments failed: %v", err)
+	}
+
+	if len(attachments) != 4 {
+		t.Fatalf("expected 4 attachments, got %d", len(attachments))
+	}
+
+	// 1. Base64 patch
+	if attachments[0].FileName != "0001-fix.patch" {
+		t.Errorf("expected 0001-fix.patch, got %s", attachments[0].FileName)
+	}
+	if attachments[0].ContentType != "text/x-diff" {
+		t.Errorf("expected text/x-diff, got %s", attachments[0].ContentType)
+	}
+	if !strings.Contains(string(attachments[0].Payload), "diff --git a/foo.c") {
+		t.Errorf("expected decoded diff content in payload: %s", string(attachments[0].Payload))
+	}
+
+	// 2. Quoted-printable with RFC 2231 encoded filename
+	if attachments[1].FileName != "syslog report.txt" {
+		t.Errorf("expected 'syslog report.txt', got %s", attachments[1].FileName)
+	}
+	if !strings.Contains(string(attachments[1].Payload), "Status: Failed") {
+		t.Errorf("expected decoded syslog content: %s", string(attachments[1].Payload))
+	}
+
+	// 3. Path traversal filename sanitization
+	if attachments[2].FileName != "exploit.bin" {
+		t.Errorf("expected path traversal to be stripped to 'exploit.bin', got %s", attachments[2].FileName)
+	}
+
+	// 4. Inline diagram with filename
+	if attachments[3].FileName != "diagram.png" {
+		t.Errorf("expected 'diagram.png', got %s", attachments[3].FileName)
+	}
+}
+
+func TestSanitizeAttachmentFileName(t *testing.T) {
+	tests := []struct {
+		input       string
+		index       int
+		contentType string
+		expected    string
+	}{
+		{"../../etc/passwd", 0, "text/plain", "passwd"},
+		{`"quoted.patch"`, 1, "text/x-diff", "quoted.patch"},
+		{"\r\nunsafe\n.tar.gz", 2, "application/gzip", "unsafe.tar.gz"},
+		{"", 0, "text/x-diff", "attachment-1.patch"},
+		{"   ", 1, "application/pdf", "attachment-2.pdf"},
+		{"", 2, "application/octet-stream", "attachment-3.bin"},
+	}
+
+	for _, tc := range tests {
+		got := SanitizeAttachmentFileName(tc.input, tc.index, tc.contentType)
+		if got != tc.expected {
+			t.Errorf("SanitizeAttachmentFileName(%q, %d, %q) = %q, expected %q",
+				tc.input, tc.index, tc.contentType, got, tc.expected)
+		}
+	}
+}
+

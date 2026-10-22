@@ -254,10 +254,36 @@ Retrieves full message details, including parsed RFC822 headers, unquoted plain-
       ]
     },
     "raw_headers": "From: dev@kernel.org\nTo: linux-trace-kernel@vger.kernel.org\n...",
+    "attachments": [
+      {
+        "index": 0,
+        "filename": "0001-fix.patch",
+        "content_type": "text/x-diff",
+        "size": 3330
+      }
+    ],
     "lore_url": "https://lore.kernel.org/r/20261015010203.12345-1-dev@kernel.org",
     "reviewed_message": null
   }
   ```
+
+### `GET /api/messages/{message_id_or_db_id}/attachments/{index}`
+Downloads the specified MIME attachment decoded from its transfer encoding (Base64, Quoted-Printable, 7bit/8bit). Also accessible via `GET /api/messages/{message_id_or_db_id}/attachments/{index}/{filename}` for friendly browser saving and tools like `curl -OJ`.
+
+- **Path Parameters**:
+  - `message_id_or_db_id` (string or integer): Message database ID or RFC822 `Message-ID`.
+  - `index` (integer, $\ge 0$): 0-based attachment index.
+  - `filename` (optional, string): Friendly filename in path.
+- **Headers Returned**:
+  - `Content-Type`: MIME content type (e.g., `text/x-diff`, `application/pdf`, `image/png`).
+  - `Content-Disposition`: `attachment; filename="<filename>"; filename*=UTF-8''<encoded>`
+  - `Content-Length`: Size of the decoded attachment in bytes.
+  - `X-Content-Type-Options`: `nosniff`
+  - `Content-Security-Policy`: `default-src 'none'`
+- **Responses**:
+  - `200 OK`: Binary/text payload of the decoded attachment.
+  - `400 Bad Request`: Invalid attachment index.
+  - `404 Not Found`: Message or attachment index not found.
 
 ### `GET /api/messages/{message_id_or_db_id}/raw-header`
 Retrieves the unparsed RFC822 email headers.

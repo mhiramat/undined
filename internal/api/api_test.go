@@ -1236,5 +1236,161 @@ func TestPatchworkInfoEndpoint(t *testing.T) {
 	}
 }
 
+func TestAttachmentsEndpoint(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := ts.Client()
+
+	// 1. Create a folder and save a message with attachments
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	rawEmail := `From: "Kernel Developer" <dev@example.com>
+To: linux-trace-kernel@vger.kernel.org
+Subject: [PATCH] trace: sample with attachments
+Date: Fri, 24 Oct 2026 12:00:00 +0000
+Message-ID: <attach-test-1234@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="ATTACH_BOUND_XYZ"
+
+--ATTACH_BOUND_XYZ
+Content-Type: text/plain; charset=utf-8
+
+Please inspect the attached patch and report.
+
+--ATTACH_BOUND_XYZ
+Content-Type: text/x-diff; name="0001-fix.patch"
+Content-Disposition: attachment; filename="0001-fix.patch"
+Content-Transfer-Encoding: base64
+
+ZGlmZiAtLWdpdCBhL2tlcm5lbC90cmFjZS5jIGIvcmVwb3J0LmMKLS0tIGEvZmlsZQorKysg
+Yi9maWxlCg==
+
+--ATTACH_BOUND_XYZ
+Content-Type: text/plain; name="log.txt"
+Content-Disposition: attachment; filename="log.txt"
+Content-Transfer-Encoding: quoted-printable
+
+Test log content output=0A
+
+--ATTACH_BOUND_XYZ--
+`
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+	filePath, err := store.AddMessage(folder.Name, []byte(rawEmail), "")
+	if err != nil {
+		t.Fatalf("Failed to save message: %v", err)
+	}
+
+	msgID, err := db.IndexEmailFile(folder.ID, filePath)
+	if err != nil {
+		t.Fatalf("Failed to index message: %v", err)
+	}
+
+	// 2. Fetch message detail and verify attachments metadata
+	reqDetail, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d", ts.URL, msgID), nil)
+	reqDetail.Header.Set("Authorization", "Bearer "+token)
+	respDetail, err := client.Do(reqDetail)
+	if err != nil {
+		t.Fatalf("GET /api/messages/:id failed: %v", err)
+	}
+	defer respDetail.Body.Close()
+
+	if respDetail.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respDetail.StatusCode)
+	}
+
+	var detailRes map[string]any
+	if err := json.NewDecoder(respDetail.Body).Decode(&detailRes); err != nil {
+		t.Fatalf("failed to decode detail JSON: %v", err)
+	}
+
+	rawAtts, ok := detailRes["attachments"].([]any)
+	if !ok || len(rawAtts) != 2 {
+		t.Fatalf("expected 2 attachments in detail response, got: %v", detailRes["attachments"])
+	}
+
+	firstAtt := rawAtts[0].(map[string]any)
+	if firstAtt["filename"] != "0001-fix.patch" {
+		t.Errorf("expected filename 0001-fix.patch, got %v", firstAtt["filename"])
+	}
+	if firstAtt["content_type"] != "text/x-diff" {
+		t.Errorf("expected content_type text/x-diff, got %v", firstAtt["content_type"])
+	}
+
+	// 3. Download attachment 0 (Base64 patch)
+	reqDL0, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/0", ts.URL, msgID), nil)
+	reqDL0.Header.Set("Authorization", "Bearer "+token)
+	respDL0, err := client.Do(reqDL0)
+	if err != nil {
+		t.Fatalf("GET attachment 0 failed: %v", err)
+	}
+	defer respDL0.Body.Close()
+
+	if respDL0.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respDL0.StatusCode)
+	}
+
+	dl0Bytes, _ := io.ReadAll(respDL0.Body)
+	if !strings.Contains(string(dl0Bytes), "diff --git a/kernel/trace.c") {
+		t.Errorf("expected decoded patch in downloaded body, got: %s", string(dl0Bytes))
+	}
+	if !strings.Contains(respDL0.Header.Get("Content-Disposition"), "0001-fix.patch") {
+		t.Errorf("unexpected Content-Disposition: %s", respDL0.Header.Get("Content-Disposition"))
+	}
+	if respDL0.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("missing nosniff header")
+	}
+
+	// 4. Download attachment 1 with friendly filename path URL
+	reqDL1, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/1/log.txt", ts.URL, msgID), nil)
+	reqDL1.Header.Set("Authorization", "Bearer "+token)
+	respDL1, err := client.Do(reqDL1)
+	if err != nil {
+		t.Fatalf("GET attachment 1 failed: %v", err)
+	}
+	defer respDL1.Body.Close()
+
+	if respDL1.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", respDL1.StatusCode)
+	}
+	dl1Bytes, _ := io.ReadAll(respDL1.Body)
+	if !strings.Contains(string(dl1Bytes), "Test log content output") {
+		t.Errorf("expected decoded log content, got: %s", string(dl1Bytes))
+	}
+
+	// 5. Out of bounds index
+	reqOOB, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/99", ts.URL, msgID), nil)
+	reqOOB.Header.Set("Authorization", "Bearer "+token)
+	respOOB, err := client.Do(reqOOB)
+	if err != nil {
+		t.Fatalf("GET attachment 99 failed: %v", err)
+	}
+	defer respOOB.Body.Close()
+	if respOOB.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404 for out of bounds attachment, got %d", respOOB.StatusCode)
+	}
+
+	// 6. Invalid non-integer index
+	reqBad, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/invalid", ts.URL, msgID), nil)
+	reqBad.Header.Set("Authorization", "Bearer "+token)
+	respBad, err := client.Do(reqBad)
+	if err != nil {
+		t.Fatalf("GET invalid attachment index failed: %v", err)
+	}
+	defer respBad.Body.Close()
+	if respBad.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for bad index, got %d", respBad.StatusCode)
+	}
+}
+
 
 

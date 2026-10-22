@@ -911,6 +911,110 @@ body.undine-app {
   text-decoration: underline;
 }
 
+/* Viewer Attachments Bar */
+.viewer-attachments-bar {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attachments-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.attachments-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.btn-download-all-attachments {
+  background: var(--bg-tertiary);
+  color: var(--accent-blue-focus);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-download-all-attachments:hover {
+  background: var(--bg-active);
+  border-color: var(--accent-blue);
+  color: #fff;
+}
+
+.btn-download-all-attachments:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attachments-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-main);
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.attachment-chip:hover {
+  background-color: var(--bg-active);
+  border-color: var(--accent-blue);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.attachment-chip .attachment-icon {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.attachment-chip .attachment-filename {
+  font-weight: 500;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip .attachment-filesize {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.attachment-chip .attachment-dl-badge {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.attachment-chip:hover .attachment-dl-badge {
+  opacity: 1;
+}
+
 /* Missing Parent Amber Warning Banner */
 .missing-parent-banner {
   background-color: var(--bg-warning);

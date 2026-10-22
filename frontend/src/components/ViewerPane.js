@@ -3,7 +3,7 @@
  * and the patch diff viewer or plain-text body.
  */
 
-import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchAiReviewStatus, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath } from "../api.js";
+import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchAiReviewStatus, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment } from "../api.js";
 import { store } from "../store.js";
 import { getTags } from "../tags.js";
 import { renderSideDiff } from "./SideDiff.js";
@@ -270,6 +270,34 @@ export function renderViewerPane(container) {
     const toFormatted = formatRecipientList(m.to_addr, headerMode === "full");
     const ccFormatted = formatRecipientList(m.cc_addr, headerMode === "full");
 
+    const attachments = detail.attachments || (detail.message && detail.message.attachments) || [];
+    let attachmentsHtml = "";
+    if (attachments.length > 0) {
+      attachmentsHtml = `
+        <!-- Attachments Bar -->
+        <div class="viewer-attachments-bar" id="viewer-attachments-bar">
+          <div class="attachments-header-row">
+            <span class="attachments-title">📎 Attachments (${attachments.length})</span>
+            ${attachments.length >= 2 ? `
+              <button type="button" class="btn-download-all-attachments" id="btn-download-all-attachments" title="Download all ${attachments.length} attachments">
+                ⬇️ Download all (${attachments.length})
+              </button>
+            ` : ""}
+          </div>
+          <div class="attachments-chips">
+            ${attachments.map((att) => `
+              <a href="/api/messages/${m.id}/attachments/${att.index}/${encodeURIComponent(att.filename)}" download="${escapeAttr(att.filename)}" class="attachment-chip" data-att-index="${att.index}" data-att-filename="${escapeAttr(att.filename)}" title="Download ${escapeAttr(att.filename)} (${formatBytes(att.size)})">
+                <span class="attachment-icon">${getAttachmentIcon(att.filename, att.content_type)}</span>
+                <span class="attachment-filename">${escapeHtml(att.filename)}</span>
+                <span class="attachment-filesize">${formatBytes(att.size)}</span>
+                <span class="attachment-dl-badge">⬇️</span>
+              </a>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+
     let html = "";
     if (isAiReview) {
       html = `
@@ -287,6 +315,7 @@ export function renderViewerPane(container) {
           <span class="meta-label">Date:</span>
           <span class="meta-val">${escapeHtml(m.date || "")}</span>
         </div>
+        ${attachmentsHtml}
       </div>
       `;
     } else {
@@ -372,6 +401,7 @@ export function renderViewerPane(container) {
         </div>
         <!-- Patchwork Metadata & Delegate Status Row -->
         <div class="patchwork-bar" id="patchwork-bar" style="display: none;"></div>
+        ${attachmentsHtml}
       </div>
       `;
     }
@@ -625,6 +655,46 @@ export function renderViewerPane(container) {
             console.error("Failed to reload message detail after apply:", e);
           }
         });
+      });
+    }
+
+    // Event: Download individual attachment
+    container.querySelectorAll(".attachment-chip").forEach((chip) => {
+      chip.addEventListener("click", async (e) => {
+        // Allow middle click or ctrl/cmd click to download via standard browser link handling
+        if (e.ctrlKey || e.metaKey || e.button === 1) return;
+        e.preventDefault();
+        const attIndex = chip.getAttribute("data-att-index");
+        const filename = chip.getAttribute("data-att-filename");
+        try {
+          showToast(`Downloading ${filename}...`, "info");
+          await downloadAttachment(m.id, attIndex, filename);
+        } catch (err) {
+          showToast(`Download failed: ${err.message}`, "error");
+        }
+      });
+    });
+
+    // Event: Download all attachments
+    const dlAllBtn = container.querySelector("#btn-download-all-attachments");
+    if (dlAllBtn) {
+      dlAllBtn.addEventListener("click", async () => {
+        dlAllBtn.disabled = true;
+        showToast(`Downloading all ${attachments.length} attachments...`, "info");
+        try {
+          for (let i = 0; i < attachments.length; i++) {
+            const att = attachments[i];
+            await downloadAttachment(m.id, att.index, att.filename);
+            if (i < attachments.length - 1) {
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          }
+          showToast(`Downloaded all ${attachments.length} attachments!`, "success");
+        } catch (err) {
+          showToast(`Download error: ${err.message}`, "error");
+        } finally {
+          dlAllBtn.disabled = false;
+        }
       });
     }
 
@@ -1802,6 +1872,39 @@ function escapeHtml(str) {
 function escapeAttr(str) {
   if (!str) return "";
   return String(str).replace(/"/g, "&quot;");
+}
+
+function formatBytes(bytes) {
+  if (bytes == null || isNaN(bytes) || bytes < 0) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(1)} MB`;
+}
+
+function getAttachmentIcon(filename, contentType) {
+  const fn = (filename || "").toLowerCase();
+  const ct = (contentType || "").toLowerCase();
+  if (fn.endsWith(".patch") || fn.endsWith(".diff") || ct === "text/x-patch" || ct === "text/x-diff") {
+    return "📄";
+  }
+  if (fn.endsWith(".tar.gz") || fn.endsWith(".tgz") || fn.endsWith(".zip") || fn.endsWith(".gz") || fn.endsWith(".xz") || fn.endsWith(".bz2")) {
+    return "📦";
+  }
+  if (ct.startsWith("image/") || fn.endsWith(".png") || fn.endsWith(".jpg") || fn.endsWith(".jpeg") || fn.endsWith(".gif") || fn.endsWith(".svg")) {
+    return "🖼️";
+  }
+  if (fn.endsWith(".c") || fn.endsWith(".h") || fn.endsWith(".py") || fn.endsWith(".sh") || fn.endsWith(".go") || fn.endsWith(".rs") || fn.endsWith(".json")) {
+    return "💻";
+  }
+  if (fn.endsWith(".pdf") || ct === "application/pdf") {
+    return "📑";
+  }
+  if (fn.endsWith(".txt") || fn.endsWith(".log") || ct === "text/plain") {
+    return "📝";
+  }
+  return "📎";
 }
 
 export function openRawHeaderModal(detail) {

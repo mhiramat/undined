@@ -201,8 +201,20 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// Extract attachments if message has a backing file
+	attachments := []*parser.Attachment{}
+	if msg.FilePath != "" {
+		if rawBytes, err := os.ReadFile(msg.FilePath); err == nil {
+			if atts, err := parser.ExtractAttachments(rawBytes); err == nil && len(atts) > 0 {
+				attachments = atts
+			}
+		}
+	}
+	msg.Attachments = attachments
+
 	res := map[string]any{
 		"message":           msg,
+		"attachments":       attachments,
 		"patch":             parsedDiff,
 		"parsed_diff":       parsedDiff,
 		"comments":          comments,
@@ -217,6 +229,76 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
+}
+
+func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
+	idParam := chi.URLParam(r, "id")
+	indexParam := chi.URLParam(r, "index")
+
+	index, err := strconv.Atoi(indexParam)
+	if err != nil || index < 0 {
+		http.Error(w, "Invalid attachment index", http.StatusBadRequest)
+		return
+	}
+
+	msg, err := s.resolveMessage(idParam)
+	if err != nil || msg == nil {
+		http.Error(w, "Message not found", http.StatusNotFound)
+		return
+	}
+
+	// Auto-hydrate if file is missing but IMAP UID is known
+	if msg.FilePath == "" && msg.IMAPUID != nil && s.IMAP != nil {
+		folder, fErr := s.DB.GetFolderByID(msg.FolderID)
+		if fErr == nil && folder != nil {
+			hydrated, hErr := s.IMAP.FetchAndHydrateMessage(folder.Name, msg.FolderID, *msg.IMAPUID, msg.ID)
+			if hErr == nil && hydrated != nil {
+				msg = hydrated
+			}
+		}
+	}
+
+	if msg.FilePath == "" {
+		http.Error(w, "Message file not available on disk", http.StatusNotFound)
+		return
+	}
+
+	data, err := os.ReadFile(msg.FilePath)
+	if err != nil {
+		http.Error(w, "Failed to read message file from disk", http.StatusInternalServerError)
+		return
+	}
+
+	attachments, err := parser.ExtractAttachments(data)
+	if err != nil {
+		http.Error(w, "Failed to parse message MIME structure", http.StatusInternalServerError)
+		return
+	}
+
+	if index >= len(attachments) {
+		http.Error(w, "Attachment index out of bounds", http.StatusNotFound)
+		return
+	}
+
+	att := attachments[index]
+
+	// Format safe Content-Disposition with RFC 5987 / RFC 6266 filename*
+	filename := parser.SanitizeAttachmentFileName(att.FileName, att.Index, att.ContentType)
+	encodedFilename := url.PathEscape(filename)
+	disposition := fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, filename, encodedFilename)
+
+	contentType := att.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", disposition)
+	w.Header().Set("Content-Length", strconv.Itoa(len(att.Payload)))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(att.Payload)
 }
 
 func (s *Server) handleGetMessageRawHeader(w http.ResponseWriter, r *http.Request) {

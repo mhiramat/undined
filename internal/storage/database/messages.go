@@ -47,6 +47,7 @@ type Message struct {
 	HasChildren  bool   `json:"has_children"`
 	IsAIReview   bool   `json:"is_ai_review,omitempty"`
 	ReviewedMessage *ReviewedMessage `json:"reviewed_message,omitempty"`
+	Attachments     []*parser.Attachment `json:"attachments,omitempty"`
 }
 
 // SearchResult represents full-text search match from FTS5.

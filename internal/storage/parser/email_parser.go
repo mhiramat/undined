@@ -3,8 +3,10 @@ package parser
 
 import (
 	"bytes"
+	"fmt"
 	"mime"
 	"net/mail"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -74,22 +76,32 @@ func DetectPatch(text string) bool {
 	return false
 }
 
+// Attachment represents extracted MIME attachment metadata and payload.
+type Attachment struct {
+	Index       int    `json:"index"`
+	FileName    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	Size        int64  `json:"size"`
+	Payload     []byte `json:"-"`
+}
+
 // ParsedEmail represents extracted email metadata and plain-text content.
 type ParsedEmail struct {
-	MessageID        string    `json:"message_id"`
-	Subject          string    `json:"subject"`
-	FromName         string    `json:"from_name"`
-	FromAddr         string    `json:"from_addr"`
-	ToAddr           string    `json:"to_addr"`
-	CcAddr           string    `json:"cc_addr"`
-	Date             string    `json:"date"`
-	EpochTimestamp   int64     `json:"epoch_timestamp"`
-	InReplyTo        string    `json:"in_reply_to"`
-	ReferencesHeader string    `json:"references_header"`
-	BodyPlain        string    `json:"body_plain"`
-	RawHeaders       string    `json:"raw_headers"`
-	IsPatch          bool      `json:"is_patch"`
-	DateParsed       time.Time `json:"-"`
+	MessageID        string        `json:"message_id"`
+	Subject          string        `json:"subject"`
+	FromName         string        `json:"from_name"`
+	FromAddr         string        `json:"from_addr"`
+	ToAddr           string        `json:"to_addr"`
+	CcAddr           string        `json:"cc_addr"`
+	Date             string        `json:"date"`
+	EpochTimestamp   int64         `json:"epoch_timestamp"`
+	InReplyTo        string        `json:"in_reply_to"`
+	ReferencesHeader string        `json:"references_header"`
+	BodyPlain        string        `json:"body_plain"`
+	RawHeaders       string        `json:"raw_headers"`
+	IsPatch          bool          `json:"is_patch"`
+	Attachments      []*Attachment `json:"attachments,omitempty"`
+	DateParsed       time.Time     `json:"-"`
 }
 
 func decodeHeader(hdr string) string {
@@ -156,8 +168,116 @@ func ParseEmail(raw []byte) (*ParsedEmail, error) {
 	}
 
 	parsed.IsPatch = DetectPatch(parsed.BodyPlain)
+	parsed.Attachments = ExtractAttachmentsFromEnvelope(env)
 
 	return parsed, nil
+}
+
+// SanitizeAttachmentFileName strips dangerous characters and path traversal components,
+// providing a clean fallback name if empty.
+func SanitizeAttachmentFileName(name string, index int, contentType string) string {
+	clean := strings.TrimSpace(name)
+	clean = filepath.Base(clean)
+	clean = strings.ReplaceAll(clean, "\r", "")
+	clean = strings.ReplaceAll(clean, "\n", "")
+	clean = strings.ReplaceAll(clean, `"`, "")
+	clean = strings.ReplaceAll(clean, "/", "")
+	clean = strings.ReplaceAll(clean, `\`, "")
+	clean = strings.TrimSpace(clean)
+
+	if clean == "." || clean == "" {
+		ext := ""
+		switch strings.ToLower(contentType) {
+		case "text/x-diff", "text/x-patch":
+			ext = ".patch"
+		case "text/plain":
+			ext = ".txt"
+		case "application/pdf":
+			ext = ".pdf"
+		case "image/png":
+			ext = ".png"
+		case "image/jpeg":
+			ext = ".jpg"
+		case "application/gzip", "application/x-gzip":
+			ext = ".tar.gz"
+		case "application/zip":
+			ext = ".zip"
+		default:
+			ext = ".bin"
+		}
+		clean = fmt.Sprintf("attachment-%d%s", index+1, ext)
+	}
+	return clean
+}
+
+// ExtractAttachments decodes and extracts all MIME attachments from raw RFC 5322 email bytes.
+func ExtractAttachments(raw []byte) ([]*Attachment, error) {
+	env, err := enmime.ReadEnvelope(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	return ExtractAttachmentsFromEnvelope(env), nil
+}
+
+// ExtractAttachmentsFromEnvelope collects attachments from an enmime.Envelope.
+func ExtractAttachmentsFromEnvelope(env *enmime.Envelope) []*Attachment {
+	if env == nil {
+		return []*Attachment{}
+	}
+
+	var results []*Attachment
+	seenPayloads := make(map[string]bool)
+
+	addPart := func(p *enmime.Part) {
+		if p == nil || len(p.Content) == 0 {
+			return
+		}
+		hashKey := fmt.Sprintf("%s:%d:%s", p.FileName, len(p.Content), p.ContentType)
+		if seenPayloads[hashKey] {
+			return
+		}
+		seenPayloads[hashKey] = true
+
+		cType := strings.ToLower(strings.TrimSpace(p.ContentType))
+		if cType == "" {
+			cType = "application/octet-stream"
+		}
+
+		idx := len(results)
+		fileName := SanitizeAttachmentFileName(p.FileName, idx, cType)
+
+		results = append(results, &Attachment{
+			Index:       idx,
+			FileName:    fileName,
+			ContentType: cType,
+			Size:        int64(len(p.Content)),
+			Payload:     p.Content,
+		})
+	}
+
+	// 1. Standard Attachments
+	for _, p := range env.Attachments {
+		addPart(p)
+	}
+
+	// 2. Inline attachments (patches, images, logs with filename or non-plain content)
+	for _, p := range env.Inlines {
+		if p.FileName != "" || (!strings.HasPrefix(p.ContentType, "text/plain") && !strings.HasPrefix(p.ContentType, "text/html")) {
+			addPart(p)
+		}
+	}
+
+	// 3. Other parts
+	for _, p := range env.OtherParts {
+		if p.FileName != "" || (!strings.HasPrefix(p.ContentType, "text/plain") && !strings.HasPrefix(p.ContentType, "text/html")) {
+			addPart(p)
+		}
+	}
+
+	if results == nil {
+		results = []*Attachment{}
+	}
+	return results
 }
 
 func parseBasicEmail(raw []byte, rawHeaders string) (*ParsedEmail, error) {
@@ -198,6 +318,7 @@ func parseBasicEmail(raw []byte, rawHeaders string) (*ParsedEmail, error) {
 	_, _ = buf.ReadFrom(msg.Body)
 	parsed.BodyPlain = buf.String()
 	parsed.IsPatch = DetectPatch(parsed.BodyPlain)
+	parsed.Attachments = []*Attachment{}
 
 	return parsed, nil
 }
