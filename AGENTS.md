@@ -17,3 +17,9 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 ## 4. Process and Command Safety
 - **Input Sanitization**: Strictly sanitize user-controlled parameters (Message-IDs, Git refs, target coordinates) before passing them to subprocesses or queries.
 - **Configurable Tool Execution**: For external review agents or runners, allow user-configured wrapper scripts rather than hardcoding raw CLI commands.
+
+## 5. Patch Integrity & Non-ASCII Handling Policy
+- **No Silent Normalization**: Never silently convert or sanitize non-ASCII characters (e.g., `\u00a0` NBSP, `\u2002` en-space) in patch diffs into ASCII whitespace.
+- **Mark as Corrupted**: Treat any email with non-ASCII characters in its diff lines as corrupted (`is_corrupted = true`).
+- **Reject SideDiff**: Do not render corrupted patches in the SideDiff dual-column view. Display them as plain text with non-ASCII characters visually escaped (e.g. `<U+00A0>`) and warn the user.
+- **Reference**: See `docs/POLICY_PATCH_INTEGRITY.md` for full background, security rationale, and presentation rules.

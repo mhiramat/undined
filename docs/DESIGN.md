@@ -17,6 +17,7 @@ UndineD decouples the traditional MUA into:
 ### **1.2 Kernel Development Principles**
 
 * **Strict Plain-Text Fidelity**: Zero HTML generation. No multipart/alternative, no format=flowed, no line wrapping or whitespace mangling. Tab stops strictly respect 8-character alignments (`tab-size: 8`). Outgoing mail enforces 8-bit UTF-8 plaintext with `X-Mailer: UndineD 0.1`.
+* **Patch Integrity & Non-ASCII Rejection**: Patches containing non-ASCII characters in diff lines are treated as corrupted. Rather than silently normalizing characters (which threatens kernel codebase hygiene and compiler safety), UndineD rejects SideDiff, alerts the reviewer, and displays raw text with non-ASCII characters visually escaped. See [POLICY_PATCH_INTEGRITY.md](POLICY_PATCH_INTEGRITY.md).
 * **Selective IMAP Sync & Lightweight Header Fetching**: Never poll bloated LKML archival folders from IMAP. Synchronize only designated personal/direct labels. Fetch fast header summaries to render mail lists instantly, downloading full RFC822 bodies on-demand.
 * **On-Demand Hydration via b4**: Dynamically fetch missing parent threads and patch series from `lore.kernel.org` using `b4 mbox` whenever a solitary reply or patch arrives.
 * **Patchwork Management**: Full integration with `patchwork.kernel.org` (REST API v1.4) to view patch review status, assign delegates, check CI test results, and download delegated patches directly into the local `TODO` mailbox.
