@@ -23,3 +23,13 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 - **Mark as Corrupted**: Treat any email with non-ASCII characters in its diff lines as corrupted (`is_corrupted = true`).
 - **Reject SideDiff**: Do not render corrupted patches in the SideDiff dual-column view. Display them as plain text with non-ASCII characters visually escaped (e.g. `<U+00A0>`) and warn the user.
 - **Reference**: See `docs/POLICY_PATCH_INTEGRITY.md` for full background, security rationale, and presentation rules.
+
+## 6. Reply Quoting & Body Retention Invariant
+- **Full Quoting on Zero Comments**: When composing a reply or generating review quotes without inline comments, always quote the entire body of the original email with standard RFC `> ` quoting prefixes. Never emit an empty or truncated quote.
+
+## 7. API Serialization & Nil-Slice Safety
+- **No Null Arrays in JSON**: Slices representing collections (such as `paired_rows`, `unified_lines`, `hunks`, `attachments`, `comments`) must always be initialized to empty slices (`make(..., 0)` or `[]*T{}`) instead of `nil`. This guarantees they serialize as `[]` rather than `null`, preventing frontend iteration exceptions (`TypeError: ... is not iterable`).
+
+## 8. MIME Attachment Security & Download Invariants
+- **Filename Sanitization**: Always sanitize attachment filenames with `filepath.Base()` and strip directory traversal components (`../`), control characters, and quotes.
+- **Secure Download Headers**: Attachment download endpoints must enforce `Content-Disposition: attachment; filename="..."; filename*=UTF-8''...` along with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`.

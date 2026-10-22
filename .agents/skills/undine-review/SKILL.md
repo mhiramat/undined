@@ -217,3 +217,8 @@ When authoring comments for kernel developers, adhere to canonical LKML conventi
    - Follow kernel style guide (8-column tab indentation, 80-100 column line length, no C99 comments `//` in legacy subsystems).
    - Keep comments concise, polite, and actionable.
    - Quote specific function names and variable identifiers clearly.
+
+5. **Patch Integrity & Non-ASCII Corruption**:
+   - Check if the target email is marked as corrupted (`is_corrupted: true`) or contains non-ASCII characters (e.g. `\u00a0` NBSP, `\u2002` en-space) in diff lines.
+   - If corrupted, do not approve or attempt line-by-line review of broken diff hunks.
+   - Post an overall review comment advising the author that the patch was mangled by their mail client and requesting a resend via `git send-email` (citing LKML guidelines and `docs/POLICY_PATCH_INTEGRITY.md`).
