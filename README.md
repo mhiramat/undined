@@ -42,7 +42,7 @@
 ## 2. Prerequisites & System Requirements
 
 * **Operating System**: Linux (x86_64 or aarch64; Debian, Ubuntu, Fedora, Arch, etc.)
-* **Go Compiler**: Go 1.22 or newer (tested on Go 1.22.2)
+* **Go Compiler**: Go 1.22 or newer (tested on Go 1.22.2 and 1.27.3)
 * **C Toolchain**: `gcc` / `build-essential` (required for CGO SQLite FTS5 compilation)
 * **Kernel & Git Utilities**:
   * `git` (2.25+)
