@@ -113,6 +113,29 @@ func TestSecurityMiddlewareAndAuth(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected 403 Forbidden for bad Origin, got %d", resp.StatusCode)
 	}
+
+	// 5. CSRF Referer rejection when Origin header is omitted
+	req, _ = http.NewRequest("POST", ts.URL+"/api/composer/preview-quote", strings.NewReader("{}"))
+	req.Header.Set("Referer", "http://evil-site.com/attack.html")
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected 403 Forbidden for bad Referer without Origin, got %d", resp.StatusCode)
+	}
+
+	// 6. Cookie-authenticated POST without Origin or Referer should be rejected (403)
+	req, _ = http.NewRequest("POST", ts.URL+"/api/composer/preview-quote", strings.NewReader("{}"))
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("Request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("Expected 403 Forbidden for cookie-authenticated POST missing Origin and Referer, got %d", resp.StatusCode)
+	}
 }
 
 func TestIndexAndLoginFlow(t *testing.T) {

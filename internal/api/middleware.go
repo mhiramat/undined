@@ -38,9 +38,19 @@ func (s *Server) SecurityMiddleware(next http.Handler) http.Handler {
 		if r.Method == http.MethodPost || r.Method == http.MethodPut ||
 			r.Method == http.MethodDelete || r.Method == http.MethodPatch {
 			origin := r.Header.Get("Origin")
-			if origin != "" && !s.Security.ValidateOrigin(r.Method, origin, r.Header.Get("Referer")) {
+			referer := r.Header.Get("Referer")
+			if !s.Security.ValidateOrigin(r.Method, origin, referer) {
 				http.Error(w, "Access denied: Cross-origin requests are blocked.", http.StatusForbidden)
 				return
+			}
+			// If neither Origin nor Referer is present on an API mutation, require
+			// explicit Bearer token authentication (disallow cookie-only or query-token mutations without Origin/Referer).
+			if !isExempt && origin == "" && referer == "" {
+				authHdr := r.Header.Get("Authorization")
+				if !strings.HasPrefix(strings.ToLower(authHdr), "bearer ") {
+					http.Error(w, "Access denied: Missing Origin/Referer header for cookie-authenticated mutation.", http.StatusForbidden)
+					return
+				}
 			}
 		}
 
@@ -150,10 +160,7 @@ func (s *Server) AccessLogMiddleware(next http.Handler) http.Handler {
 		}
 
 		clientIP := r.RemoteAddr
-		if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-			parts := strings.Split(forwarded, ",")
-			clientIP = strings.TrimSpace(parts[0])
-		} else if host, _, err := net.SplitHostPort(clientIP); err == nil {
+		if host, _, err := net.SplitHostPort(clientIP); err == nil {
 			clientIP = host
 		}
 

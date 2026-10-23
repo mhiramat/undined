@@ -362,6 +362,7 @@ func (s *Server) handleGetMessageMboxPath(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"mbox_path": msg.FilePath,
+		"file_path": msg.FilePath,
 	})
 }
 
@@ -539,24 +540,44 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 
 	var newFlags string
 	if body.Action != "" && body.Tag != nil {
-		// Legacy action support ("set", "toggle", "clear")
-		tagVal := *body.Tag
-		currentFlags := msg.Flags
+		// Legacy action support ("set", "toggle", "clear") using exact token matching
+		tagVal := strings.TrimSpace(*body.Tag)
+		hasToken := false
+		for _, tok := range currentTokens {
+			if tok == tagVal {
+				hasToken = true
+				break
+			}
+		}
 		switch body.Action {
 		case "set":
-			if !strings.Contains(currentFlags, tagVal) {
-				newFlags = strings.TrimSpace(currentFlags + " " + tagVal)
+			if !hasToken && tagVal != "" {
+				newFlags = strings.Join(append(currentTokens, tagVal), " ")
 			} else {
-				newFlags = currentFlags
+				newFlags = strings.Join(currentTokens, " ")
 			}
 		case "toggle":
-			if strings.Contains(currentFlags, tagVal) {
-				newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, tagVal, ""))
+			if hasToken {
+				var filtered []string
+				for _, tok := range currentTokens {
+					if tok != tagVal {
+						filtered = append(filtered, tok)
+					}
+				}
+				newFlags = strings.Join(filtered, " ")
+			} else if tagVal != "" {
+				newFlags = strings.Join(append(currentTokens, tagVal), " ")
 			} else {
-				newFlags = strings.TrimSpace(currentFlags + " " + tagVal)
+				newFlags = strings.Join(currentTokens, " ")
 			}
 		case "clear":
-			newFlags = strings.TrimSpace(strings.ReplaceAll(currentFlags, tagVal, ""))
+			var filtered []string
+			for _, tok := range currentTokens {
+				if tok != tagVal {
+					filtered = append(filtered, tok)
+				}
+			}
+			newFlags = strings.Join(filtered, " ")
 		}
 	} else {
 		// Standard UndineD set tag logic: replace existing recognized tag with new tag
