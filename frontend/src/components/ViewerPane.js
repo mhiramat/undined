@@ -883,8 +883,9 @@ export function renderViewerPane(container) {
       if (msgId) {
         try {
           const res = await fetchMessageMboxPath(msgId);
-          if (res?.file_path) {
-            targetPath = res.file_path;
+          const resolvedPath = res?.mbox_path || res?.file_path;
+          if (resolvedPath) {
+            targetPath = resolvedPath;
             if (msgObj) msgObj.file_path = targetPath;
             if (copyMboxPathBtn) {
               copyMboxPathBtn.title = `Copy mbox path to clipboard: ${targetPath}`;
@@ -1033,7 +1034,7 @@ export function renderViewerPane(container) {
             const isSelected = m.tag_key?.toLowerCase() === key.toLowerCase() ? "✓" : "";
             itemsHtml += `
               <button type="button" class="header-tag-item" data-tag-key="${escapeHtml(key)}">
-                <span class="tag-color-dot" style="background-color: ${val.color};"></span>
+                <span class="tag-color-dot" style="background-color: ${escapeAttr(val.color)};"></span>
                 <span>${escapeHtml(val.tag)}</span>
                 ${shortcutHint ? `<span style="margin-left: auto; color: var(--text-muted); font-size: 10px;">${shortcutHint}</span>` : ""}
                 ${isSelected ? `<span style="color: var(--accent-blue); font-weight: bold; margin-left: 4px;">✓</span>` : ""}

@@ -253,7 +253,7 @@ export function renderSummaryPane(container) {
           ? `<span class="thread-prefix">${escapeHtml(m.thread_prefix)}</span>`
           : (!isAiReview && m.in_reply_to && !threaded ? `<span style="color: #64748b; margin-right: 4px;">↳</span>` : "");
 
-        const tagColor = m.tag_color || "";
+        const tagColor = escapeHtml(m.tag_color || "");
         const tagName = m.tag_name || m.tag_key || "";
         const tagBadgeHtml = tagName
           ? `<span class="summary-tag-badge" style="color: ${tagColor || "inherit"}; border-color: ${tagColor || "currentColor"};">${escapeHtml(tagName)}</span>`
