@@ -85,11 +85,11 @@ export class UndineCommentController {
     let docUri: vscode.Uri;
     if (filePath.toUpperCase() === "DESCRIPTION") {
       docUri = vscode.Uri.parse(
-        `${PatchContentProvider.SCHEME}://${encodeURIComponent(cleanId)}/DESCRIPTION`
+        `${PatchContentProvider.SCHEME}://${encodeURIComponent(cleanId)}/DESCRIPTION?msgid=${encodeURIComponent(cleanId)}`
       );
     } else {
       docUri = vscode.Uri.parse(
-        `${PatchContentProvider.SCHEME}://${encodeURIComponent(cleanId)}/b/${filePath}`
+        `${PatchContentProvider.SCHEME}://${encodeURIComponent(cleanId)}/b/${filePath}?msgid=${encodeURIComponent(cleanId)}`
       );
     }
 
@@ -109,10 +109,15 @@ export class UndineCommentController {
     thread.comments = [...thread.comments, undineComment];
   }
 
+  private extractMsgIdFromUri(uri: vscode.Uri): string {
+    const queryParams = new URLSearchParams(uri.query || "");
+    return queryParams.get("msgid") || decodeURIComponent(uri.authority);
+  }
+
   private async handleCreateComment(reply: vscode.CommentReply): Promise<void> {
     const thread = reply.thread;
     const uri = thread.uri;
-    const cleanId = uri.authority;
+    const cleanId = this.extractMsgIdFromUri(uri);
     const pathParts = uri.path.replace(/^\/+/, "").split("/");
 
     let filePath = "DESCRIPTION";
@@ -142,7 +147,7 @@ export class UndineCommentController {
 
   private async handleDeleteComment(comment: UndineComment): Promise<void> {
     const thread = comment.parentThread;
-    const cleanId = thread.uri.authority;
+    const cleanId = this.extractMsgIdFromUri(thread.uri);
 
     if (comment.id != null) {
       try {

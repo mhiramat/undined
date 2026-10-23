@@ -218,7 +218,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       missingParentHtml = `
         <div class="warning-banner">
           <span>⚠️ Parent email missing from local store.</span>
-          <button class="btn btn-warning btn-sm" onclick="sendMessage('importB4')">Hydrate via b4</button>
+          <button class="btn btn-warning btn-sm" data-command="importB4">Hydrate via b4</button>
         </div>
       `;
     }
@@ -244,7 +244,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
               <span class="field-value"><code>&lt;${this.escapeHtml(revCleanId)}&gt;</code></span>
             </div>` : ""}
             <div style="margin-top: 6px;">
-              <button class="btn btn-secondary btn-sm" onclick="selectReviewedMessage(${rev.id})">🔍 Inspect Reviewed Patch</button>
+              <button class="btn btn-secondary btn-sm" data-reviewed-id="${Number(rev.id) || 0}">🔍 Inspect Reviewed Patch</button>
             </div>
           </div>
         </div>
@@ -260,7 +260,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       patchworkHtml = `
         <div class="patchwork-card">
           <div class="patchwork-header">
-            <span><strong>Patchwork:</strong> #${pw.id} · ${this.escapeHtml(pw.state || "new")}</span>
+            <span><strong>Patchwork:</strong> #${Number(pw.id) || 0} · ${this.escapeHtml(pw.state || "new")}</span>
             ${checkBadge}
           </div>
           <div class="patchwork-body">
@@ -270,7 +270,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
             </div>
             ${pw.id ? `
               <div style="margin-top: 4px;">
-                <button class="btn btn-secondary btn-sm" onclick="delegateToMe(${pw.id})">Delegate to Me</button>
+                <button class="btn btn-secondary btn-sm" data-delegate-id="${Number(pw.id) || 0}">Delegate to Me</button>
               </div>
             ` : ""}
           </div>
@@ -285,7 +285,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       const fileButtons = files
         .map((f) => {
           const fn = f.new_path || f.old_path;
-          return `<button class="btn-file" onclick="openFileDiff('${this.escapeHtml(fn)}')">📄 ${this.escapeHtml(fn)}</button>`;
+          return `<button class="btn-file" data-file="${this.escapeHtml(fn)}">📄 ${this.escapeHtml(fn)}</button>`;
         })
         .join("");
 
@@ -350,15 +350,15 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
         <span class="field-label">Msg-ID:</span>
         <span class="field-value">
           <code>&lt;${this.escapeHtml(cleanMsgId)}&gt;</code>
-          <a href="#" class="lore-link" onclick="openLore('${loreUrl}')" title="Open in lore.kernel.org">[lore ↗]</a>
-          <button class="btn-icon" onclick="copyText('&lt;${this.escapeHtml(cleanMsgId)}&gt;')" title="Copy Message-ID">📋</button>
+          <a href="#" class="lore-link" data-lore-url="${this.escapeHtml(loreUrl)}" title="Open in lore.kernel.org">[lore ↗]</a>
+          <button class="btn-icon" data-copy-text="&lt;${this.escapeHtml(cleanMsgId)}&gt;" title="Copy Message-ID">📋</button>
         </span>
       </div>
       ` : `
       <div class="field-row">
         <span class="field-label">ID:</span>
         <span class="field-value">
-          <code>Local #${m.id}</code>
+          <code>Local #${Number(m.id) || 0}</code>
         </span>
       </div>
       `}
@@ -370,38 +370,38 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 
     <div class="actions-container">
       <div class="actions-row">
-        ${m.is_patch && this._currentDetail.parsed_diff?.files?.length ? '<button class="btn btn-primary" onclick="sendMessage(\'openDiff\')">🔍 View Diff</button>' : ""}
-        <button class="btn btn-primary" onclick="sendMessage('openDescription')">
+        ${m.is_patch && this._currentDetail.parsed_diff?.files?.length ? '<button class="btn btn-primary" data-command="openDiff">🔍 View Diff</button>' : ""}
+        <button class="btn btn-primary" data-command="openDescription">
           ${m.is_patch ? "📝 Description" : (isAiReview ? "📄 View Review Report" : "📄 View Body")}
         </button>
       </div>
       <div class="actions-row">
-        ${m.is_patch ? '<button class="btn btn-primary" onclick="sendMessage(\'applyPatch\')">📥 Apply (b4 am)</button>' : ""}
-        <button class="btn btn-secondary" onclick="sendMessage('generateReply')">💬 Compose LKML Reply</button>
+        ${m.is_patch ? '<button class="btn btn-primary" data-command="applyPatch">📥 Apply (b4 am)</button>' : ""}
+        <button class="btn btn-secondary" data-command="generateReply">💬 Compose LKML Reply</button>
       </div>
     </div>
   </div>
 
   <script>
     const vscode = acquireVsCodeApi();
-    function sendMessage(command) {
-      vscode.postMessage({ command });
-    }
-    function selectReviewedMessage(id) {
-      vscode.postMessage({ command: 'selectReviewedMessage', id });
-    }
-    function openFileDiff(file) {
-      vscode.postMessage({ command: 'openDiff', file });
-    }
-    function delegateToMe(patchId) {
-      vscode.postMessage({ command: 'delegateToMe', patchId });
-    }
-    function openLore(url) {
-      vscode.postMessage({ command: 'openLore', url });
-    }
-    function copyText(text) {
-      vscode.postMessage({ command: 'copyText', text });
-    }
+    document.addEventListener('click', (e) => {
+      const target = e.target.closest('[data-command],[data-reviewed-id],[data-file],[data-delegate-id],[data-lore-url],[data-copy-text]');
+      if (!target) return;
+      if (target.dataset.command) {
+        vscode.postMessage({ command: target.dataset.command });
+      } else if (target.dataset.reviewedId) {
+        vscode.postMessage({ command: 'selectReviewedMessage', id: Number(target.dataset.reviewedId) });
+      } else if (target.dataset.file) {
+        vscode.postMessage({ command: 'openDiff', file: target.dataset.file });
+      } else if (target.dataset.delegateId) {
+        vscode.postMessage({ command: 'delegateToMe', patchId: Number(target.dataset.delegateId) });
+      } else if (target.dataset.loreUrl) {
+        e.preventDefault();
+        vscode.postMessage({ command: 'openLore', url: target.dataset.loreUrl });
+      } else if (target.dataset.copyText) {
+        vscode.postMessage({ command: 'copyText', text: target.dataset.copyText });
+      }
+    });
   </script>
 </body>
 </html>`;

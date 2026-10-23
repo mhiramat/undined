@@ -70,10 +70,10 @@ export function registerViewCommands(
           }
 
           const leftUri = vscode.Uri.parse(
-            `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/a/${targetFile}`
+            `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/a/${targetFile}?msgid=${encodeURIComponent(targetKey)}`
           );
           const rightUri = vscode.Uri.parse(
-            `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/b/${targetFile}`
+            `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/b/${targetFile}?msgid=${encodeURIComponent(targetKey)}`
           );
 
           const title = `${path.basename(targetFile)} (Review: ${cleanId ? `<${cleanId}>` : `#${targetKey}`})`;
@@ -104,7 +104,7 @@ export function registerViewCommands(
         patchProvider.setCachedDetail(targetKey, detail);
 
         const descUri = vscode.Uri.parse(
-          `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/DESCRIPTION`
+          `${PatchContentProvider.SCHEME}://${encodeURIComponent(targetKey)}/DESCRIPTION?msgid=${encodeURIComponent(targetKey)}`
         );
 
         const doc = await vscode.workspace.openTextDocument(descUri);

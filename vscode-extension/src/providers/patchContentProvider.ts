@@ -21,6 +21,7 @@ export class PatchContentProvider implements vscode.TextDocumentContentProvider 
   public setCachedDetail(messageId: string, detail: MessageDetail): void {
     if (messageId) {
       this.detailCache.set(messageId, detail);
+      this.detailCache.set(messageId.toLowerCase(), detail);
     }
     if (detail.message?.id) {
       this.detailCache.set(String(detail.message.id), detail);
@@ -28,6 +29,7 @@ export class PatchContentProvider implements vscode.TextDocumentContentProvider 
     const clean = detail.message?.message_id ? detail.message.message_id.replace(/^<|>$/g, "") : "";
     if (clean) {
       this.detailCache.set(clean, detail);
+      this.detailCache.set(clean.toLowerCase(), detail);
     }
   }
 
@@ -37,18 +39,19 @@ export class PatchContentProvider implements vscode.TextDocumentContentProvider 
     // undine-patch://<messageId>/a/<filePath>  (old / pre-image)
     // undine-patch://<messageId>/b/<filePath>  (new / post-image)
 
-    const messageId = uri.authority;
+    const queryParams = new URLSearchParams(uri.query || "");
+    const messageId = queryParams.get("msgid") || decodeURIComponent(uri.authority);
     const pathParts = uri.path.replace(/^\/+/, "").split("/");
 
     if (!messageId) {
       return "// Invalid URI: missing message ID";
     }
 
-    let detail = this.detailCache.get(messageId);
+    let detail = this.detailCache.get(messageId) || this.detailCache.get(messageId.toLowerCase());
     if (!detail) {
       try {
         detail = await this.client.getMessageDetail(messageId);
-        this.detailCache.set(messageId, detail);
+        this.setCachedDetail(messageId, detail);
       } catch (err: any) {
         return `// Error loading message ${messageId}: ${err.message}`;
       }

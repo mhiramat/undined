@@ -195,7 +195,7 @@ describe("MessageHeaderViewProvider", () => {
     // Reviewed target patch card
     assert.ok(html.includes("Reviewed Target Patch"), "Reviewed Target Patch card should be rendered");
     assert.ok(html.includes("[PATCH v2] trace: optimize probe event lookup"), "Target patch subject should be in card");
-    assert.ok(html.includes("selectReviewedMessage(42)"), "Inspect button should call selectReviewedMessage with target patch ID");
+    assert.ok(html.includes('data-reviewed-id="42"'), "Inspect button should set data-reviewed-id with target patch ID");
 
     // Review report action button
     assert.ok(html.includes("View Review Report"), "View Review Report button should be rendered");
