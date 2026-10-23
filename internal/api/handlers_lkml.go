@@ -171,6 +171,7 @@ func (s *Server) handlePreviewQuote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Message not found", http.StatusNotFound)
 		return
 	}
+	msg = s.ensureMessageHydrated(msg)
 
 	notes := body.Notes
 	if len(notes) == 0 && s.DB != nil {

@@ -47,6 +47,22 @@ func (s *Server) resolveMessage(idOrMsgID string) (*database.Message, error) {
 	return nil, fmt.Errorf("message not found")
 }
 
+func (s *Server) ensureMessageHydrated(msg *database.Message) *database.Message {
+	if msg == nil {
+		return nil
+	}
+	if msg.FilePath == "" && msg.IMAPUID != nil && s.IMAP != nil {
+		folder, fErr := s.DB.GetFolderByID(msg.FolderID)
+		if fErr == nil && folder != nil {
+			hydrated, hErr := s.IMAP.FetchAndHydrateMessage(folder.Name, msg.FolderID, *msg.IMAPUID, msg.ID)
+			if hErr == nil && hydrated != nil {
+				return hydrated
+			}
+		}
+	}
+	return msg
+}
+
 func (s *Server) attachTagInfo(m *database.Message) {
 	if m == nil {
 		return
@@ -141,15 +157,7 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// Auto-hydrate if file is missing but IMAP UID is known
-	if msg.FilePath == "" && msg.IMAPUID != nil && s.IMAP != nil {
-		folder, fErr := s.DB.GetFolderByID(msg.FolderID)
-		if fErr == nil && folder != nil {
-			hydrated, hErr := s.IMAP.FetchAndHydrateMessage(folder.Name, msg.FolderID, *msg.IMAPUID, msg.ID)
-			if hErr == nil && hydrated != nil {
-				msg = hydrated
-			}
-		}
-	}
+	msg = s.ensureMessageHydrated(msg)
 
 	s.attachTagInfo(msg)
 
@@ -248,15 +256,7 @@ func (s *Server) handleGetAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-hydrate if file is missing but IMAP UID is known
-	if msg.FilePath == "" && msg.IMAPUID != nil && s.IMAP != nil {
-		folder, fErr := s.DB.GetFolderByID(msg.FolderID)
-		if fErr == nil && folder != nil {
-			hydrated, hErr := s.IMAP.FetchAndHydrateMessage(folder.Name, msg.FolderID, *msg.IMAPUID, msg.ID)
-			if hErr == nil && hydrated != nil {
-				msg = hydrated
-			}
-		}
-	}
+	msg = s.ensureMessageHydrated(msg)
 
 	if msg.FilePath == "" {
 		http.Error(w, "Message file not available on disk", http.StatusNotFound)

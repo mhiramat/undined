@@ -1765,7 +1765,8 @@ export async function triggerOpenEditor(msg) {
   const notes = store.getNotesList();
   try {
     showToast("Launching external editor...", "info");
-    const res = await openEditor(msg.message_id, notes);
+    const targetId = msg.id != null ? String(msg.id) : msg.message_id;
+    const res = await openEditor(targetId, notes);
     showToast(`Editor launched on ${res.temp_file}`, "success");
   } catch (err) {
     showToast(`Failed to open editor: ${err.message}`, "error");

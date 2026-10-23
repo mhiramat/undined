@@ -428,4 +428,50 @@ func TestThreadMessagesWithoutMessageID(t *testing.T) {
 	}
 }
 
+func TestGetMessageByMsgIDPrefersHydratedRow(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_hydrated_pref.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	todoFolder, _ := db.GetOrCreateFolder("TODO", false)
+	imapFolder, _ := db.GetOrCreateFolder("INBOX", true)
+
+	// 1. Insert hydrated message in TODO (older ID, has body_plain and file_path)
+	emlPath := filepath.Join(tmpDir, "todo_patch.eml")
+	raw := []byte("Message-ID: <dup-msgid@kernel.org>\r\nFrom: Dev <dev@example.com>\r\nSubject: [PATCH] test\r\nDate: Sat, 22 Aug 2026 23:09:06 +0800\r\n\r\nFull patch body line 1\r\nFull patch body line 2\r\n")
+	if err := os.WriteFile(emlPath, raw, 0600); err != nil {
+		t.Fatalf("failed to write test eml: %v", err)
+	}
+	todoMsgID, err := db.IndexEmailFile(todoFolder.ID, emlPath)
+	if err != nil {
+		t.Fatalf("failed to index hydrated message: %v", err)
+	}
+
+	// 2. Insert newer unhydrated IMAP header summary with the same Message-ID in INBOX (higher ID, empty body_plain)
+	imapMsgID, err := db.InsertHeaderSummary(imapFolder.ID, 999, raw[:120], false, "")
+	if err != nil {
+		t.Fatalf("failed to insert header summary: %v", err)
+	}
+	if imapMsgID <= todoMsgID {
+		t.Fatalf("expected imapMsgID (%d) > todoMsgID (%d)", imapMsgID, todoMsgID)
+	}
+
+	// 3. GetMessageByMsgID must return the hydrated row with non-empty BodyPlain, not the empty header summary
+	resolved, err := db.GetMessageByMsgID("dup-msgid@kernel.org")
+	if err != nil || resolved == nil {
+		t.Fatalf("GetMessageByMsgID failed: %v", err)
+	}
+	if resolved.ID != todoMsgID {
+		t.Errorf("expected hydrated message ID %d, got unhydrated ID %d", todoMsgID, resolved.ID)
+	}
+	if resolved.BodyPlain == "" {
+		t.Errorf("expected non-empty BodyPlain from GetMessageByMsgID, got empty string")
+	}
+}
+
+
 

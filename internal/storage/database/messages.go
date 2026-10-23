@@ -236,6 +236,8 @@ func (d *Database) GetMessageByID(id int64) (*Message, error) {
 }
 
 // GetMessageByMsgID retrieves a message by its Message-ID (stripping angle brackets).
+// Prefers hydrated messages (those with non-empty body_plain or file_path) over
+// unhydrated IMAP header-only summaries when the same Message-ID exists in multiple folders.
 func (d *Database) GetMessageByMsgID(msgID string) (*Message, error) {
 	cleaned := parser.CleanMsgID(msgID)
 	query := fmt.Sprintf(`
@@ -243,7 +245,11 @@ func (d *Database) GetMessageByMsgID(msgID string) (*Message, error) {
 		FROM messages m
 		JOIN folders f ON m.folder_id = f.id
 		WHERE m.message_id = ? OR m.message_id = ?
-		ORDER BY m.id DESC LIMIT 1;
+		ORDER BY
+			CASE WHEN m.body_plain IS NOT NULL AND m.body_plain != '' THEN 0 ELSE 1 END,
+			CASE WHEN m.file_path IS NOT NULL AND m.file_path != '' THEN 0 ELSE 1 END,
+			m.id DESC
+		LIMIT 1;
 	`, messageSelectColumns)
 	return scanMessage(d.DB.QueryRow(query, cleaned, msgID))
 }

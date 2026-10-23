@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"undined-go/internal/config"
@@ -65,10 +66,15 @@ func (l *Launcher) GenerateTempDraftPath() (string, error) {
 func (l *Launcher) PrepareDraftContent(req OpenEditorRequest) (string, error) {
 	var msg *database.Message
 	if req.MessageID != "" && l.DB != nil {
-		cleanID := parser.CleanMsgID(req.MessageID)
-		msg, _ = l.DB.GetMessageByMsgID(cleanID)
-		if msg == nil && cleanID != req.MessageID {
-			msg, _ = l.DB.GetMessageByMsgID(req.MessageID)
+		if num, err := strconv.ParseInt(strings.TrimSpace(req.MessageID), 10, 64); err == nil {
+			msg, _ = l.DB.GetMessageByID(num)
+		}
+		if msg == nil {
+			cleanID := parser.CleanMsgID(req.MessageID)
+			msg, _ = l.DB.GetMessageByMsgID(cleanID)
+			if msg == nil && cleanID != req.MessageID {
+				msg, _ = l.DB.GetMessageByMsgID(req.MessageID)
+			}
 		}
 	}
 

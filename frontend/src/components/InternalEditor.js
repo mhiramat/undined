@@ -574,7 +574,8 @@ export async function openReplyForMessage(msg, notes = []) {
   // Default body with review quote
   let quoteBody = "";
   try {
-    const quoteRes = await previewQuote(msg.message_id, notesList, "");
+    const targetId = msg.id != null ? String(msg.id) : msg.message_id;
+    const quoteRes = await previewQuote(targetId, notesList, "");
     if (quoteRes && quoteRes.quote_text) {
       quoteBody = quoteRes.quote_text;
     }
