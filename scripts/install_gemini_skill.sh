@@ -237,23 +237,23 @@ if [ "$AUTO_TRUST" = true ]; then
     if [ -d "$HOME/.gemini" ]; then
         PY_EXE="${PYTHON_BIN:-$(command -v python3 || echo "")}"
         if [ -n "$PY_EXE" ]; then
-            "$PY_EXE" -c "
-import json, os
-p = os.path.expanduser('$TRUST_FILE')
+            "$PY_EXE" -c '
+import json, os, sys
+p = os.path.expanduser(sys.argv[1])
+target = sys.argv[2]
 try:
     if os.path.exists(p):
-        with open(p, 'r', encoding='utf-8') as f:
+        with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
     else:
         data = {}
-    target = '$PROJECT_ROOT'
-    if data.get(target) != 'TRUST_FOLDER':
-        data[target] = 'TRUST_FOLDER'
-        with open(p, 'w', encoding='utf-8') as f:
+    if data.get(target) != "TRUST_FOLDER":
+        data[target] = "TRUST_FOLDER"
+        with open(p, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 except Exception:
     pass
-" 2>/dev/null || true
+' "$TRUST_FILE" "$PROJECT_ROOT" 2>/dev/null || true
         fi
     fi
 fi
