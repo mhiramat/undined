@@ -197,12 +197,13 @@ func (l *Launcher) Launch(req OpenEditorRequest) (*OpenEditorResponse, error) {
 		return nil, fmt.Errorf("failed to write temp draft file: %w", err)
 	}
 
-	cmdStr := strings.ReplaceAll(cmdTemplate, "{file}", tempPath)
+	quotedPath := "'" + strings.ReplaceAll(tempPath, "'", `'\''`) + "'"
+	cmdStr := strings.ReplaceAll(cmdTemplate, "{file}", quotedPath)
 	cmdStr = strings.ReplaceAll(cmdStr, "{line}", "10")
 	cmdStr = strings.ReplaceAll(cmdStr, "{cursor_line}", "10")
 
 	if !strings.Contains(cmdTemplate, "{file}") {
-		cmdStr = fmt.Sprintf("%s %s", cmdTemplate, tempPath)
+		cmdStr = fmt.Sprintf("%s %s", cmdTemplate, quotedPath)
 	}
 
 	cmd := exec.Command("sh", "-c", cmdStr)

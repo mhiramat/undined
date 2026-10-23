@@ -540,7 +540,7 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 	// Check if file already exists
 	if job.FilePath != "" {
 		if _, err := os.Stat(job.FilePath); err == nil {
-			_ = os.WriteFile(job.FilePath, rawBytes, 0644)
+			_ = os.WriteFile(job.FilePath, rawBytes, 0600)
 			if job.ReviewDBID != nil {
 				_ = r.DB.UpdateMessageSubjectAndBody(*job.ReviewDBID, subject, cleanBody)
 			}

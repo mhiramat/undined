@@ -24,7 +24,7 @@ func WritePIDFile(path string, pid int) error {
 		return fmt.Errorf("failed to create directory for PID file %s: %w", path, err)
 	}
 	content := fmt.Sprintf("%d\n", pid)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write PID file %s: %w", path, err)
 	}
 	return nil
