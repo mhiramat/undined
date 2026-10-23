@@ -51,20 +51,73 @@ func encodeHeaderValue(val string) string {
 	return mime.QEncoding.Encode("utf-8", val)
 }
 
+// splitAddressList splits a comma-separated RFC 5322 address list while respecting
+// double quotes and angle brackets.
+func splitAddressList(addrs string) []string {
+	var parts []string
+	var curr strings.Builder
+	inQuotes := false
+	inAngle := false
+	escaped := false
+
+	for _, r := range addrs {
+		if escaped {
+			curr.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && inQuotes {
+			curr.WriteRune(r)
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			inQuotes = !inQuotes
+		} else if r == '<' && !inQuotes {
+			inAngle = true
+		} else if r == '>' && !inQuotes {
+			inAngle = false
+		} else if r == ',' && !inQuotes && !inAngle {
+			if s := strings.TrimSpace(curr.String()); s != "" {
+				parts = append(parts, s)
+			}
+			curr.Reset()
+			continue
+		}
+		curr.WriteRune(r)
+	}
+	if s := strings.TrimSpace(curr.String()); s != "" {
+		parts = append(parts, s)
+	}
+	return parts
+}
+
 // encodeAddressList sanitizes an address list and encodes any non-ASCII display names per RFC 2047.
 func encodeAddressList(addrs string) string {
 	addrs = sanitizeHeaderValue(addrs)
 	if addrs == "" {
 		return ""
 	}
-	parts := strings.Split(addrs, ",")
+	parts := splitAddressList(addrs)
 	encodedParts := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if idx := strings.Index(p, "<"); idx > 0 {
+		if idx := strings.LastIndex(p, "<"); idx > 0 {
 			name := strings.TrimSpace(p[:idx])
 			addr := strings.TrimSpace(p[idx:])
-			encodedParts = append(encodedParts, fmt.Sprintf("%s %s", mime.QEncoding.Encode("utf-8", name), addr))
+			hasNonASCII := false
+			for i := 0; i < len(name); i++ {
+				if name[i] >= 0x80 {
+					hasNonASCII = true
+					break
+				}
+			}
+			if hasNonASCII {
+				unquoted := strings.Trim(name, `"`)
+				encodedParts = append(encodedParts, fmt.Sprintf("%s %s", mime.QEncoding.Encode("utf-8", unquoted), addr))
+			} else {
+				encodedParts = append(encodedParts, fmt.Sprintf("%s %s", name, addr))
+			}
 		} else {
 			encodedParts = append(encodedParts, p)
 		}
@@ -308,7 +361,7 @@ func (c *Client) SendMessage(
 	raw := c.BuildMessage(toAddr, subject, bodyText, ccAddr, inReplyTo, references, "")
 
 	var recipients []string
-	for _, a := range strings.Split(toAddr, ",") {
+	for _, a := range splitAddressList(toAddr) {
 		addr := parser.ExtractMsgIDs(a)
 		if len(addr) > 0 {
 			recipients = append(recipients, addr[0])
@@ -319,7 +372,7 @@ func (c *Client) SendMessage(
 			}
 		}
 	}
-	for _, a := range strings.Split(ccAddr, ",") {
+	for _, a := range splitAddressList(ccAddr) {
 		addr := parser.ExtractMsgIDs(a)
 		if len(addr) > 0 {
 			recipients = append(recipients, addr[0])

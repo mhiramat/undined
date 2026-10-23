@@ -408,3 +408,44 @@ func TestBuildMessageRFC2047Encoding(t *testing.T) {
 		t.Errorf("Body content was altered: %s", raw)
 	}
 }
+
+func TestSendMessageQuotedCommaInDisplayName(t *testing.T) {
+	listener, port, getCommands := startRecordingMockSMTPServer(t, false)
+	defer listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.Host = "127.0.0.1"
+	cfg.SMTP.Port = port
+	cfg.SMTP.UseSSL = false
+	cfg.SMTP.UseSTARTTLS = false
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+	ok, _, err := client.SendMessage(
+		`"Developer, Kernel" <dev@example.com>, second@example.com`,
+		"Test Quoted Comma",
+		"Body",
+		`"Maintainer, Linux" <maint@example.com>`,
+		"",
+		"",
+	)
+	if err != nil || !ok {
+		t.Fatalf("SendMessage with quoted comma failed: %v", err)
+	}
+
+	var rcptCmds []string
+	for _, cmd := range getCommands() {
+		if strings.HasPrefix(strings.ToUpper(cmd), "RCPT TO:") {
+			rcptCmds = append(rcptCmds, cmd)
+		}
+	}
+	if len(rcptCmds) != 3 {
+		t.Fatalf("expected 3 RCPT TO commands, got %d: %v", len(rcptCmds), rcptCmds)
+	}
+	if !strings.Contains(rcptCmds[0], "<dev@example.com>") ||
+		!strings.Contains(rcptCmds[1], "<second@example.com>") ||
+		!strings.Contains(rcptCmds[2], "<maint@example.com>") {
+		t.Errorf("unexpected RCPT TO commands: %v", rcptCmds)
+	}
+}
+
