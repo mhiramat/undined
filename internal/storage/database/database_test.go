@@ -415,3 +415,17 @@ func TestFindReviewedMessage(t *testing.T) {
 	}
 }
 
+func TestThreadMessagesWithoutMessageID(t *testing.T) {
+	// IDs 9 (\t), 10 (\n), and 32 (' ') previously collided on empty string in fmtKey(id)
+	msgs := []*Message{
+		{ID: 9, MessageID: "", Subject: "Msg 9", EpochTimestamp: 100},
+		{ID: 10, MessageID: "", Subject: "Msg 10", EpochTimestamp: 200},
+		{ID: 32, MessageID: "", Subject: "Msg 32", EpochTimestamp: 300},
+	}
+	threaded := ThreadMessages(msgs, "date", "asc")
+	if len(threaded) != 3 {
+		t.Fatalf("expected 3 messages without MessageID to remain distinct, got %d", len(threaded))
+	}
+}
+
+

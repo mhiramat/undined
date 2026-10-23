@@ -3,6 +3,7 @@ package database
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"undined-go/internal/storage/parser"
@@ -244,7 +245,12 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 }
 
 func fmtKey(id int64) string {
-	return strings.TrimSpace(string(rune(id)))
+	return "local-" + strconv.FormatInt(id, 10)
+}
+
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // GetThreadHierarchy retrieves all messages in the conversation thread of msgID.
@@ -272,11 +278,11 @@ func (d *Database) GetThreadHierarchy(msgID string) ([]*Message, error) {
 	FROM messages m
 	JOIN folders f ON m.folder_id = f.id
 	WHERE m.message_id = ?
-	   OR m.in_reply_to LIKE ?
-	   OR m.references_header LIKE ?
+	   OR m.in_reply_to LIKE ? ESCAPE '\'
+	   OR m.references_header LIKE ? ESCAPE '\'
 	ORDER BY m.epoch_timestamp ASC;
 	`
-	pattern := "%" + rootID + "%"
+	pattern := "%" + escapeLikePattern(rootID) + "%"
 	rows, err := d.DB.Query(query, rootID, pattern, pattern)
 	if err != nil {
 		return nil, err

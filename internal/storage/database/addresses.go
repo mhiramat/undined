@@ -142,16 +142,17 @@ func (d *Database) SearchKnownAddresses(query string, limit int) ([]*KnownAddres
 		`
 		args = []any{limit}
 	} else {
-		likePattern := "%" + query + "%"
-		prefixPattern := query + "%"
+		escaped := escapeLikePattern(query)
+		likePattern := "%" + escaped + "%"
+		prefixPattern := escaped + "%"
 		sqlQuery = `
 		SELECT id, name, address, frequency, last_seen, created_at
 		FROM known_addresses
-		WHERE address LIKE ? OR name LIKE ?
+		WHERE address LIKE ? ESCAPE '\' OR name LIKE ? ESCAPE '\'
 		ORDER BY
 			CASE
-				WHEN address LIKE ? THEN 1
-				WHEN name LIKE ? THEN 2
+				WHEN address LIKE ? ESCAPE '\' THEN 1
+				WHEN name LIKE ? ESCAPE '\' THEN 2
 				ELSE 3
 			END,
 			frequency DESC,
