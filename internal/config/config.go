@@ -231,28 +231,35 @@ func (p *PatchworkConfig) IsMe(delegate any, fallbackEmail string) bool {
 	if delegate == nil {
 		return false
 	}
-	myUser := strings.ToLower(p.GetMyUsername(fallbackEmail))
-	myEmail := strings.ToLower(p.GetMyEmail(fallbackEmail))
+
+	myIdentities := make(map[string]bool)
+	if u := strings.ToLower(strings.TrimSpace(p.GetMyUsername(fallbackEmail))); u != "" {
+		myIdentities[u] = true
+	}
+	if e := strings.ToLower(strings.TrimSpace(p.GetMyEmail(fallbackEmail))); e != "" {
+		myIdentities[e] = true
+	}
+	for _, d := range p.GetDelegateUsers() {
+		if dl := strings.ToLower(strings.TrimSpace(d)); dl != "" {
+			myIdentities[dl] = true
+		}
+	}
 
 	var candidates []string
 	switch v := delegate.(type) {
 	case string:
-		candidates = append(candidates, strings.ToLower(v))
+		candidates = append(candidates, strings.ToLower(strings.TrimSpace(v)))
 	case map[string]any:
 		if u, ok := v["username"].(string); ok {
-			candidates = append(candidates, strings.ToLower(u))
+			candidates = append(candidates, strings.ToLower(strings.TrimSpace(u)))
 		}
 		if em, ok := v["email"].(string); ok {
-			candidates = append(candidates, strings.ToLower(em))
+			candidates = append(candidates, strings.ToLower(strings.TrimSpace(em)))
 		}
-	}
-
-	for _, d := range p.DelegateUsers {
-		candidates = append(candidates, strings.ToLower(d))
 	}
 
 	for _, c := range candidates {
-		if c != "" && (c == myUser || c == myEmail) {
+		if c != "" && myIdentities[c] {
 			return true
 		}
 	}

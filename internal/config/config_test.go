@@ -129,3 +129,25 @@ func TestResolveTag(t *testing.T) {
 		t.Fatalf("expected nil for unmapped flags, got %+v", res)
 	}
 }
+
+func TestPatchworkIsMe(t *testing.T) {
+	pw := PatchworkConfig{
+		Username:      "dev",
+		Email:         "dev@example.com",
+		DelegateUsers: []string{"dev", "dev-alias"},
+	}
+
+	if !pw.IsMe(map[string]any{"username": "dev"}, "") {
+		t.Errorf("expected IsMe=true for username 'dev'")
+	}
+	if !pw.IsMe(map[string]any{"username": "dev-alias"}, "") {
+		t.Errorf("expected IsMe=true for delegate_users alias 'dev-alias'")
+	}
+	if pw.IsMe(map[string]any{"username": "other-maintainer", "email": "other@example.com"}, "") {
+		t.Errorf("expected IsMe=false for 'other-maintainer' even when DelegateUsers contains 'dev'")
+	}
+	if pw.IsMe(nil, "") {
+		t.Errorf("expected IsMe=false for nil delegate")
+	}
+}
+
