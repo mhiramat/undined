@@ -372,4 +372,21 @@ func TestDownloadPatchMboxFallback(t *testing.T) {
 	if err != nil || !strings.Contains(string(data3), "API Mbox") {
 		t.Errorf("API mbox fallback failed: %v, got %s", err, string(data3))
 	}
+
+	// 4. Untrusted external mboxURL must not receive token or be requested; falls back to trusted server
+	externalCalled := false
+	extServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		externalCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer extServer.Close()
+
+	cfg.Patchwork.Token = "secret-pw-token"
+	data4, err := client.DownloadPatchMbox(789, extServer.URL+"/evil-mbox")
+	if externalCalled {
+		t.Errorf("DownloadPatchMbox should not send request/credentials to untrusted origin")
+	}
+	if err != nil || !strings.Contains(string(data4), "API Mbox") {
+		t.Errorf("Expected fallback to trusted server after rejecting untrusted mboxURL, got err=%v", err)
+	}
 }

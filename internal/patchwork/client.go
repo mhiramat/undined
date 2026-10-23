@@ -65,10 +65,29 @@ func (c *Client) GetBaseURL() string {
 	return fmt.Sprintf("%s/api/%s", rawURL, ver)
 }
 
+func (c *Client) isSameOriginAsBase(targetURL string) bool {
+	baseRaw := strings.TrimSpace(c.Config.Patchwork.URL)
+	if baseRaw == "" {
+		baseRaw = constants.DefaultPatchworkURL
+	}
+	baseParsed, err := url.Parse(baseRaw)
+	if err != nil || baseParsed.Host == "" {
+		return false
+	}
+	targetParsed, err := url.Parse(targetURL)
+	if err != nil || targetParsed.Host == "" {
+		return false
+	}
+	return strings.EqualFold(baseParsed.Scheme, targetParsed.Scheme) &&
+		strings.EqualFold(baseParsed.Host, targetParsed.Host)
+}
+
 func (c *Client) newRequest(method, endpoint string, body io.Reader) (*http.Request, error) {
 	reqURL := endpoint
 	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
 		reqURL = fmt.Sprintf("%s/%s", c.GetBaseURL(), strings.TrimLeft(endpoint, "/"))
+	} else if !c.isSameOriginAsBase(reqURL) {
+		return nil, fmt.Errorf("refusing to send Patchwork request to untrusted origin: %s", reqURL)
 	}
 
 	req, err := http.NewRequest(method, reqURL, body)
@@ -685,25 +704,28 @@ func (c *Client) GetChecks(patchID int) ([]map[string]any, error) {
 }
 
 // DownloadPatchMbox downloads raw patch mbox from Patchwork.
-// If mboxURL is provided (e.g. from patch["mbox"]), it fetches directly from that URL.
+// If mboxURL is provided (e.g. from patch["mbox"]), it fetches directly from that URL
+// only if it matches the configured Patchwork origin.
 // Otherwise it falls back to /patch/{id}/mbox/ on base URL, and then /api/{version}/patches/{id}/mbox/.
 func (c *Client) DownloadPatchMbox(patchID int, mboxURL ...string) ([]byte, error) {
-	// 1. If explicit mbox URL is provided, try downloading directly
+	// 1. If explicit mbox URL is provided and matches configured origin, try downloading directly
 	if len(mboxURL) > 0 && strings.TrimSpace(mboxURL[0]) != "" {
 		rawURL := strings.TrimSpace(mboxURL[0])
-		req, err := http.NewRequest("GET", rawURL, nil)
-		if err == nil {
-			if token := c.Config.Patchwork.GetToken(); token != "" {
-				req.Header.Set("Authorization", fmt.Sprintf("Token %s", token))
-			}
-			req.Header.Set("User-Agent", constants.DefaultXMailer)
-			resp, err := c.HTTPClient.Do(req)
+		if c.isSameOriginAsBase(rawURL) {
+			req, err := http.NewRequest("GET", rawURL, nil)
 			if err == nil {
-				defer resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					data, readErr := io.ReadAll(resp.Body)
-					if readErr == nil && len(data) > 0 {
-						return data, nil
+				if token := c.Config.Patchwork.GetToken(); token != "" {
+					req.Header.Set("Authorization", fmt.Sprintf("Token %s", token))
+				}
+				req.Header.Set("User-Agent", constants.DefaultXMailer)
+				resp, err := c.HTTPClient.Do(req)
+				if err == nil {
+					defer resp.Body.Close()
+					if resp.StatusCode == http.StatusOK {
+						data, readErr := io.ReadAll(resp.Body)
+						if readErr == nil && len(data) > 0 {
+							return data, nil
+						}
 					}
 				}
 			}
