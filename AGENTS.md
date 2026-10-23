@@ -13,6 +13,7 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 
 ## 3. Git Commit Hygiene
 - **Separate Commits**: When addressing multiple distinct bugs, vulnerabilities, or enhancements, commit each logical change separately with an explanatory commit message. Avoid bundling unrelated changes into a single commit.
+- **Message Wrapping**: Commit messages must be wrapped before the 80-character mark (recommend 72 characters for body text and 50–72 characters for subjects). Never exceed 80 characters per line.
 
 ## 4. Process and Command Safety
 - **Input Sanitization**: Strictly sanitize user-controlled parameters (Message-IDs, Git refs, target coordinates) before passing them to subprocesses or queries.
