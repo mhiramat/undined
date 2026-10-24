@@ -551,11 +551,19 @@ func (p *Poller) FetchAndHydrateMessage(folderName string, folderID int64, imapU
 	}
 
 	// Hydrate in database
-	if err := p.DB.HydrateMessageBody(messageDBID, savedPath, bodyPlain, isPatch); err != nil {
-		return nil, fmt.Errorf("failed to hydrate message body in DB: %w", err)
+	if messageDBID > 0 {
+		if err := p.DB.HydrateMessageBody(messageDBID, savedPath, bodyPlain, isPatch); err != nil {
+			return nil, fmt.Errorf("failed to hydrate message body in DB: %w", err)
+		}
+		return p.DB.GetMessageByID(messageDBID)
 	}
 
-	return p.DB.GetMessageByID(messageDBID)
+	// Direct hydration without prior summary: index the saved email file
+	dbID, err := p.DB.IndexEmailFile(folderID, savedPath, imapUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to index hydrated email in DB: %w", err)
+	}
+	return p.DB.GetMessageByID(dbID)
 }
 
 // MarkIMAPMessageRead updates the \Seen flag on the IMAP server for a message.
