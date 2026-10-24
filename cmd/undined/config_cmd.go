@@ -137,22 +137,11 @@ func doShowConfigPath(configPath string) error {
 }
 
 func doShowConfig(configPath string) error {
-	p := config.FindConfigFile(configPath)
-	data, err := os.ReadFile(p)
+	out, err := config.FormatActiveConfig(configPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Printf("# Configuration file %s does not exist yet.\n", config.DisplayPath(p))
-			fmt.Println("# Run 'undined config edit' or 'undined config set' to create it.")
-			return nil
-		}
-		return fmt.Errorf("failed to read config file %s: %w", config.DisplayPath(p), err)
+		return err
 	}
-
-	fmt.Printf("# Configuration: %s\n\n", config.DisplayPath(p))
-	fmt.Print(string(data))
-	if !strings.HasSuffix(string(data), "\n") {
-		fmt.Println()
-	}
+	fmt.Print(out)
 	return nil
 }
 

@@ -152,4 +152,15 @@ username = "maintainer"
 	if strings.TrimSpace(out) != "9090" {
 		t.Errorf("expected '9090', got %q", out)
 	}
+
+	// Test doShowConfig
+	out = captureOutput(func() {
+		_ = doShowConfig(confPath)
+	})
+	if !strings.Contains(out, "port = 9090") {
+		t.Errorf("expected active 'port = 9090' in show config output: %s", out)
+	}
+	if !strings.Contains(out, `# host = "127.0.0.1"`) {
+		t.Errorf("expected commented default host in show config output: %s", out)
+	}
 }
