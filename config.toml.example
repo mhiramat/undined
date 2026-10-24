@@ -129,6 +129,8 @@ username = "dev"
 email = "dev@example.com"
 # token_cmd = "secret-tool lookup service undined-patchwork user dev@example.com"
 preferred_archives = ["linux-trace"]
+# List of usernames for the "Delegate" dropdown menu in the Patchwork area:
+# delegate-users = ["dev", "maintainer", "reviewer"]
 timeout_seconds = 10.0
 
 # ==============================================================================

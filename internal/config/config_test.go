@@ -134,20 +134,88 @@ func TestPatchworkIsMe(t *testing.T) {
 	pw := PatchworkConfig{
 		Username:      "dev",
 		Email:         "dev@example.com",
-		DelegateUsers: []string{"dev", "dev-alias"},
+		DelegateUsers: []string{"dev", "maintainer2", "reviewer"},
 	}
 
 	if !pw.IsMe(map[string]any{"username": "dev"}, "") {
 		t.Errorf("expected IsMe=true for username 'dev'")
 	}
-	if !pw.IsMe(map[string]any{"username": "dev-alias"}, "") {
-		t.Errorf("expected IsMe=true for delegate_users alias 'dev-alias'")
+	if !pw.IsMe(map[string]any{"email": "dev@example.com"}, "") {
+		t.Errorf("expected IsMe=true for email 'dev@example.com'")
+	}
+	// Co-maintainers/reviewers in DelegateUsers must NOT be treated as "me"
+	if pw.IsMe(map[string]any{"username": "maintainer2"}, "") {
+		t.Errorf("expected IsMe=false for 'maintainer2' even when DelegateUsers contains 'maintainer2'")
+	}
+	if pw.IsMe(map[string]any{"username": "reviewer"}, "") {
+		t.Errorf("expected IsMe=false for 'reviewer' even when DelegateUsers contains 'reviewer'")
 	}
 	if pw.IsMe(map[string]any{"username": "other-maintainer", "email": "other@example.com"}, "") {
-		t.Errorf("expected IsMe=false for 'other-maintainer' even when DelegateUsers contains 'dev'")
+		t.Errorf("expected IsMe=false for 'other-maintainer'")
 	}
 	if pw.IsMe(nil, "") {
 		t.Errorf("expected IsMe=false for nil delegate")
+	}
+}
+
+func TestDelegateUsersConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Array format with delegate-users (kebab-case)
+	confPath1 := filepath.Join(tmpDir, "config1.toml")
+	content1 := `
+[patchwork]
+delegate-users = ["dev", "maintainer2", "reviewer"]
+`
+	if err := os.WriteFile(confPath1, []byte(content1), 0644); err != nil {
+		t.Fatalf("failed to write test config 1: %v", err)
+	}
+	cfg1, err := Load(confPath1)
+	if err != nil {
+		t.Fatalf("failed to load config 1: %v", err)
+	}
+	users1 := cfg1.Patchwork.GetDelegateUsers()
+	if len(users1) != 3 || users1[0] != "dev" || users1[1] != "maintainer2" || users1[2] != "reviewer" {
+		t.Fatalf("unexpected delegate users for kebab array: %#v", users1)
+	}
+	if len(cfg1.Patchwork.DelegateUsers) != 3 {
+		t.Fatalf("expected DelegateUsers slice to be populated, got %#v", cfg1.Patchwork.DelegateUsers)
+	}
+
+	// 2. Comma-separated string with delegate-users
+	confPath2 := filepath.Join(tmpDir, "config2.toml")
+	content2 := `
+[patchwork]
+delegate-users = "dev, maintainer2, reviewer"
+`
+	if err := os.WriteFile(confPath2, []byte(content2), 0644); err != nil {
+		t.Fatalf("failed to write test config 2: %v", err)
+	}
+	cfg2, err := Load(confPath2)
+	if err != nil {
+		t.Fatalf("failed to load config 2: %v", err)
+	}
+	users2 := cfg2.Patchwork.GetDelegateUsers()
+	if len(users2) != 3 || users2[0] != "dev" || users2[1] != "maintainer2" || users2[2] != "reviewer" {
+		t.Fatalf("unexpected delegate users for comma string: %#v", users2)
+	}
+
+	// 3. Snake_case delegate_users backward compatibility
+	confPath3 := filepath.Join(tmpDir, "config3.toml")
+	content3 := `
+[patchwork]
+delegate_users = ["alice", "bob"]
+`
+	if err := os.WriteFile(confPath3, []byte(content3), 0644); err != nil {
+		t.Fatalf("failed to write test config 3: %v", err)
+	}
+	cfg3, err := Load(confPath3)
+	if err != nil {
+		t.Fatalf("failed to load config 3: %v", err)
+	}
+	users3 := cfg3.Patchwork.GetDelegateUsers()
+	if len(users3) != 2 || users3[0] != "alice" || users3[1] != "bob" {
+		t.Fatalf("unexpected delegate users for snake_case array: %#v", users3)
 	}
 }
 

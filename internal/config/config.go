@@ -187,9 +187,10 @@ type PatchworkConfig struct {
 	TokenCmd          string   `toml:"token_cmd" json:"token_cmd"`
 	Token             string   `toml:"token" json:"token"`
 	PreferredArchives []string `toml:"preferred_archives" json:"preferred_archives"`
-	DefaultProject    string   `toml:"default_project" json:"default_project"`
-	DelegateUsers     []string `toml:"delegate_users" json:"delegate_users"`
-	TimeoutSeconds    float64  `toml:"timeout_seconds" json:"timeout_seconds"`
+	DefaultProject     string   `toml:"default_project" json:"default_project"`
+	DelegateUsers      []string `toml:"delegate_users" json:"delegate_users"`
+	DelegateUsersKebab any      `toml:"delegate-users,omitempty" json:"-"`
+	TimeoutSeconds     float64  `toml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 // GetToken returns Token, or executes TokenCmd if Token is empty.
@@ -239,11 +240,6 @@ func (p *PatchworkConfig) IsMe(delegate any, fallbackEmail string) bool {
 	if e := strings.ToLower(strings.TrimSpace(p.GetMyEmail(fallbackEmail))); e != "" {
 		myIdentities[e] = true
 	}
-	for _, d := range p.GetDelegateUsers() {
-		if dl := strings.ToLower(strings.TrimSpace(d)); dl != "" {
-			myIdentities[dl] = true
-		}
-	}
 
 	var candidates []string
 	switch v := delegate.(type) {
@@ -284,9 +280,26 @@ func (p *PatchworkConfig) GetTodoStates() []string {
 
 // GetDelegateUsers returns cleaned list of configured delegate usernames.
 func (p *PatchworkConfig) GetDelegateUsers() []string {
+	var raw []string
+	raw = append(raw, p.DelegateUsers...)
+	if p.DelegateUsersKebab != nil {
+		switch v := p.DelegateUsersKebab.(type) {
+		case string:
+			raw = append(raw, v)
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					raw = append(raw, s)
+				}
+			}
+		case []string:
+			raw = append(raw, v...)
+		}
+	}
+
 	var res []string
 	seen := make(map[string]bool)
-	for _, u := range p.DelegateUsers {
+	for _, u := range raw {
 		for _, part := range strings.Split(u, ",") {
 			trimmed := strings.TrimSpace(part)
 			if trimmed != "" && !seen[trimmed] {
@@ -527,6 +540,9 @@ func Load(explicitPath ...string) (*Config, error) {
 	if cfg.Review.WrapperScript != "" {
 		cfg.Review.WrapperScript = ExpandPath(cfg.Review.WrapperScript)
 	}
+
+	// Populate cleaned delegate users list
+	cfg.Patchwork.DelegateUsers = cfg.Patchwork.GetDelegateUsers()
 
 	// Merge default tags if not overridden
 	if cfg.Tags == nil {
