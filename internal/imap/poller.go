@@ -258,7 +258,11 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 		}
 
 		if err := <-done; err != nil {
-			log.Printf("Batch UID FETCH warning in %s: %v", folderName, err)
+			log.Printf("Batch UID FETCH error in %s: %v", folderName, err)
+			if maxUID > lastSyncedUID {
+				_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxUID)
+			}
+			return maxUID, fmt.Errorf("UID FETCH failed in %s: %w", folderName, err)
 		}
 	}
 
@@ -320,6 +324,7 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 		p.mu.Unlock()
 		return 0, fmt.Errorf("could not search UIDs in %s: %w", folderName, err)
 	}
+	sort.Slice(serverUIDs, func(i, j int) bool { return serverUIDs[i] < serverUIDs[j] })
 
 	serverUIDSet := make(map[uint32]bool, len(serverUIDs))
 	for _, u := range serverUIDs {
@@ -368,7 +373,6 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 		p.syncProgress[folderID].Status = "completed"
 		p.mu.Unlock()
 		if len(serverUIDs) > 0 {
-			sort.Slice(serverUIDs, func(i, j int) bool { return serverUIDs[i] < serverUIDs[j] })
 			_ = p.DB.UpdateFolderLastSyncedUID(folderID, serverUIDs[len(serverUIDs)-1])
 		}
 		return 0, nil
@@ -388,20 +392,14 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 	fetchItems := []imap.FetchItem{imap.FetchUid, imap.FetchFlags, headerSection.FetchItem()}
 
 	syncedCount := 0
-	var maxSyncedUID uint32
+	var syncErr error
+	var cancelled bool
 	const batchSize = 50
 
 	for i := 0; i < len(missingUIDs); i += batchSize {
 		if p.isSyncCancelled(folderID) {
-			p.mu.Lock()
-			p.syncProgress[folderID].IsSyncing = false
-			p.syncProgress[folderID].Status = "cancelled"
-			p.syncProgress[folderID].Synced = syncedCount
-			p.mu.Unlock()
-			if maxSyncedUID > 0 {
-				_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxSyncedUID)
-			}
-			return syncedCount, nil
+			cancelled = true
+			break
 		}
 
 		end := i + batchSize
@@ -421,6 +419,7 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 			done <- c.UidFetch(seqSet, fetchItems, messages)
 		}()
 
+		batchSynced := 0
 		for msg := range messages {
 			if msg == nil {
 				continue
@@ -438,33 +437,72 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 			for _, literal := range msg.Body {
 				headerBytes, _ := io.ReadAll(literal)
 				if len(headerBytes) > 0 {
-					_, _ = p.DB.InsertHeaderSummary(folderID, msg.Uid, headerBytes, isSeen, flagsStr)
-					syncedCount++
-					if msg.Uid > maxSyncedUID {
-						maxSyncedUID = msg.Uid
+					_, insErr := p.DB.InsertHeaderSummary(folderID, msg.Uid, headerBytes, isSeen, flagsStr)
+					if insErr == nil {
+						syncedCount++
+						batchSynced++
 					}
 				}
 			}
 		}
 
-		_ = <-done
+		if err := <-done; err != nil {
+			syncErr = fmt.Errorf("UID FETCH failed in %s: %w", folderName, err)
+			break
+		}
+
+		if batchSynced == 0 && len(batch) > 0 {
+			syncErr = fmt.Errorf("UID FETCH returned no message headers for %d requested messages in %s", len(batch), folderName)
+			break
+		}
 
 		p.mu.Lock()
 		p.syncProgress[folderID].Synced = syncedCount
 		p.mu.Unlock()
 	}
 
-	if maxSyncedUID > 0 {
-		_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxSyncedUID)
-	} else if len(serverUIDs) > 0 {
-		sort.Slice(serverUIDs, func(i, j int) bool { return serverUIDs[i] < serverUIDs[j] })
-		_ = p.DB.UpdateFolderLastSyncedUID(folderID, serverUIDs[len(serverUIDs)-1])
+	if syncErr == nil && !cancelled && syncedCount < len(missingUIDs) {
+		syncErr = fmt.Errorf("incomplete full sync for %s: synced %d of %d messages", folderName, syncedCount, len(missingUIDs))
+	}
+
+	// Determine safe checkpoint: highest server UID such that all server UIDs
+	// up to safeCheckpoint are present in the local database.
+	currentLocalUIDs, _ := p.DB.GetFolderIMAPUIDs(folderID)
+	currentLocalSet := make(map[uint32]bool, len(currentLocalUIDs))
+	for _, u := range currentLocalUIDs {
+		currentLocalSet[u] = true
+	}
+
+	var safeCheckpoint uint32
+	for _, u := range serverUIDs {
+		if !currentLocalSet[u] {
+			break
+		}
+		safeCheckpoint = u
+	}
+
+	if safeCheckpoint > 0 {
+		_ = p.DB.UpdateFolderLastSyncedUID(folderID, safeCheckpoint)
 	}
 
 	p.mu.Lock()
 	p.syncProgress[folderID].IsSyncing = false
-	p.syncProgress[folderID].Status = "completed"
 	p.syncProgress[folderID].Synced = syncedCount
+
+	if cancelled {
+		p.syncProgress[folderID].Status = "cancelled"
+		p.mu.Unlock()
+		return syncedCount, nil
+	}
+
+	if syncErr != nil {
+		p.syncProgress[folderID].Status = "error"
+		p.syncProgress[folderID].Error = syncErr.Error()
+		p.mu.Unlock()
+		return syncedCount, syncErr
+	}
+
+	p.syncProgress[folderID].Status = "completed"
 	p.mu.Unlock()
 
 	return syncedCount, nil
