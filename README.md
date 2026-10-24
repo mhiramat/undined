@@ -235,6 +235,11 @@ Open the Web UI URL in your browser to access the Sylpheed-style 3-pane review i
 | `--quit` | `-q` | Terminate running UndineD daemon instance | `false` |
 | `--pid-file <path>` | | Path to PID file (overrides config) | `~/.local/share/undined/undined.pid` |
 | `--config <path>` | `-C <path>` | Path to TOML configuration file | `~/.config/undined/config.toml` |
+| `--config-path` | | Output active configuration file path and exit | |
+| `--show-config` | | Print active configuration file and exit | |
+| `--config-get <key>` | | Print value of a config setting (`section.key`) and exit | |
+| `--config-set <key>=<val>` | | Update a setting in `config.toml` and exit | |
+| `--config-edit` | `--edit-config` | Open `config.toml` in `$EDITOR` with syntax validation | |
 | `--host <host>` | | Host interface to bind Web UI | `127.0.0.1` (or from config) |
 | `--port <port>` | `-p <port>` | Port number to bind Web UI | `8080` (or from config) |
 | `--mcp-stdio` | | Run in MCP JSON-RPC 2.0 STDIO mode | `false` |
@@ -243,6 +248,28 @@ Open the Web UI URL in your browser to access the Sylpheed-style 3-pane review i
 | `--no-server` | | Do not start the HTTP server (useful with `--renew-token` to rotate token and exit) | `false` |
 | `--version` | `-v` | Output version and exit | |
 | `--help` | `-h` | Display usage options | |
+
+#### Configuration Management (`undined config`)
+UndineD provides built-in commands to view, query, and modify `config.toml` from the terminal:
+```bash
+# Print active configuration file path
+undined config path
+
+# View full configuration
+undined config show
+
+# Query a specific setting (e.g. Patchwork delegate users)
+undined config get patchwork.delegate-users
+
+# Update a setting (preserves comments and formatting with pre-save validation)
+undined config set patchwork.delegate-users '["dev", "reviewer"]'
+undined config set general.editor_cmd 'nvim +{line} {file}'
+
+# Open config.toml in $EDITOR with automatic syntax validation on exit
+undined config edit
+```
+
+*(Traditional flag syntax `--show-config`, `--config-get`, `--config-set`, and `--config-edit` is also supported).*
 
 #### Renewing Authentication Token
 To rotate your authentication token:

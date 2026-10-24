@@ -104,6 +104,10 @@ func sendDaemonMsg(pipe *os.File, msg daemonReadyMsg) {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		os.Exit(runConfigCommand(os.Args[2:]))
+	}
+
 	var configPath string
 	var host string
 	var port int
@@ -115,6 +119,11 @@ func main() {
 	var daemonMode bool
 	var quitMode bool
 	var pidFileFlag string
+	var showConfig bool
+	var getConfigKey string
+	var setConfigVal string
+	var editConfig bool
+	var showConfigPath bool
 
 	flag.StringVar(&configPath, "config", "", "Path to config.toml configuration file.")
 	flag.StringVar(&configPath, "C", "", "Path to config.toml configuration file (shorthand).")
@@ -132,11 +141,57 @@ func main() {
 	flag.BoolVar(&quitMode, "quit", false, "Terminate running UndineD daemon instance.")
 	flag.BoolVar(&quitMode, "q", false, "Terminate running UndineD daemon instance (shorthand).")
 	flag.StringVar(&pidFileFlag, "pid-file", "", "Path to PID file (overrides config).")
+	flag.BoolVar(&showConfig, "show-config", false, "Print active configuration and exit.")
+	flag.StringVar(&getConfigKey, "config-get", "", "Print value of a config setting (e.g. patchwork.delegate-users) and exit.")
+	flag.StringVar(&setConfigVal, "config-set", "", "Set a config setting in section.key=value format and exit.")
+	flag.BoolVar(&editConfig, "config-edit", false, "Open configuration file in $EDITOR and exit.")
+	flag.BoolVar(&editConfig, "edit-config", false, "Open configuration file in $EDITOR (shorthand).")
+	flag.BoolVar(&showConfigPath, "config-path", false, "Print active configuration file path and exit.")
 
 	flag.Parse()
 
 	if showVersion {
 		fmt.Println(version)
+		os.Exit(0)
+	}
+
+	if showConfigPath {
+		if err := doShowConfigPath(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if showConfig {
+		if err := doShowConfig(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if getConfigKey != "" {
+		if err := doConfigGet(configPath, getConfigKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if setConfigVal != "" {
+		if err := doConfigSet(configPath, setConfigVal); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	if editConfig {
+		if err := doConfigEdit(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
