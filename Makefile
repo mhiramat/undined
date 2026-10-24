@@ -1,4 +1,4 @@
-.PHONY: all build test run clean
+.PHONY: all build test test-e2e run clean
 
 BIN_DIR := bin
 BIN := $(BIN_DIR)/undined
@@ -12,6 +12,9 @@ build:
 
 test:
 	GOTOOLCHAIN=local $(GO) test -v -tags "fts5" ./...
+
+test-e2e:
+	GOTOOLCHAIN=local $(GO) test -v -tags "fts5" ./test/e2e/...
 
 run: build
 	./$(BIN)
