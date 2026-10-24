@@ -9,9 +9,12 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 ## 2. Build and Test Invariants
 - **FTS5 Build Tag**: Undine relies on SQLite FTS5 for full-text search. All test and build invocations must include the `fts5` tag:
   - `make test` or `go test -tags "fts5" ./...`
+  - `make test-e2e` or `go test -tags "fts5" ./test/e2e/...`
   - `make build` or `go build -tags "fts5" -o bin/undined ./cmd/undined`
+- **Pre-Commit E2E Testing Requirement**: Always run the End-to-End test suite (`make test-e2e`) and full test suite (`make test`) before making any git commit to verify that no end-to-end user workflows or daemon processes are broken.
 
 ## 3. Git Commit Hygiene
+- **Run E2E Tests Before Committing**: Run `make test-e2e` and ensure all tests pass prior to committing any changes.
 - **Separate Commits**: When addressing multiple distinct bugs, vulnerabilities, or enhancements, commit each logical change separately with an explanatory commit message. Avoid bundling unrelated changes into a single commit.
 - **Message Wrapping**: Commit messages must be wrapped before the 80-character mark (recommend 72 characters for body text and 50–72 characters for subjects). Never exceed 80 characters per line.
 
