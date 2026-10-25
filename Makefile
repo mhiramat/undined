@@ -1,4 +1,4 @@
-.PHONY: all build test test-e2e run clean
+.PHONY: all build test test-e2e run clean build-vscode test-vscode
 
 BIN_DIR := bin
 BIN := $(BIN_DIR)/undined
@@ -15,6 +15,12 @@ test:
 
 test-e2e:
 	GOTOOLCHAIN=local $(GO) test -v -tags "fts5" ./test/e2e/...
+
+build-vscode:
+	$(MAKE) -C vscode-extension build
+
+test-vscode:
+	$(MAKE) -C vscode-extension test
 
 run: build
 	./$(BIN)

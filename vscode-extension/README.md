@@ -37,6 +37,18 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
 
 ## Building & Testing
 
+### Using Make (Recommended)
+
+```bash
+cd vscode-extension
+make         # Compiles TypeScript and packages into .vsix
+make compile # Compiles TypeScript to out/
+make test    # Runs unit tests
+make clean   # Removes build artifacts and .vsix packages
+```
+
+### Using NPM Directly
+
 ```bash
 cd vscode-extension
 npm install

@@ -6,5 +6,6 @@ test/**
 out/test/**
 tsconfig.json
 .gitignore
+Makefile
 *.map
 
