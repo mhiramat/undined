@@ -130,7 +130,144 @@ UndineD follows the **XDG Base Directory Specification**:
 * **Auth Token**: `~/.local/share/undined/auth_token` (auto-generated POSIX `0600`)
 * **PID File**: `~/.local/share/undined/undined.pid` (auto-managed for daemon control)
 
-Create `~/.config/undined/config.toml` with your credentials:
+---
+
+### 4.1 Managing Configuration with `undined config`
+
+UndineD provides a built-in `undined config` CLI tool to inspect, edit, and validate configuration safely without risking syntax errors or displaying obsolete settings.
+
+#### 1. Show Active Configuration (`undined config show`)
+Displays all active configuration settings grouped by section. Any setting that has not been explicitly configured is shown with its default value preceded by a `#` comment symbol:
+
+```bash
+undined config show
+# or simply:
+undined config
+```
+
+Example output:
+```toml
+# Configuration: ~/.config/undined/config.toml
+
+[general]
+host = "127.0.0.1"
+port = 8080
+# debug = false
+data_dir = "~/.local/share/undined"
+maildir_path = "~/.local/share/undined/maildir"
+db_path = "~/.local/share/undined/undine.db"
+editor_cmd = "foot -e nvim +{line} {file}"
+reply_use_external_editor = false
+kernel_git_dir = "~/linux"
+log_file = "~/.cache/undined/undined.log"
+log_level = "info"
+# pid_file = "~/.local/share/undined/undined.pid"
+
+[imap]
+host = "imap.example.com"
+port = 993
+use_ssl = true
+verify_cert = true
+# ca_cert_path = ""
+username = "dev@example.com"
+password_eval = "pass show mail/dev"
+sync_folders = ["INBOX", "LKML", "Sent"]
+poll_interval_seconds = 60
+
+[smtp]
+host = "smtp.example.com"
+port = 587
+use_ssl = false
+use_starttls = true
+# use_smtputf8 = false
+verify_cert = true
+username = "dev@example.com"
+password_eval = "pass show mail/dev"
+from_name = "Kernel Developer"
+from_email = "dev@example.com"
+signature = "-- \nKernel Developer"
+content_type = "text/plain; charset=utf-8"
+transfer_encoding = "8bit"
+
+[lkml]
+b4_cmd = "b4"
+lore_url = "https://lore.kernel.org/all"
+auto_hydrate_missing_parents = false
+
+[review]
+command = "agy --print --model=flash"
+# wrapper_script = ""
+# prompt_file = ""
+
+[patchwork]
+enabled = true
+url = "https://patchwork.kernel.org"
+api_version = "1.4"
+username = "dev"
+token_eval = "pass show api/patchwork.kernel.org"
+todo_states = ["new", "under-review"]
+delegate-users = ["dev", "reviewer"]
+```
+
+#### 2. Edit Configuration Interactively (`undined config edit`)
+Opens the active configuration file in your `$EDITOR` (or `$VISUAL`, defaulting to `nano`/`vim`). If the file does not yet exist, an initial template is created automatically with secure `0600` permissions.
+
+Crucially, **TOML syntax is validated before changes are saved**: if a syntax error is introduced, `undined config edit` warns you and offers to re-open the editor, preventing accidental corruption of daemon settings.
+
+```bash
+undined config edit
+```
+
+#### 3. Query Specific Settings (`undined config get`)
+Fetch the effective value of a single configuration key:
+
+```bash
+# Query Patchwork delegate users
+undined config get patchwork.delegate-users
+
+# Query SMTP From email
+undined config get smtp.from_email
+
+# Shorthand dot notation is also accepted directly:
+undined config general.editor_cmd
+```
+
+#### 4. Update Specific Settings (`undined config set`)
+Safely update or add a configuration key while preserving comments and existing formatting:
+
+```bash
+# Set external editor command
+undined config set general.editor_cmd 'foot -e nvim +{line} {file}'
+
+# Update Patchwork delegate users list
+undined config set patchwork.delegate-users '["dev", "reviewer"]'
+
+# Set IMAP poll interval
+undined config set imap.poll_interval_seconds 120
+```
+
+#### 5. Show Configuration File Path (`undined config path`)
+Print the absolute path to the active configuration file:
+
+```bash
+undined config path
+# Output: ~/.config/undined/config.toml
+```
+
+#### 6. Custom Configuration File
+To inspect or edit an alternate configuration file, pass `-C` or `--config`:
+
+```bash
+undined config -C /path/to/custom-config.toml show
+undined config -C /path/to/custom-config.toml edit
+undined config -C /path/to/custom-config.toml set smtp.from_name "Kernel Developer"
+```
+
+---
+
+### 4.2 Configuration File Reference (`config.toml`)
+
+Create `~/.config/undined/config.toml` (or edit it with `undined config edit`):
 
 ```toml
 [general]
@@ -250,23 +387,21 @@ Open the Web UI URL in your browser to access the Sylpheed-style 3-pane review i
 | `--help` | `-h` | Display usage options | |
 
 #### Configuration Management (`undined config`)
-UndineD provides built-in commands to view, query, and modify `config.toml` from the terminal:
+UndineD provides built-in subcommands to inspect, edit, and validate configuration directly from the terminal (see [Section 4.1](#41-managing-configuration-with-undined-config) for complete details):
 ```bash
-# Print active configuration file path
-undined config path
-
-# View full configuration
+# Display active configuration grouped by section with defaults
 undined config show
 
-# Query a specific setting (e.g. Patchwork delegate users)
-undined config get patchwork.delegate-users
-
-# Update a setting (preserves comments and formatting with pre-save validation)
-undined config set patchwork.delegate-users '["dev", "reviewer"]'
-undined config set general.editor_cmd 'nvim +{line} {file}'
-
-# Open config.toml in $EDITOR with automatic syntax validation on exit
+# Open config.toml in $EDITOR with automatic syntax validation
 undined config edit
+
+# Query or update specific settings
+undined config get patchwork.delegate-users
+undined config set patchwork.delegate-users '["dev", "reviewer"]'
+undined config set general.editor_cmd 'foot -e nvim +{line} {file}'
+
+# Display path of active config.toml
+undined config path
 ```
 
 *(Traditional flag syntax `--show-config`, `--config-get`, `--config-set`, and `--config-edit` is also supported).*
