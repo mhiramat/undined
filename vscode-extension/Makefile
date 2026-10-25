@@ -16,7 +16,7 @@ compile: node_modules
 build: package
 
 package: compile
-	$(VSCE) package --no-dependencies --allow-missing-repository
+	NODE_OPTIONS="--no-deprecation $${NODE_OPTIONS:-}" $(VSCE) package --no-dependencies --allow-missing-repository
 
 test: node_modules
 	$(NPM) test
@@ -29,7 +29,7 @@ install: package
 		VSIX_FILE=$$(ls -t *.vsix 2>/dev/null | head -n 1); \
 		if [ -n "$$VSIX_FILE" ]; then \
 			echo "Installing $$VSIX_FILE into VS Code..."; \
-			code --install-extension "$$VSIX_FILE"; \
+			NODE_OPTIONS="--no-deprecation $${NODE_OPTIONS:-}" code --install-extension "$$VSIX_FILE"; \
 		else \
 			echo "No .vsix package found to install." >&2; \
 			exit 1; \
