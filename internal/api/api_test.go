@@ -21,6 +21,7 @@ import (
 	"undined-go/internal/imap"
 	"undined-go/internal/patchwork"
 	"undined-go/internal/security"
+	"undined-go/internal/smtp"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
 )
@@ -63,6 +64,8 @@ func TestSecurityMiddlewareAndAuth(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
+
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
 
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
@@ -143,6 +146,8 @@ func TestIndexAndLoginFlow(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
 
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
+
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
 
@@ -205,6 +210,8 @@ func TestFolderAndMessageEndpoints(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
+
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
 
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
@@ -371,6 +378,8 @@ func TestFolderSyncAndThreadedMessagesEndpoints(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
+
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
 
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
@@ -606,6 +615,8 @@ func TestAIReviewMessageDetailAndLinks(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
+
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
 
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
@@ -977,6 +988,8 @@ func TestKnownAddressesAPI(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
 
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
+
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
 
@@ -1264,6 +1277,8 @@ func TestAttachmentsEndpoint(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
 
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
+
 	ts := httptest.NewServer(server.Router())
 	defer ts.Close()
 
@@ -1414,6 +1429,97 @@ Test log content output=0A
 		t.Errorf("expected 400 for bad index, got %d", respBad.StatusCode)
 	}
 }
+
+func TestComposerDraftSaveAndCommentDeleteErrorPropagation(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	// 1. Test POST /api/composer/save-draft success
+	draftPayload := `{"to": "dev@example.com", "subject": "Test Draft", "body": "Draft body content"}`
+	reqDraft, _ := http.NewRequest("POST", ts.URL+"/api/composer/save-draft", strings.NewReader(draftPayload))
+	reqDraft.Header.Set("Authorization", "Bearer "+token)
+	reqDraft.Header.Set("Content-Type", "application/json")
+	respDraft, err := client.Do(reqDraft)
+	if err != nil {
+		t.Fatalf("save-draft failed: %v", err)
+	}
+	defer respDraft.Body.Close()
+
+	if respDraft.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for save-draft, got %d", respDraft.StatusCode)
+	}
+
+	var draftRes map[string]any
+	if err := json.NewDecoder(respDraft.Body).Decode(&draftRes); err != nil {
+		t.Fatalf("failed decoding draft response: %v", err)
+	}
+	if draftRes["status"] != "ok" || draftRes["message_id"] == "" || draftRes["db_id"] == nil {
+		t.Errorf("unexpected save-draft response: %v", draftRes)
+	}
+
+	// Verify draft exists in DB
+	dbID := int64(draftRes["db_id"].(float64))
+	draftMsg, err := db.GetMessageByID(dbID)
+	if err != nil || draftMsg == nil {
+		t.Fatalf("draft message not found in DB: %v", err)
+	}
+	if draftMsg.Subject != "Test Draft" {
+		t.Errorf("unexpected draft subject: %s", draftMsg.Subject)
+	}
+
+	// 2. Test DELETE comment
+	inbox, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed creating folder: %v", err)
+	}
+	msgID, err := db.InsertHeaderSummary(inbox.ID, 999, []byte("Message-ID: <cmt-test@kernel.org>\r\nSubject: Test\r\n\r\n"), true, "")
+	if err != nil {
+		t.Fatalf("failed creating test message: %v", err)
+	}
+
+	// Add comment
+	savedCmt, err := db.SavePatchComment(&database.PatchComment{
+		MessageID: "cmt-test@kernel.org",
+		FilePath:  "file.c",
+		LineNo:    10,
+		State:     "draft",
+		Text:      "test comment text",
+	})
+	if err != nil {
+		t.Fatalf("failed adding comment: %v", err)
+	}
+
+	// Delete comment via API
+	reqDelCmt, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/api/messages/%d/comments/%d", ts.URL, msgID, savedCmt.ID), nil)
+	reqDelCmt.Header.Set("Authorization", "Bearer "+token)
+	respDelCmt, err := client.Do(reqDelCmt)
+	if err != nil {
+		t.Fatalf("delete comment failed: %v", err)
+	}
+	defer respDelCmt.Body.Close()
+
+	if respDelCmt.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for delete comment, got %d", respDelCmt.StatusCode)
+	}
+
+	// Verify comment deleted from DB
+	cmts, err := db.GetMessageComments("cmt-test@kernel.org")
+	if err != nil {
+		t.Fatalf("GetMessageComments failed: %v", err)
+	}
+	if len(cmts) != 0 {
+		t.Errorf("expected 0 comments after delete, got %d", len(cmts))
+	}
+}
+
 
 
 

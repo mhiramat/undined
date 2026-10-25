@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"undined-go/internal/bridge"
@@ -274,7 +275,14 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbID, _ := s.DB.IndexEmailFile(draftFolder.ID, path)
+	dbID, err := s.DB.IndexEmailFile(draftFolder.ID, path)
+	if err != nil {
+		if s.Maildir != nil {
+			_ = s.Maildir.DeleteMessage(path)
+		}
+		http.Error(w, fmt.Sprintf("Failed to index draft message: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	msgID := ""
 	if savedMsg, _ := s.DB.GetMessageByID(dbID); savedMsg != nil {

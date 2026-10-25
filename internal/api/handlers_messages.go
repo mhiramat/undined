@@ -374,7 +374,10 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.DB.DeleteMessage(msg.ID)
+	if err := s.DB.DeleteMessage(msg.ID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete message: %v", err), http.StatusInternalServerError)
+		return
+	}
 	if msg.FilePath != "" && s.Maildir != nil {
 		_ = s.Maildir.DeleteMessage(msg.FilePath)
 	}
@@ -778,7 +781,10 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = s.DB.DeleteComment(cID)
+	if err := s.DB.DeleteComment(cID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete comment: %v", err), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
 }
