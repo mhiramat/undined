@@ -30,6 +30,12 @@ export enum TreeItemCollapsibleState {
   Expanded = 2,
 }
 
+export enum ProgressLocation {
+  SourceControl = 1,
+  Window = 10,
+  Notification = 15,
+}
+
 export class TreeItem {
   public id?: string;
   public description?: string;
@@ -74,19 +80,48 @@ export class EventEmitter<T> {
   }
 }
 
+const registeredCommands = new Map<string, (...args: any[]) => any>();
+
 export const mockVscode = {
   Uri: MockUri,
   TreeItem,
   TreeItemCollapsibleState,
+  ProgressLocation,
   ThemeIcon,
   ThemeColor,
   MarkdownString,
   EventEmitter,
   window: {
-    showInformationMessage: async () => undefined,
-    showErrorMessage: async () => undefined,
-    showWarningMessage: async () => undefined,
+    showInformationMessage: async (..._args: any[]): Promise<any> => undefined,
+    showErrorMessage: async (..._args: any[]): Promise<any> => undefined,
+    showWarningMessage: async (..._args: any[]): Promise<any> => undefined,
     showInputBox: async () => undefined,
+    showQuickPick: async () => undefined,
+    withProgress: async (
+      _options: any,
+      task: (progress: { report: (val: any) => void }, token: { onCancellationRequested: (cb: () => void) => { dispose: () => void }; isCancellationRequested: boolean }) => Promise<any>
+    ) => {
+      let isCancelled = false;
+      const cancellationCallbacks: (() => void)[] = [];
+      const token = {
+        get isCancellationRequested() {
+          return isCancelled;
+        },
+        onCancellationRequested(cb: () => void) {
+          cancellationCallbacks.push(cb);
+          return {
+            dispose: () => {
+              const idx = cancellationCallbacks.indexOf(cb);
+              if (idx >= 0) cancellationCallbacks.splice(idx, 1);
+            },
+          };
+        },
+      };
+      const progress = {
+        report: (_val: any) => {},
+      };
+      return task(progress, token);
+    },
     createWebviewPanel: () => ({
       webview: { html: "", onDidReceiveMessage: () => ({ dispose: () => {} }) },
       onDidDispose: () => ({ dispose: () => {} }),
@@ -104,8 +139,22 @@ export const mockVscode = {
     },
   },
   commands: {
-    registerCommand: () => ({ dispose: () => {} }),
-    executeCommand: async () => undefined,
+    registerCommand: (command: string, callback: (...args: any[]) => any) => {
+      registeredCommands.set(command, callback);
+      return {
+        dispose: () => {
+          registeredCommands.delete(command);
+        },
+      };
+    },
+    executeCommand: async (command: string, ...args: any[]) => {
+      const handler = registeredCommands.get(command);
+      if (handler) {
+        return handler(...args);
+      }
+      return undefined;
+    },
+    getRegisteredCommands: () => registeredCommands,
   },
   workspace: {
     openTextDocument: async () => ({ getText: () => "" }),

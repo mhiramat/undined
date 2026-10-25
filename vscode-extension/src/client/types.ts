@@ -5,17 +5,39 @@
 export interface Folder {
   id: number;
   name: string;
-  is_subscribed: boolean;
-  is_system: boolean;
+  is_subscribed?: boolean;
+  is_system?: boolean;
+  sync_enabled?: boolean;
+  is_imap?: boolean;
+  last_synced_uid?: number;
   unread_count?: number;
   total_count?: number;
 }
 
+export interface SyncFolderResult {
+  status: string;
+  folder_id: number;
+  folder_name: string;
+  synced_count: number;
+  removed_count: number;
+}
+
+export interface SyncTodoResult {
+  synced_count: number;
+  removed_count: number;
+  total_delegated: number;
+  patches?: any[];
+}
+
 export interface FolderSyncStatus {
+  folder_id?: number;
+  folder_name?: string;
   is_syncing: boolean;
   synced: number;
   total: number;
+  removed?: number;
   status: string;
+  error?: string;
 }
 
 export interface MessageSummary {

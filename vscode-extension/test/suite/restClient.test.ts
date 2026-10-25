@@ -44,6 +44,54 @@ describe("UndineRestClient", () => {
         return;
       }
 
+      if (req.url === "/api/folders/1/sync-full" && req.method === "POST") {
+        res.statusCode = 200;
+        res.end(
+          JSON.stringify({
+            status: "completed",
+            folder_id: 1,
+            folder_name: "INBOX",
+            synced_count: 7,
+            removed_count: 0,
+          })
+        );
+        return;
+      }
+
+      if (req.url === "/api/folders/1/sync-status" && req.method === "GET") {
+        res.statusCode = 200;
+        res.end(
+          JSON.stringify({
+            folder_id: 1,
+            folder_name: "INBOX",
+            is_syncing: false,
+            synced: 7,
+            total: 7,
+            status: "completed",
+          })
+        );
+        return;
+      }
+
+      if (req.url === "/api/folders/1/sync-cancel" && req.method === "POST") {
+        res.statusCode = 200;
+        res.end(JSON.stringify({ success: true }));
+        return;
+      }
+
+      if (req.url?.startsWith("/api/patchwork/sync-todo") && req.method === "POST") {
+        res.statusCode = 200;
+        res.end(
+          JSON.stringify({
+            synced_count: 3,
+            removed_count: 1,
+            total_delegated: 5,
+            patches: [],
+          })
+        );
+        return;
+      }
+
       if (req.url?.startsWith("/api/messages/101/comments") && req.method === "POST") {
         let body = "";
         req.on("data", (chunk) => (body += chunk));
@@ -115,6 +163,24 @@ describe("UndineRestClient", () => {
     assert.strictEqual(res.success, true);
     assert.strictEqual(res.comment.file_path, "DESCRIPTION");
     assert.strictEqual(res.comment.line_no, 1);
+  });
+
+  it("should trigger full folder summary sync and parse result", async () => {
+    const client = new UndineRestClient(serverUrl, tokenManager);
+    const res = await client.syncFolderFull(1);
+    assert.strictEqual(res.status, "completed");
+    assert.strictEqual(res.folder_id, 1);
+    assert.strictEqual(res.folder_name, "INBOX");
+    assert.strictEqual(res.synced_count, 7);
+    assert.strictEqual(res.removed_count, 0);
+  });
+
+  it("should trigger Patchwork TODO sync and parse result", async () => {
+    const client = new UndineRestClient(serverUrl, tokenManager);
+    const res = await client.syncTodoFromPatchwork(["new", "under-review"]);
+    assert.strictEqual(res.synced_count, 3);
+    assert.strictEqual(res.removed_count, 1);
+    assert.strictEqual(res.total_delegated, 5);
   });
 
   it("should retry with new token on 401 Unauthorized", async () => {

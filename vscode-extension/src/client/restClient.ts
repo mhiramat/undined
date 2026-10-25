@@ -6,6 +6,8 @@ import { TokenManager } from "./tokenManager";
 import {
   Folder,
   FolderSyncStatus,
+  SyncFolderResult,
+  SyncTodoResult,
   MessageSummary,
   MessageDetail,
   PatchComment,
@@ -78,8 +80,15 @@ export class UndineRestClient {
     return this.request<Folder[]>("/api/folders");
   }
 
-  public async syncFolderFull(folderId: number): Promise<{ success: boolean; synced: number }> {
-    return this.request<{ success: boolean; synced: number }>(`/api/folders/${folderId}/sync-full`, {
+  public async syncFolderFull(folderId: number): Promise<SyncFolderResult> {
+    return this.request<SyncFolderResult>(`/api/folders/${folderId}/sync-full`, {
+      method: "POST",
+    });
+  }
+
+  public async syncTodoFromPatchwork(states?: string[]): Promise<SyncTodoResult> {
+    const qs = states && states.length > 0 ? `?states=${encodeURIComponent(states.join(","))}` : "";
+    return this.request<SyncTodoResult>(`/api/patchwork/sync-todo${qs}`, {
       method: "POST",
     });
   }

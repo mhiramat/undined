@@ -16,6 +16,7 @@ import { registerViewCommands } from "./commands/viewCommands";
 import { registerComposeCommands } from "./commands/composeCommands";
 import { registerB4Commands } from "./commands/b4Commands";
 import { registerPatchworkCommands } from "./commands/patchworkCommands";
+import { registerFolderCommands } from "./commands/folderCommands";
 import { registerUndineChatParticipant } from "./copilot/undineChatParticipant";
 
 let pollTimer: NodeJS.Timeout | undefined;
@@ -261,6 +262,7 @@ export function activate(context: vscode.ExtensionContext) {
       headerProvider.setMessage(activeDetail);
     }
   });
+  registerFolderCommands(context, client, foldersProvider, threadsProvider);
 
   // 6. Register Copilot Chat Participant (@undine)
   registerUndineChatParticipant(context, client, () => activeDetail);
