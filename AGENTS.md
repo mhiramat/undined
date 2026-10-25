@@ -37,3 +37,25 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 ## 8. MIME Attachment Security & Download Invariants
 - **Filename Sanitization**: Always sanitize attachment filenames with `filepath.Base()` and strip directory traversal components (`../`), control characters, and quotes.
 - **Secure Download Headers**: Attachment download endpoints must enforce `Content-Disposition: attachment; filename="..."; filename*=UTF-8''...` along with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`.
+
+## 9. IMAP Sync & Checkpoint Progression Invariant
+- **Contiguous Checkpoint Progression**: A folder's `last_synced_uid`
+  checkpoint must only advance up to the highest contiguous server UID
+  verified to be present in the local database. Never unconditionally
+  advance the checkpoint to the maximum server UID if messages remain
+  undownloaded or header fetches fail.
+- **Strict Error Propagation**: Sync operations must never report
+  completion (`status = "completed"`) or discard fetch errors when message
+  summaries fail to download or return empty payloads. They must set
+  `status = "error"`, record the error detail, and halt batch processing so
+  subsequent automatic polling does not skip missing messages.
+
+## 10. Active Configuration Presentation Invariant
+- **No Raw Config File Echoing**: Never display configuration files
+  directly as-is to the user or CLI. Raw files may contain obsolete,
+  unparsed, or deprecated keys from previous versions.
+- **Sectional Organization & Default Annotations**: Always present active
+  configuration settings grouped by section. Any setting that has not been
+  explicitly configured must be displayed with its key followed by its
+  default value, preceded by a `#` comment symbol.
+
