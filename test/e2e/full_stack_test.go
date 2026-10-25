@@ -356,6 +356,111 @@ func TestE2E_ReviewQuotingAndSMTPSending(t *testing.T) {
 	}
 }
 
+// Scenario S6b: Draft Overwrite and Purge on Send
+func TestE2E_DraftOverwriteAndSendPurge(t *testing.T) {
+	env := setupE2EEnv(t)
+
+	// 1. Initial draft saving
+	draft1Payload := map[string]any{
+		"to":      "linux-trace@vger.kernel.org",
+		"subject": "Draft v1: initial notes",
+		"body":    "First version of review comments\n",
+	}
+	d1Bytes, _ := json.Marshal(draft1Payload)
+	resp, err := env.Request("POST", "/api/composer/save-draft", string(d1Bytes))
+	if err != nil {
+		t.Fatalf("save draft 1 failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from save draft 1, got %d", resp.StatusCode)
+	}
+
+	var d1Res map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&d1Res)
+	d1IDFloat, ok := d1Res["db_id"].(float64)
+	if !ok || d1IDFloat <= 0 {
+		t.Fatalf("expected positive db_id in save draft response, got: %v", d1Res["db_id"])
+	}
+	draft1ID := int64(d1IDFloat)
+
+	draftFolder, err := env.DB.GetOrCreateFolder("Drafts", false)
+	if err != nil {
+		t.Fatalf("failed to get Drafts folder: %v", err)
+	}
+	drafts, err := env.DB.ListMessages(&draftFolder.ID, 10, 0)
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("expected 1 draft in Drafts folder, got %d", len(drafts))
+	}
+	if drafts[0].Subject != "Draft v1: initial notes" {
+		t.Errorf("unexpected draft subject: %s", drafts[0].Subject)
+	}
+
+	// 2. Overwrite draft with draft_id
+	draft2Payload := map[string]any{
+		"to":       "linux-trace@vger.kernel.org",
+		"subject":  "Draft v2: updated review",
+		"body":     "Second version of review comments\n",
+		"draft_id": draft1ID,
+	}
+	d2Bytes, _ := json.Marshal(draft2Payload)
+	resp, err = env.Request("POST", "/api/composer/save-draft", string(d2Bytes))
+	if err != nil {
+		t.Fatalf("save draft 2 failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from save draft 2, got %d", resp.StatusCode)
+	}
+
+	var d2Res map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&d2Res)
+	d2IDFloat, ok := d2Res["db_id"].(float64)
+	if !ok || d2IDFloat <= 0 {
+		t.Fatalf("expected positive db_id in save draft 2 response, got: %v", d2Res["db_id"])
+	}
+	draft2ID := int64(d2IDFloat)
+
+	// Verify previous draft was replaced (still only 1 draft in Drafts)
+	drafts, err = env.DB.ListMessages(&draftFolder.ID, 10, 0)
+	if err != nil || len(drafts) != 1 {
+		t.Fatalf("expected exactly 1 draft in Drafts folder after overwrite, got %d", len(drafts))
+	}
+	if drafts[0].Subject != "Draft v2: updated review" {
+		t.Errorf("expected updated subject in draft, got: %s", drafts[0].Subject)
+	}
+
+	// 3. Send email with draft_id -> should send via SMTP and delete draft from Drafts
+	sendPayload := map[string]any{
+		"to":       "linux-trace@vger.kernel.org",
+		"subject":  "Draft v2: updated review",
+		"body":     "Final version sent\n",
+		"draft_id": draft2ID,
+	}
+	sBytes, _ := json.Marshal(sendPayload)
+	resp, err = env.Request("POST", "/api/smtp/send", string(sBytes))
+	if err != nil {
+		t.Fatalf("send draft failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from send draft, got %d", resp.StatusCode)
+	}
+
+	// Verify draft was purged from Drafts folder
+	drafts, err = env.DB.ListMessages(&draftFolder.ID, 10, 0)
+	if err != nil || len(drafts) != 0 {
+		t.Fatalf("expected 0 drafts in Drafts folder after send, got %d", len(drafts))
+	}
+
+	// Verify message is in Sent folder
+	sentFolder, _ := env.DB.GetOrCreateFolder("Sent", false)
+	sentMsgs, err := env.DB.ListMessages(&sentFolder.ID, 10, 0)
+	if err != nil || len(sentMsgs) != 1 {
+		t.Fatalf("expected 1 message in Sent folder, got %d", len(sentMsgs))
+	}
+}
+
 // Scenario S7: b4 Series Apply
 func TestE2E_B4SeriesApply(t *testing.T) {
 	env := setupE2EEnv(t)

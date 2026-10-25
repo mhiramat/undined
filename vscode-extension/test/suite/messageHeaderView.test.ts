@@ -46,6 +46,7 @@ describe("MessageHeaderViewProvider", () => {
   beforeEach(() => {
     const tm = new TokenManager();
     client = new UndineRestClient("http://127.0.0.1:8080", tm);
+    client.getPatchworkInfo = async (_msgid: string) => null;
     mockExtensionUri = {
       scheme: "file",
       authority: "",

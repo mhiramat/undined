@@ -236,6 +236,7 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		InReplyTo  string `json:"in_reply_to"`
 		References string `json:"references"`
 		CustomFrom string `json:"custom_from"`
+		DraftID    int64  `json:"draft_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid draft payload", http.StatusBadRequest)
@@ -284,6 +285,16 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If overwriting a previous draft from the same editor session, delete the old draft
+	if body.DraftID > 0 && body.DraftID != dbID {
+		if prevDraft, _ := s.DB.GetMessageByID(body.DraftID); prevDraft != nil && prevDraft.FolderID == draftFolder.ID {
+			_ = s.DB.DeleteMessage(prevDraft.ID)
+			if s.Maildir != nil && prevDraft.FilePath != "" {
+				_ = s.Maildir.DeleteMessage(prevDraft.FilePath)
+			}
+		}
+	}
+
 	msgID := ""
 	if savedMsg, _ := s.DB.GetMessageByID(dbID); savedMsg != nil {
 		msgID = savedMsg.MessageID
@@ -311,6 +322,7 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		InReplyTo  string `json:"in_reply_to"`
 		References string `json:"references"`
 		OrigMsgID  string `json:"orig_msg_id"`
+		DraftID    int64  `json:"draft_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid send payload", http.StatusBadRequest)
@@ -362,6 +374,18 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			_, _ = s.DB.DiscardDraftComments(orig.MessageID)
+		}
+	}
+
+	// If this sent message originated from a draft, clean up the draft from Drafts folder
+	if body.DraftID > 0 && s.DB != nil {
+		if draftFolder, err := s.DB.GetFolderByName(constants.FolderDrafts); err == nil && draftFolder != nil {
+			if draftMsg, err := s.DB.GetMessageByID(body.DraftID); err == nil && draftMsg != nil && draftMsg.FolderID == draftFolder.ID {
+				_ = s.DB.DeleteMessage(draftMsg.ID)
+				if s.Maildir != nil && draftMsg.FilePath != "" {
+					_ = s.Maildir.DeleteMessage(draftMsg.FilePath)
+				}
+			}
 		}
 	}
 

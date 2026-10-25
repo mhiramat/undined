@@ -21,6 +21,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		"editor_cmd":                editorCmd,
 		"has_external_editor":       editorCmd != "",
 		"reply_use_external_editor": s.Config.General.ReplyUseExternalEditor,
+		"composer_window_mode":      s.Config.General.ComposerWindowMode,
 		"kernel_git_dir":            s.Config.General.KernelGitDir,
 		"from_name":                 s.Config.SMTP.FromName,
 		"from_email":                s.Config.SMTP.FromEmail,

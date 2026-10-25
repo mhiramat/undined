@@ -204,6 +204,7 @@ export interface SendEmailPayload {
   in_reply_to?: string | null;
   references?: string | null;
   orig_msg_id?: string | null;
+  draft_id?: number | null;
 }
 
 export interface SaveDraftPayload {
@@ -214,6 +215,7 @@ export interface SaveDraftPayload {
   in_reply_to?: string | null;
   references?: string | null;
   custom_from?: string | null;
+  draft_id?: number | null;
 }
 
 export interface KnownAddress {

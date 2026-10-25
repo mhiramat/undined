@@ -38,6 +38,7 @@ type GeneralConfig struct {
 	TerminalCmd            string `toml:"terminal_cmd" json:"terminal_cmd"`
 	ReplyUseExternalEditor bool   `toml:"reply_use_external_editor" json:"reply_use_external_editor"`
 	KernelGitDir           string `toml:"kernel_git_dir" json:"kernel_git_dir"`
+	ComposerWindowMode     string `toml:"composer_window_mode" json:"composer_window_mode"`
 	LogFile                string `toml:"log_file" json:"log_file"`
 	LogLevel               string `toml:"log_level" json:"log_level"`
 	PIDFile                string `toml:"pid_file" json:"pid_file"`
@@ -397,6 +398,7 @@ func NewDefaultConfig() *Config {
 			TerminalCmd:            constants.DefaultTerminalCmd,
 			ReplyUseExternalEditor: false,
 			KernelGitDir:           ExpandPath(constants.DefaultKernelGitDir),
+			ComposerWindowMode:     "modal",
 			LogFile:                ExpandPath(constants.DefaultLogPath),
 			LogLevel:               constants.DefaultLogLevel,
 			PIDFile:                ExpandPath(constants.DefaultPIDPath),

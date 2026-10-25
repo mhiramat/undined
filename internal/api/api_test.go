@@ -1430,11 +1430,74 @@ Test log content output=0A
 	}
 }
 
+func startMockSMTPServer(t *testing.T) (net.Listener, int) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start mock SMTP server: %v", err)
+	}
+
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				fmt.Fprintf(c, "220 mock.undined.local SMTP Service Ready\r\n")
+				inData := false
+				for {
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					line = strings.TrimRight(line, "\r\n")
+					if inData {
+						if line == "." {
+							inData = false
+							fmt.Fprintf(c, "250 2.0.0 OK: message queued\r\n")
+						}
+						continue
+					}
+					upper := strings.ToUpper(line)
+					if strings.HasPrefix(upper, "EHLO") || strings.HasPrefix(upper, "HELO") {
+						fmt.Fprintf(c, "250-mock.undined.local\r\n250 HELP\r\n")
+					} else if strings.HasPrefix(upper, "MAIL FROM:") {
+						fmt.Fprintf(c, "250 2.1.0 OK\r\n")
+					} else if strings.HasPrefix(upper, "RCPT TO:") {
+						fmt.Fprintf(c, "250 2.1.5 OK\r\n")
+					} else if upper == "DATA" {
+						inData = true
+						fmt.Fprintf(c, "354 Start mail input; end with <CRLF>.<CRLF>\r\n")
+					} else if upper == "QUIT" {
+						fmt.Fprintf(c, "221 2.0.0 Bye\r\n")
+						return
+					} else {
+						fmt.Fprintf(c, "250 OK\r\n")
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	port := l.Addr().(*net.TCPAddr).Port
+	return l, port
+}
+
 func TestComposerDraftSaveAndCommentDeleteErrorPropagation(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
 	defer db.Close()
 
+	smtpListener, smtpPort := startMockSMTPServer(t)
+	defer smtpListener.Close()
+
+	server.Config.SMTP.Host = "127.0.0.1"
+	server.Config.SMTP.Port = smtpPort
+	server.Config.SMTP.UseSTARTTLS = false
+	server.Config.SMTP.UseSSL = false
 	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
 
 	ts := httptest.NewServer(server.Router())
@@ -1473,6 +1536,61 @@ func TestComposerDraftSaveAndCommentDeleteErrorPropagation(t *testing.T) {
 	}
 	if draftMsg.Subject != "Test Draft" {
 		t.Errorf("unexpected draft subject: %s", draftMsg.Subject)
+	}
+
+	// 1b. Test POST /api/composer/save-draft overwriting previous draft with draft_id
+	overwritePayload := fmt.Sprintf(`{"to": "dev@example.com", "subject": "Test Draft Revision 2", "body": "Revised body", "draft_id": %d}`, dbID)
+	reqOverwrite, _ := http.NewRequest("POST", ts.URL+"/api/composer/save-draft", strings.NewReader(overwritePayload))
+	reqOverwrite.Header.Set("Authorization", "Bearer "+token)
+	reqOverwrite.Header.Set("Content-Type", "application/json")
+	respOverwrite, err := client.Do(reqOverwrite)
+	if err != nil {
+		t.Fatalf("save-draft overwrite failed: %v", err)
+	}
+	defer respOverwrite.Body.Close()
+	if respOverwrite.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for save-draft overwrite, got %d", respOverwrite.StatusCode)
+	}
+
+	var overwriteRes map[string]any
+	if err := json.NewDecoder(respOverwrite.Body).Decode(&overwriteRes); err != nil {
+		t.Fatalf("failed decoding overwrite response: %v", err)
+	}
+	newDbID := int64(overwriteRes["db_id"].(float64))
+
+	// Old draft must have been deleted
+	oldDraft, _ := db.GetMessageByID(dbID)
+	if oldDraft != nil {
+		t.Errorf("expected previous draft %d to be deleted on overwrite, but it still exists", dbID)
+	}
+
+	// New draft must exist with updated subject
+	newDraft, err := db.GetMessageByID(newDbID)
+	if err != nil || newDraft == nil {
+		t.Fatalf("expected new draft %d to exist: %v", newDbID, err)
+	}
+	if newDraft.Subject != "Test Draft Revision 2" {
+		t.Errorf("unexpected updated draft subject: %s", newDraft.Subject)
+	}
+
+	// 1c. Test POST /api/smtp/send with draft_id deletes the draft on successful send
+	sendPayload := fmt.Sprintf(`{"to": "dev@example.com", "subject": "Final Send", "body": "Sent body", "draft_id": %d}`, newDbID)
+	reqSend, _ := http.NewRequest("POST", ts.URL+"/api/smtp/send", strings.NewReader(sendPayload))
+	reqSend.Header.Set("Authorization", "Bearer "+token)
+	reqSend.Header.Set("Content-Type", "application/json")
+	respSend, err := client.Do(reqSend)
+	if err != nil {
+		t.Fatalf("smtp send with draft_id failed: %v", err)
+	}
+	defer respSend.Body.Close()
+	if respSend.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for smtp send, got %d", respSend.StatusCode)
+	}
+
+	// Draft must have been deleted after send
+	sentDraft, _ := db.GetMessageByID(newDbID)
+	if sentDraft != nil {
+		t.Errorf("expected sent draft %d to be deleted after SMTP send, but it still exists", newDbID)
 	}
 
 	// 2. Test DELETE comment

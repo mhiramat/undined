@@ -36,6 +36,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "terminal_cmd", getValue: func(c *Config) any { return c.General.TerminalCmd }},
 				{key: "reply_use_external_editor", getValue: func(c *Config) any { return c.General.ReplyUseExternalEditor }},
 				{key: "kernel_git_dir", isPath: true, getValue: func(c *Config) any { return c.General.KernelGitDir }},
+				{key: "composer_window_mode", getValue: func(c *Config) any { return c.General.ComposerWindowMode }},
 				{key: "log_file", isPath: true, getValue: func(c *Config) any { return c.General.LogFile }},
 				{key: "log_level", getValue: func(c *Config) any { return c.General.LogLevel }},
 				{key: "pid_file", isPath: true, getValue: func(c *Config) any { return c.General.PIDFile }},
