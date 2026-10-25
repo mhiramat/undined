@@ -8,10 +8,54 @@ import { renderSummaryPane } from "./components/SummaryPane.js";
 import { renderViewerPane, triggerReply, triggerForward, triggerEdit, triggerNewMessage, triggerOpenReviewed, isDraftFolder, isDraftMessage, isAiReviewMessage } from "./components/ViewerPane.js";
 import { initPaneResizer } from "./components/PaneResizer.js";
 import { openFilterDialog } from "./components/FilterDialog.js";
+import { openInternalEditor } from "./components/InternalEditor.js";
 import { store } from "./store.js";
 import { EVENT_FOLDER_SELECTED } from "./constants.js";
 
 async function init() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const composerSessionId = urlParams.get("composer");
+
+  if (composerSessionId) {
+    // Standalone composer window mode
+    document.body.classList.add("composer-standalone-body");
+    const appEl = document.getElementById("app");
+    if (appEl) {
+      appEl.style.display = "none";
+    }
+
+    try {
+      const config = await fetchConfig();
+      store.setConfig(config);
+    } catch (err) {
+      console.warn("Could not load config:", err);
+    }
+
+    let composerParams = {};
+    try {
+      const raw = localStorage.getItem(composerSessionId);
+      if (raw) {
+        composerParams = JSON.parse(raw);
+        sessionStorage.setItem(composerSessionId, raw);
+        localStorage.removeItem(composerSessionId);
+      } else {
+        const sessionRaw = sessionStorage.getItem(composerSessionId);
+        if (sessionRaw) {
+          composerParams = JSON.parse(sessionRaw);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not retrieve composer session:", e);
+    }
+
+    document.title = (composerParams.title || "Composer") + " - UndineD";
+    openInternalEditor({
+      ...composerParams,
+      isStandalone: true,
+    });
+    return;
+  }
+
   const folderContainer = document.getElementById("folder-pane");
   const summaryContainer = document.getElementById("summary-pane");
   const viewerContainer = document.getElementById("viewer-pane");
@@ -31,6 +75,36 @@ async function init() {
   } catch (err) {
     console.warn("Could not load config:", err);
   }
+
+  // Listen for cross-window messages from standalone composer windows
+  window.addEventListener("message", async (event) => {
+    if (event.origin !== window.location.origin) return;
+    const data = event.data;
+    if (!data || typeof data !== "object") return;
+
+    if (data.type === "UNDINE_MAIL_SENT") {
+      if (data.origMsgId) {
+        store.updateMessageReplied(data.origMsgId, true);
+      }
+      if (data.draftId) {
+        store.removeMessage(data.draftId);
+      }
+    }
+
+    if (data.type === "UNDINE_DRAFT_SAVED" || data.type === "UNDINE_MAIL_SENT") {
+      try {
+        const folders = await fetchFolders();
+        store.setFolders(folders);
+        const currentFolderId = store.getState().selectedFolderId;
+        if (currentFolderId) {
+          const msgs = await fetchMessages(currentFolderId);
+          store.setMessages(msgs);
+        }
+      } catch (err) {
+        console.warn("Failed to refresh folders/messages after composer action:", err);
+      }
+    }
+  });
 
   // Global Keyboard Navigation (j / k / r / e / F / / / f / 0-9 tags)
   window.addEventListener("keydown", (e) => {

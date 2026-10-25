@@ -9,6 +9,33 @@ import { store } from "../store.js";
 
 let activeModal = null;
 
+export function openEditorInNewWindow(params = {}) {
+  const sessionId = "comp_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+  try {
+    localStorage.setItem(sessionId, JSON.stringify(params));
+  } catch (e) {
+    console.error("Failed to store composer draft state in localStorage:", e);
+  }
+
+  const url = new URL(window.location.origin + window.location.pathname);
+  url.searchParams.set("composer", sessionId);
+
+  const w = window.open(
+    url.toString(),
+    sessionId,
+    "width=1000,height=820,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes"
+  );
+
+  if (!w || w.closed || typeof w.closed === "undefined") {
+    showToast("Pop-up window was blocked. Please allow pop-ups for UndineD.", "warning");
+    return false;
+  }
+  if (w.focus) {
+    w.focus();
+  }
+  return true;
+}
+
 export function openInternalEditor({
   to = "",
   cc = "",
@@ -17,16 +44,40 @@ export function openInternalEditor({
   inReplyTo = "",
   references = "",
   origMsgId = "",
+  draftId = null,
   notes = [],
   title = "Compose / Reply (Internal Editor)",
   titleIcon = "📝",
+  isStandalone = false,
 }) {
+  const configuredMode = store.getState().config?.composer_window_mode || localStorage.getItem("undine_composer_window_mode");
+  if (!isStandalone && configuredMode === "window") {
+    const opened = openEditorInNewWindow({
+      to,
+      cc,
+      subject,
+      body,
+      inReplyTo,
+      references,
+      origMsgId,
+      draftId,
+      notes,
+      title,
+      titleIcon,
+    });
+    if (opened) {
+      return;
+    }
+  }
+
   // If already open, close previous
   closeInternalEditor();
 
+  let sessionDraftId = draftId != null ? Number(draftId) : null;
+
   const container = document.getElementById("composer-container") || document.body;
   const modalEl = document.createElement("div");
-  modalEl.className = "composer-backdrop";
+  modalEl.className = isStandalone ? "composer-backdrop standalone" : "composer-backdrop";
 
   modalEl.innerHTML = `
     <div class="composer-modal" role="dialog" aria-modal="true">
@@ -38,6 +89,10 @@ export function openInternalEditor({
           <span class="composer-badge">8-bit plain-text (UTF-8)</span>
         </div>
         <div class="composer-header-actions">
+          ${!isStandalone ? `
+          <button type="button" class="composer-btn secondary" id="btn-comp-popout" title="Open composer in new window">
+            ⧉ Pop Out
+          </button>` : ""}
           <button type="button" class="composer-btn secondary" id="btn-comp-external" title="Hand off current draft to external $EDITOR">
             🖥️ Open External Editor
           </button>
@@ -124,10 +179,31 @@ export function openInternalEditor({
   const sendBtn = modalEl.querySelector("#btn-comp-send");
   const saveDraftBtn = modalEl.querySelector("#btn-comp-save-draft");
   const externalBtn = modalEl.querySelector("#btn-comp-external");
+  const popoutBtn = modalEl.querySelector("#btn-comp-popout");
   const closeBtn = modalEl.querySelector("#btn-comp-close");
   const insertAckedBtn = modalEl.querySelector("#btn-insert-acked");
   const insertReviewedBtn = modalEl.querySelector("#btn-insert-reviewed");
   const eraseAfterCursorBtn = modalEl.querySelector("#btn-erase-after-cursor");
+
+  if (popoutBtn) {
+    popoutBtn.addEventListener("click", () => {
+      const currentParams = {
+        to: toInput.value,
+        cc: ccInput.value,
+        subject: subjectInput.value,
+        body: bodyTextarea.value,
+        inReplyTo,
+        references,
+        origMsgId,
+        draftId: sessionDraftId,
+        notes,
+        title,
+        titleIcon,
+      };
+      closeInternalEditor();
+      openEditorInNewWindow(currentParams);
+    });
+  }
 
   const toAutocomplete = modalEl.querySelector("#comp-to-autocomplete");
   const ccAutocomplete = modalEl.querySelector("#comp-cc-autocomplete");
@@ -342,22 +418,52 @@ export function openInternalEditor({
         in_reply_to: inReplyTo || null,
         references: references || null,
         orig_msg_id: origMsgId || null,
+        draft_id: sessionDraftId,
       });
 
       if (origMsgId) {
         store.updateMessageReplied(origMsgId, true);
       }
+      if (sessionDraftId) {
+        store.removeMessage(sessionDraftId);
+      }
 
       showToast(`Email sent successfully to ${toVal}!`, "success");
-      closeInternalEditor();
 
-      // Refresh folder counts and message list
-      const folders = await fetchFolders();
-      store.setFolders(folders);
-      const currentFolderId = store.getState().selectedFolderId;
-      if (currentFolderId) {
-        const msgs = await fetchMessages(currentFolderId);
-        store.setMessages(msgs);
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage(
+            {
+              type: "UNDINE_MAIL_SENT",
+              draftId: sessionDraftId,
+              origMsgId: origMsgId || null,
+            },
+            window.location.origin !== "null" ? window.location.origin : "*"
+          );
+        } catch {
+          // ignore
+        }
+      }
+
+      if (isStandalone) {
+        setTimeout(() => {
+          window.close();
+        }, 500);
+      } else {
+        closeInternalEditor();
+
+        // Refresh folder counts and message list
+        try {
+          const folders = await fetchFolders();
+          store.setFolders(folders);
+          const currentFolderId = store.getState().selectedFolderId;
+          if (currentFolderId) {
+            const msgs = await fetchMessages(currentFolderId);
+            store.setMessages(msgs);
+          }
+        } catch {
+          // ignore
+        }
       }
     } catch (err) {
       showToast(`Send failed: ${err.message}`, "error");
@@ -374,26 +480,49 @@ export function openInternalEditor({
     saveDraftBtn.innerText = "⏳ Saving...";
 
     try {
-      await saveDraft({
+      const res = await saveDraft({
         to_addr: toInput.value.trim(),
         cc_addr: ccInput.value.trim() || null,
         subject: subjectInput.value.trim(),
         body_text: bodyTextarea.value,
         in_reply_to: inReplyTo || null,
         references: references || null,
+        draft_id: sessionDraftId,
       });
+
+      if (res && res.db_id) {
+        sessionDraftId = res.db_id;
+      }
 
       showToast("Draft saved to 'Drafts' folder!", "success");
       saveDraftBtn.disabled = false;
       saveDraftBtn.innerText = "💾 Save Draft";
 
-      // Refresh folders and message list
-      const folders = await fetchFolders();
-      store.setFolders(folders);
-      const currentFolderId = store.getState().selectedFolderId;
-      if (currentFolderId) {
-        const msgs = await fetchMessages(currentFolderId);
-        store.setMessages(msgs);
+      if (window.opener && !window.opener.closed) {
+        try {
+          window.opener.postMessage(
+            {
+              type: "UNDINE_DRAFT_SAVED",
+              draftId: sessionDraftId,
+            },
+            window.location.origin !== "null" ? window.location.origin : "*"
+          );
+        } catch {
+          // ignore
+        }
+      }
+
+      // Refresh folders and message list in this window
+      try {
+        const folders = await fetchFolders();
+        store.setFolders(folders);
+        const currentFolderId = store.getState().selectedFolderId;
+        if (currentFolderId) {
+          const msgs = await fetchMessages(currentFolderId);
+          store.setMessages(msgs);
+        }
+      } catch {
+        // Ignored if folders/store not loaded in standalone window
       }
     } catch (err) {
       showToast(`Save draft failed: ${err.message}`, "error");
@@ -415,7 +544,11 @@ export function openInternalEditor({
         ccInput.value.trim() || null,
         subjectInput.value.trim()
       );
-      closeInternalEditor();
+      if (isStandalone) {
+        window.close();
+      } else {
+        closeInternalEditor();
+      }
       showToast("Launched external editor", "success");
     } catch (err) {
       showToast(`External editor failed: ${err.message}`, "error");
@@ -423,16 +556,25 @@ export function openInternalEditor({
   });
 
   // Close handlers
-  closeBtn.addEventListener("click", closeInternalEditor);
-
-  // Global key listener for Esc inside modal
-  const escHandler = (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
+  const handleEditorClose = () => {
+    if (isStandalone) {
+      window.close();
+    } else {
       closeInternalEditor();
     }
   };
+
+  closeBtn.addEventListener("click", handleEditorClose);
+
+  // Global key listener for Esc inside modal/standalone
+  const escHandler = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      handleEditorClose();
+    }
+  };
   window.addEventListener("keydown", escHandler);
+  modalEl._escHandler = escHandler;
   modalEl._escHandler = escHandler;
 }
 
@@ -661,6 +803,7 @@ export function openEditForMessage(msg) {
     inReplyTo: inReplyTo,
     references: refs,
     origMsgId: msg.message_id || (msg.id != null ? String(msg.id) : ""),
+    draftId: msg.id != null ? msg.id : null,
     notes: [],
     title: "Edit Draft (Internal Editor)",
     titleIcon: "✏️",

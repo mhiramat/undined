@@ -232,6 +232,7 @@ export async function sendEmail({
   in_reply_to = null,
   references = null,
   orig_msg_id = null,
+  draft_id = null,
 }) {
   const res = await fetch(`${BASE_URL}/api/smtp/send`, {
     method: "POST",
@@ -244,6 +245,7 @@ export async function sendEmail({
       in_reply_to,
       references,
       orig_msg_id,
+      draft_id,
     }),
   });
   if (!res.ok) {
@@ -278,7 +280,7 @@ export async function fetchRawHeaders(messageId) {
   }
 }
 
-export async function saveDraft({ to_addr, cc_addr = null, subject, body_text, in_reply_to = null, references = null }) {
+export async function saveDraft({ to_addr, cc_addr = null, subject, body_text, in_reply_to = null, references = null, draft_id = null }) {
   const res = await fetch(`${BASE_URL}/api/composer/save-draft`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -289,6 +291,7 @@ export async function saveDraft({ to_addr, cc_addr = null, subject, body_text, i
       body_text,
       in_reply_to,
       references,
+      draft_id,
     }),
   });
   if (!res.ok) {

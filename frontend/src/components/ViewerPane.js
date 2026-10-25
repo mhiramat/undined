@@ -1693,33 +1693,12 @@ export async function triggerNewMessage() {
 
 export async function triggerEdit(msg) {
   if (!msg || isAiReviewMessage(msg)) return;
-  const isDraft = isDraftMessage(msg);
   const cfg = store.getState().config;
-  let opened = false;
 
   if (cfg?.reply_use_external_editor && cfg?.has_external_editor) {
-    opened = await triggerOpenEditEditor(msg);
+    await triggerOpenEditEditor(msg);
   } else {
     openEditForMessage(msg);
-    opened = true;
-  }
-
-  if (opened && isDraft) {
-    try {
-      const msgId = msg.id != null ? msg.id : msg.message_id;
-      await deleteMessage(msgId);
-      store.removeMessage(msg.id);
-      const folders = await fetchFolders();
-      store.setFolders(folders);
-      const currentFolderId = store.getState().selectedFolderId;
-      if (currentFolderId && isDraftFolder(currentFolderId)) {
-        const msgs = await fetchMessages(currentFolderId);
-        store.setMessages(msgs);
-      }
-    } catch (err) {
-      console.error("Failed to delete draft message:", err);
-      showToast(`Failed to remove draft from folder: ${err.message}`, "error");
-    }
   }
 }
 
