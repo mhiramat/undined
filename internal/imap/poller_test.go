@@ -690,3 +690,154 @@ func TestSyncFullFolder_EmptyHeaderFailsAndDoesNotAdvanceCheckpoint(t *testing.T
 		t.Errorf("Expected last_synced_uid=0, got %d", fAfter.LastSyncedUID)
 	}
 }
+
+func TestSyncFolder_HeaderFetchFailureDoesNotAdvanceCheckpoint(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "undined-imap-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to init database: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	server := startMockSyncIMAPServer(t, []uint32{200, 201})
+	defer server.listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = server.port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+	cfg.IMAP.SyncFolders = []string{"INBOX"}
+
+	poller := NewPoller(cfg, store, db)
+
+	// Step 1: Mode error
+	server.mu.Lock()
+	server.fetchMode = "error"
+	server.mu.Unlock()
+
+	clientConn, err := poller.Connect()
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	maxUID, err := poller.SyncFolder(clientConn, folder.ID, "INBOX", 0)
+	clientConn.Logout()
+	if err == nil {
+		t.Fatalf("Expected SyncFolder to fail on UID FETCH error, got nil (maxUID=%d)", maxUID)
+	}
+
+	fAfter, err := db.GetFolderByID(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderByID failed: %v", err)
+	}
+	if fAfter.LastSyncedUID != 0 {
+		t.Errorf("Expected last_synced_uid=0 after failed fetch, but got %d", fAfter.LastSyncedUID)
+	}
+
+	// Step 2: PollOnce error propagation
+	if err := poller.PollOnce(); err == nil {
+		t.Errorf("Expected PollOnce to return error when server fetch fails")
+	}
+
+	// Step 3: Mode ok succeeds and advances
+	server.mu.Lock()
+	server.fetchMode = "ok"
+	server.mu.Unlock()
+
+	clientConn2, err := poller.Connect()
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer clientConn2.Logout()
+
+	maxUID, err = poller.SyncFolder(clientConn2, folder.ID, "INBOX", fAfter.LastSyncedUID)
+	if err != nil {
+		t.Fatalf("SyncFolder failed on retry: %v", err)
+	}
+	if maxUID != 201 {
+		t.Errorf("Expected maxUID=201, got %d", maxUID)
+	}
+
+	fAfter2, err := db.GetFolderByID(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderByID failed: %v", err)
+	}
+	if fAfter2.LastSyncedUID != 201 {
+		t.Errorf("Expected last_synced_uid=201, got %d", fAfter2.LastSyncedUID)
+	}
+}
+
+func TestSyncFolder_EmptyHeaderStopsAndDoesNotAdvanceCheckpoint(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "undined-imap-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to init database: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	server := startMockSyncIMAPServer(t, []uint32{200, 201})
+	defer server.listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = server.port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+	cfg.IMAP.SyncFolders = []string{"INBOX"}
+
+	poller := NewPoller(cfg, store, db)
+
+	server.mu.Lock()
+	server.fetchMode = "empty_header"
+	server.mu.Unlock()
+
+	clientConn, err := poller.Connect()
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	defer clientConn.Logout()
+
+	maxUID, err := poller.SyncFolder(clientConn, folder.ID, "INBOX", 0)
+	if err == nil {
+		t.Fatalf("Expected SyncFolder to fail on empty header, got nil (maxUID=%d)", maxUID)
+	}
+
+	fAfter, err := db.GetFolderByID(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderByID failed: %v", err)
+	}
+	if fAfter.LastSyncedUID != 0 {
+		t.Errorf("Expected last_synced_uid=0, got %d", fAfter.LastSyncedUID)
+	}
+}

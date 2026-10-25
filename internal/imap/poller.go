@@ -232,8 +232,10 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 			done <- c.UidFetch(seqSet, fetchItems, messages)
 		}()
 
+		batchSynced := 0
+		var batchErr error
 		for msg := range messages {
-			if msg == nil {
+			if batchErr != nil || msg == nil {
 				continue
 			}
 			isSeen := false
@@ -247,12 +249,19 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 			flagsStr := strings.Join(flagList, " ")
 
 			for _, literal := range msg.Body {
-				headerBytes, _ := io.ReadAll(literal)
-				if len(headerBytes) > 0 {
-					_, _ = p.DB.InsertHeaderSummary(folderID, msg.Uid, headerBytes, isSeen, flagsStr)
-					if msg.Uid > maxUID {
-						maxUID = msg.Uid
-					}
+				headerBytes, readErr := io.ReadAll(literal)
+				if readErr != nil || len(headerBytes) == 0 {
+					batchErr = fmt.Errorf("empty or unreadable header for UID %d in %s", msg.Uid, folderName)
+					break
+				}
+				_, insErr := p.DB.InsertHeaderSummary(folderID, msg.Uid, headerBytes, isSeen, flagsStr)
+				if insErr != nil {
+					batchErr = fmt.Errorf("failed to insert header summary for UID %d in %s: %w", msg.Uid, folderName, insErr)
+					break
+				}
+				batchSynced++
+				if msg.Uid > maxUID {
+					maxUID = msg.Uid
 				}
 			}
 		}
@@ -263,6 +272,18 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 				_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxUID)
 			}
 			return maxUID, fmt.Errorf("UID FETCH failed in %s: %w", folderName, err)
+		}
+
+		if batchErr == nil && batchSynced == 0 && len(batch) > 0 {
+			batchErr = fmt.Errorf("UID FETCH returned no message headers for %d requested messages in %s", len(batch), folderName)
+		}
+
+		if batchErr != nil {
+			log.Printf("Batch processing error in %s: %v", folderName, batchErr)
+			if maxUID > lastSyncedUID {
+				_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxUID)
+			}
+			return maxUID, batchErr
 		}
 	}
 
@@ -695,9 +716,13 @@ func (p *Poller) PollOnce() error {
 	for _, folderName := range p.Config.IMAP.SyncFolders {
 		folder, err := p.DB.GetOrCreateFolder(folderName, true)
 		if err != nil {
+			log.Printf("Failed to get/create folder %s: %v", folderName, err)
 			continue
 		}
-		_, _ = p.SyncFolder(c, folder.ID, folderName, folder.LastSyncedUID)
+		if _, syncErr := p.SyncFolder(c, folder.ID, folderName, folder.LastSyncedUID); syncErr != nil {
+			log.Printf("Incremental sync failed for folder %s: %v", folderName, syncErr)
+			return syncErr
+		}
 	}
 	return nil
 }
@@ -713,14 +738,18 @@ func (p *Poller) Start(ctx context.Context) {
 	defer ticker.Stop()
 
 	// Initial poll on startup
-	_ = p.PollOnce()
+	if err := p.PollOnce(); err != nil {
+		log.Printf("Initial IMAP poll failed: %v", err)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = p.PollOnce()
+			if err := p.PollOnce(); err != nil {
+				log.Printf("Periodic IMAP poll failed: %v", err)
+			}
 		}
 	}
 }
