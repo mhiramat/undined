@@ -598,8 +598,9 @@ func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*M
 			m.IsRead = toBool(isRead)
 			m.IsReplied = toBool(isReplied)
 			m.HasNotes = toBool(hasNotes)
-			deleted = append(deleted, &m)
-			_, _ = d.DB.Exec("DELETE FROM messages WHERE id = ?;", m.ID)
+			if _, delErr := d.DB.Exec("DELETE FROM messages WHERE id = ?;", m.ID); delErr == nil {
+				deleted = append(deleted, &m)
+			}
 		}
 	}
 	return deleted, nil

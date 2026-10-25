@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"mime"
 	"net"
 	"net/smtp"
@@ -340,12 +341,20 @@ func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, str
 
 	// Save copy to Sent mailbox
 	if c.Maildir != nil && c.DB != nil {
-		_ = c.Maildir.EnsureFolder(constants.FolderSent)
+		if err := c.Maildir.EnsureFolder(constants.FolderSent); err != nil {
+			log.Printf("Warning: failed to ensure Sent maildir folder: %v", err)
+		}
 		sentFolder, err := c.DB.GetOrCreateFolder(constants.FolderSent, false)
-		if err == nil {
+		if err != nil {
+			log.Printf("Warning: failed to get or create Sent database folder: %v", err)
+		} else {
 			path, err := c.Maildir.AddMessage(constants.FolderSent, []byte(crlfBody), constants.FlagSeen)
-			if err == nil {
-				_, _ = c.DB.IndexEmailFile(sentFolder.ID, path)
+			if err != nil {
+				log.Printf("Warning: failed to store sent email in maildir: %v", err)
+			} else {
+				if _, err := c.DB.IndexEmailFile(sentFolder.ID, path); err != nil {
+					log.Printf("Warning: failed to index sent email into database: %v", err)
+				}
 			}
 		}
 	}
