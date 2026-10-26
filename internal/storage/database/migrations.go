@@ -95,6 +95,9 @@ func initDB(db *sql.DB) error {
 		seedKnownAddresses(db)
 	}
 
+	// 7. Migrate legacy comments erroneously saved as 'submitted' to 'draft'
+	_, _ = db.Exec("UPDATE patch_comments SET state = 'draft' WHERE state = 'submitted';")
+
 	return nil
 }
 

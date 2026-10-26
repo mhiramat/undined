@@ -461,7 +461,7 @@ export function renderViewerPane(container) {
       }
     }
 
-    const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft") : [];
+    const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft" || n.state === "submitted") : [];
     const draftCount = draftNotes.length;
     const discardDraftsButton = draftCount > 0
       ? `<button type="button" class="action-btn danger" id="btn-discard-drafts" title="Discard all draft comments on this patch">🗑️ Discard Drafts (${draftCount})</button>`

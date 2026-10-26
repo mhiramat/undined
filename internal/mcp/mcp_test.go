@@ -190,11 +190,46 @@ func TestMCPPostReviewCommentMapped(t *testing.T) {
 	if c.FilePath != "kernel/trace/ftrace.c" || c.LineNo != 50 || c.Side != "new" || c.Text != "Check new_code() error return handling." {
 		t.Errorf("unexpected comment in DB: %+v", c)
 	}
+	if c.State != "draft" {
+		t.Errorf("expected comment state to be draft, got %q", c.State)
+	}
+
+	// Post comment containing [review] prefix - must also be saved in 'draft' state
+	_, err = server.CallTool(ctx, "post_review_comment", map[string]interface{}{
+		"message_id": "ftrace-patch-1@kernel.org",
+		"target":     "kernel/trace/ftrace.c:51",
+		"comment":    "[review] Please add the appropriate Fixes tag.",
+		"side":       "new",
+	})
+	if err != nil {
+		t.Fatalf("post_review_comment with [review] prefix failed: %v", err)
+	}
+	comments2, _ := db.GetMessageComments("ftrace-patch-1@kernel.org")
+	if len(comments2) != 2 {
+		t.Fatalf("expected 2 comments in DB, got %d", len(comments2))
+	}
+	for _, cmt := range comments2 {
+		if cmt.State != "draft" {
+			t.Errorf("expected comment state 'draft', got %q for %+v", cmt.State, cmt)
+		}
+	}
 
 	// Verify has_notes set to 1
 	msg, err := db.GetMessageByID(msgID)
 	if err != nil || !msg.HasNotes {
 		t.Errorf("expected has_notes true on message, got %v", msg)
+	}
+
+	// Verify comments can be discarded
+	discarded, err := db.DiscardDraftComments("ftrace-patch-1@kernel.org")
+	if err != nil || discarded != 2 {
+		t.Fatalf("expected 2 discarded comments, got %d (err=%v)", discarded, err)
+	}
+
+	// Verify has_notes reset to 0 after discard
+	msgAfter, _ := db.GetMessageByID(msgID)
+	if msgAfter != nil && msgAfter.HasNotes {
+		t.Errorf("expected has_notes false after discard, got %v", msgAfter)
 	}
 }
 

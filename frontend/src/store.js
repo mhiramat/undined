@@ -775,7 +775,7 @@ class UndineDStore {
       }
     }
     for (const [k, n] of Object.entries(this.state.activeNotes)) {
-      if (!n.state || n.state === "draft") {
+      if (!n.state || n.state === "draft" || n.state === "submitted") {
         delete this.state.activeNotes[k];
       }
     }

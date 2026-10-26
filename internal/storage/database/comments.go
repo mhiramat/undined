@@ -144,10 +144,10 @@ func (d *Database) GetMessageComments(msgID string, state ...string) ([]*PatchCo
 	return comments, nil
 }
 
-// DiscardDraftComments removes all comments in 'draft' state for the message and returns the discarded count.
+// DiscardDraftComments removes all comments in 'draft' state (or legacy 'submitted') for the message and returns the discarded count.
 func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 	cleanMsgID := parser.CleanMsgID(msgID)
-	res, err := d.DB.Exec("DELETE FROM patch_comments WHERE message_id = ? AND state = 'draft';", cleanMsgID)
+	res, err := d.DB.Exec("DELETE FROM patch_comments WHERE message_id = ? AND (state = 'draft' OR state = 'submitted' OR state = '' OR state IS NULL);", cleanMsgID)
 	if err != nil {
 		return 0, err
 	}

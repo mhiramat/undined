@@ -68,7 +68,7 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 | `target` | `str` | Yes | — | Target coordinate in `FILE:LINE` format (e.g. `kernel/trace/ftrace.c:51`). To comment on lines in the message body / commit description, specify `DESCRIPTION:LINE` (e.g. `DESCRIPTION:12`). Paths prefixed with `a/` or `b/` are automatically normalized. |
 | `comment` | `str` | Yes | — | The review feedback, critique, or question text. |
 | `side` | `str` | No | `"new"` | Diff side: `"new"` (or `"right"`) for additions/post-image and context lines; `"old"` (or `"left"`) for deletions/pre-image. |
-| `state` | `str` | No | `"draft"` | Comment status: `"draft"` or `"submitted"`. Automatically set to `"submitted"` if comment text contains `[ai review]` or `[review]`. |
+| `state` | `str` | No | `"draft"` | Comment status: `"draft"` or `"submitted"`. |
 | `target_message_id` | `str` | No | `None` | Backward-compatible alias for `message_id`. |
 
 #### Returns:

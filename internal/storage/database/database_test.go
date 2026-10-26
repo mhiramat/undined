@@ -232,6 +232,21 @@ func TestPatchComments(t *testing.T) {
 	if len(commentsAfter) != 0 {
 		t.Fatalf("expected 0 comments after discard, got %d", len(commentsAfter))
 	}
+
+	// Also test discarding comments with legacy 'submitted' state
+	_, _ = db.SavePatchComment(&PatchComment{
+		MessageID: "test-patch-1@kernel.org",
+		FilePath:  "kernel/trace/trace.c",
+		LineNo:    10,
+		Side:      "new",
+		Text:      "[review] Legacy submitted comment",
+		State:     "submitted",
+		Author:    "agent",
+	})
+	discardedSubmitted, err := db.DiscardDraftComments("test-patch-1@kernel.org")
+	if err != nil || discardedSubmitted != 1 {
+		t.Fatalf("expected 1 discarded comment for submitted state, got %d (err=%v)", discardedSubmitted, err)
+	}
 }
 
 func TestThreadingCycleDetection(t *testing.T) {

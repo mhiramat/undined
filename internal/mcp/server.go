@@ -1177,10 +1177,6 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 	if statePtr != nil && *statePtr != "" {
 		commentState = *statePtr
 	}
-	lowerComment := strings.ToLower(comment)
-	if strings.Contains(lowerComment, "[ai review]") || strings.Contains(lowerComment, "[review]") {
-		commentState = "submitted"
-	}
 
 	commentRow, err := s.DB.SavePatchComment(&database.PatchComment{
 		MessageID: cleanID,
