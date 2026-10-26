@@ -3,6 +3,7 @@ package parser
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"mime"
 	"net/mail"
@@ -323,18 +324,178 @@ func parseBasicEmail(raw []byte, rawHeaders string) (*ParsedEmail, error) {
 	return parsed, nil
 }
 
+// QuoteDisplayName quotes an email display-name with double quotations according to RFC 5322
+// if it contains special characters such as ',', '(', ')', '<', '>', '[', ']', ':', ';', '@', '\\', '.', '"'.
+// If the name is already quoted or does not contain special characters, it is returned as is.
+func QuoteDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	// If already properly enclosed in double quotes, preserve it
+	if len(name) >= 2 && strings.HasPrefix(name, "\"") && strings.HasSuffix(name, "\"") {
+		return name
+	}
+	// RFC 5322 Section 3.2.5 specials that cannot appear in an unquoted atom:
+	// specials = ( ) < > [ ] : ; @ \ , . "
+	const specials = "(),:;<>@[\\]\"."
+	if strings.ContainsAny(name, specials) {
+		escaped := strings.ReplaceAll(name, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+		return fmt.Sprintf("\"%s\"", escaped)
+	}
+	return name
+}
+
+// FormatAddress formats a display name and email address into an RFC 5322 address string,
+// quoting the display-name with double quotations if it contains special characters such as ',' or '('.
+func FormatAddress(name, email string) string {
+	email = strings.Trim(strings.TrimSpace(email), "<>")
+	name = strings.TrimSpace(name)
+	if name == "" {
+		if email == "" {
+			return ""
+		}
+		return email
+	}
+	quotedName := QuoteDisplayName(name)
+	return fmt.Sprintf("%s <%s>", quotedName, email)
+}
+
+// FormatAddressString formats an address string into an RFC 5322 address, quoting
+// the display-name if it contains special characters such as ',' or '('.
+func FormatAddressString(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(addr, "<"); idx > 0 && strings.HasSuffix(addr, ">") {
+		name := strings.TrimSpace(addr[:idx])
+		email := strings.Trim(addr[idx:], "<> ")
+		return FormatAddress(name, email)
+	}
+	return addr
+}
+
+// hasAngleAhead checks whether there is an opening '<' before any closing '>' ahead in the runes.
+func hasAngleAhead(runes []rune) bool {
+	inQ := false
+	for _, r := range runes {
+		if r == '"' {
+			inQ = !inQ
+		} else if r == '<' && !inQ {
+			return true
+		} else if r == '>' && !inQ {
+			return false
+		}
+	}
+	return false
+}
+
+// SplitAddressList splits a comma-separated RFC 5322 address list while respecting
+// double quotes, angle brackets, and unquoted display names containing commas.
+func SplitAddressList(addrs string) []string {
+	var parts []string
+	var curr strings.Builder
+	inQuotes := false
+	inAngle := false
+	escaped := false
+
+	runes := []rune(addrs)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if escaped {
+			curr.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' && inQuotes {
+			curr.WriteRune(r)
+			escaped = true
+			continue
+		}
+		if r == '"' {
+			inQuotes = !inQuotes
+		} else if r == '<' && !inQuotes {
+			inAngle = true
+		} else if r == '>' && !inQuotes {
+			inAngle = false
+		} else if (r == ',' || r == ';') && !inQuotes && !inAngle {
+			currStr := curr.String()
+			hasCompleteAddr := (strings.Contains(currStr, "<") && strings.Contains(currStr, ">")) ||
+				strings.Contains(currStr, "@")
+			if !hasCompleteAddr && hasAngleAhead(runes[i+1:]) {
+				curr.WriteRune(r)
+				continue
+			}
+
+			if s := strings.TrimSpace(curr.String()); s != "" {
+				parts = append(parts, s)
+			}
+			curr.Reset()
+			continue
+		}
+		curr.WriteRune(r)
+	}
+	if s := strings.TrimSpace(curr.String()); s != "" {
+		parts = append(parts, s)
+	}
+	return parts
+}
+
+// ParseAddressList parses an RFC 5322 address list, handling unquoted display-names
+// containing commas or parentheses before angle-addr.
+func ParseAddressList(header string) ([]*mail.Address, error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return nil, nil
+	}
+
+	parts := SplitAddressList(header)
+	var addrs []*mail.Address
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if idx := strings.LastIndex(p, "<"); idx > 0 && strings.HasSuffix(p, ">") {
+			name := strings.TrimSpace(p[:idx])
+			email := strings.Trim(p[idx:], "<> ")
+			name = strings.Trim(name, "\"")
+			addrs = append(addrs, &mail.Address{
+				Name:    name,
+				Address: email,
+			})
+		} else if parsed, err := mail.ParseAddress(p); err == nil {
+			addrs = append(addrs, parsed)
+		} else if strings.Contains(p, "@") {
+			clean := strings.Trim(p, "<> ")
+			addrs = append(addrs, &mail.Address{
+				Address: clean,
+			})
+		}
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("mail: no valid addresses found")
+	}
+	return addrs, nil
+}
+
 // BuildReplyRecipients constructs To and Cc addresses for replying to all participants,
 // excluding the sender's own email.
 func BuildReplyRecipients(origFrom, origTo, origCc, myEmail string) (toAddr, ccAddr string) {
 	myEmail = strings.ToLower(strings.TrimSpace(myEmail))
 
-	// To address is original From
+	// To address is original From, formatted with RFC 5322 quoting if needed
 	toAddr = origFrom
+	if toAddr != "" {
+		toAddr = FormatAddressString(toAddr)
+	}
 
 	// Collect unique addresses for Cc
 	seen := make(map[string]struct{})
 	if toAddr != "" {
-		if addrs, err := mail.ParseAddressList(toAddr); err == nil {
+		if addrs, err := ParseAddressList(toAddr); err == nil {
 			for _, a := range addrs {
 				seen[strings.ToLower(a.Address)] = struct{}{}
 			}
@@ -351,13 +512,17 @@ func BuildReplyRecipients(origFrom, origTo, origCc, myEmail string) (toAddr, ccA
 		if addrStr == "" {
 			return
 		}
-		addrs, err := mail.ParseAddressList(addrStr)
+		addrs, err := ParseAddressList(addrStr)
 		if err == nil {
 			for _, a := range addrs {
 				low := strings.ToLower(a.Address)
 				if _, exists := seen[low]; !exists {
 					seen[low] = struct{}{}
-					ccList = append(ccList, a.String())
+					if a.Name != "" {
+						ccList = append(ccList, FormatAddress(a.Name, a.Address))
+					} else {
+						ccList = append(ccList, a.Address)
+					}
 				}
 			}
 		}
@@ -386,7 +551,7 @@ func ExtractAddresses(headers ...string) []ExtractedAddress {
 			continue
 		}
 
-		addrs, err := mail.ParseAddressList(header)
+		addrs, err := ParseAddressList(header)
 		if err != nil {
 			// Fallback: split by comma or newline and try parsing individually
 			parts := strings.FieldsFunc(header, func(r rune) bool {

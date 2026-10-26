@@ -449,3 +449,114 @@ func TestSendMessageQuotedCommaInDisplayName(t *testing.T) {
 	}
 }
 
+func TestBuildMessageReceiverDisplayNameQuoting(t *testing.T) {
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+
+	tests := []struct {
+		name       string
+		to         string
+		cc         string
+		expectedTo string
+		expectedCc string
+	}{
+		{
+			name:       "unquoted comma in To display name",
+			to:         "kernel, developer <dev@kernel.org>",
+			cc:         "",
+			expectedTo: `To: "kernel, developer" <dev@kernel.org>`,
+			expectedCc: "",
+		},
+		{
+			name:       "parenthesis in Cc display name",
+			to:         "dev@example.com",
+			cc:         "developer (test) <dev@kernel.org>",
+			expectedTo: "To: dev@example.com",
+			expectedCc: `Cc: "developer (test)" <dev@kernel.org>`,
+		},
+		{
+			name:       "mixed multiple receivers with commas and parentheses",
+			to:         "kernel, developer <dev@kernel.org>, Normal Developer <norm@example.com>",
+			cc:         "developer (test) <test@example.com>, plain@example.com",
+			expectedTo: `To: "kernel, developer" <dev@kernel.org>, Normal Developer <norm@example.com>`,
+			expectedCc: `Cc: "developer (test)" <test@example.com>, plain@example.com`,
+		},
+		{
+			name:       "already quoted comma display name is not double-quoted",
+			to:         `"kernel, developer" <dev@kernel.org>`,
+			cc:         `"developer (test)" <test@example.com>`,
+			expectedTo: `To: "kernel, developer" <dev@kernel.org>`,
+			expectedCc: `Cc: "developer (test)" <test@example.com>`,
+		},
+		{
+			name:       "plain display name without specials is preserved",
+			to:         "Kernel Developer <dev@kernel.org>",
+			cc:         "Reviewer <reviewer@kernel.org>",
+			expectedTo: "To: Kernel Developer <dev@kernel.org>",
+			expectedCc: "Cc: Reviewer <reviewer@kernel.org>",
+		},
+		{
+			name:       "display name with both parentheses and commas",
+			to:         "Developer, Kernel (Google) <dev@kernel.org>",
+			cc:         "",
+			expectedTo: `To: "Developer, Kernel (Google)" <dev@kernel.org>`,
+			expectedCc: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := client.BuildMessage(tc.to, "Test Subject", "Test Body", tc.cc, "", "", "")
+			if tc.expectedTo != "" && !strings.Contains(raw, tc.expectedTo) {
+				t.Errorf("expected To header %q, raw message:\n%s", tc.expectedTo, raw)
+			}
+			if tc.expectedCc != "" && !strings.Contains(raw, tc.expectedCc) {
+				t.Errorf("expected Cc header %q, raw message:\n%s", tc.expectedCc, raw)
+			}
+		})
+	}
+}
+
+func TestSendMessageUnquotedCommaInDisplayName(t *testing.T) {
+	listener, port, getCommands := startRecordingMockSMTPServer(t, false)
+	defer listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.Host = "127.0.0.1"
+	cfg.SMTP.Port = port
+	cfg.SMTP.UseSSL = false
+	cfg.SMTP.UseSTARTTLS = false
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+	ok, _, err := client.SendMessage(
+		"kernel, developer <dev@kernel.org>, second@example.com",
+		"Test Unquoted Comma",
+		"Body",
+		"developer (test) <maint@example.com>",
+		"",
+		"",
+	)
+	if err != nil || !ok {
+		t.Fatalf("SendMessage with unquoted comma failed: %v", err)
+	}
+
+	var rcptCmds []string
+	for _, cmd := range getCommands() {
+		if strings.HasPrefix(strings.ToUpper(cmd), "RCPT TO:") {
+			rcptCmds = append(rcptCmds, cmd)
+		}
+	}
+	if len(rcptCmds) != 3 {
+		t.Fatalf("expected 3 RCPT TO commands, got %d: %v", len(rcptCmds), rcptCmds)
+	}
+	if !strings.Contains(rcptCmds[0], "<dev@kernel.org>") ||
+		!strings.Contains(rcptCmds[1], "<second@example.com>") ||
+		!strings.Contains(rcptCmds[2], "<maint@example.com>") {
+		t.Errorf("unexpected RCPT TO commands: %v", rcptCmds)
+	}
+}
+

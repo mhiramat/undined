@@ -53,47 +53,13 @@ func encodeHeaderValue(val string) string {
 }
 
 // splitAddressList splits a comma-separated RFC 5322 address list while respecting
-// double quotes and angle brackets.
+// double quotes, angle brackets, and unquoted display names with commas.
 func splitAddressList(addrs string) []string {
-	var parts []string
-	var curr strings.Builder
-	inQuotes := false
-	inAngle := false
-	escaped := false
-
-	for _, r := range addrs {
-		if escaped {
-			curr.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' && inQuotes {
-			curr.WriteRune(r)
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			inQuotes = !inQuotes
-		} else if r == '<' && !inQuotes {
-			inAngle = true
-		} else if r == '>' && !inQuotes {
-			inAngle = false
-		} else if r == ',' && !inQuotes && !inAngle {
-			if s := strings.TrimSpace(curr.String()); s != "" {
-				parts = append(parts, s)
-			}
-			curr.Reset()
-			continue
-		}
-		curr.WriteRune(r)
-	}
-	if s := strings.TrimSpace(curr.String()); s != "" {
-		parts = append(parts, s)
-	}
-	return parts
+	return parser.SplitAddressList(addrs)
 }
 
-// encodeAddressList sanitizes an address list and encodes any non-ASCII display names per RFC 2047.
+// encodeAddressList sanitizes an address list, encodes non-ASCII display names per RFC 2047,
+// and quotes display names containing RFC 5322 specials (such as ',' or '(') per RFC 5322.
 func encodeAddressList(addrs string) string {
 	addrs = sanitizeHeaderValue(addrs)
 	if addrs == "" {
@@ -117,7 +83,8 @@ func encodeAddressList(addrs string) string {
 				unquoted := strings.Trim(name, `"`)
 				encodedParts = append(encodedParts, fmt.Sprintf("%s %s", mime.QEncoding.Encode("utf-8", unquoted), addr))
 			} else {
-				encodedParts = append(encodedParts, fmt.Sprintf("%s %s", name, addr))
+				quotedName := parser.QuoteDisplayName(name)
+				encodedParts = append(encodedParts, fmt.Sprintf("%s %s", quotedName, addr))
 			}
 		} else {
 			encodedParts = append(encodedParts, p)
@@ -136,7 +103,7 @@ func (c *Client) BuildMessage(
 		fromName := sanitizeHeaderValue(c.Config.SMTP.FromName)
 		fromEmail := sanitizeHeaderValue(c.Config.SMTP.FromEmail)
 		if fromName != "" {
-			fromHdr = fmt.Sprintf("%s <%s>", mime.QEncoding.Encode("utf-8", fromName), fromEmail)
+			fromHdr = encodeAddressList(fmt.Sprintf("%s <%s>", fromName, fromEmail))
 		} else {
 			fromHdr = fromEmail
 		}

@@ -86,6 +86,82 @@ func TestBuildReplyRecipients(t *testing.T) {
 	}
 }
 
+func TestQuoteDisplayName(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"kernel, developer", `"kernel, developer"`},
+		{"developer (test)", `"developer (test)"`},
+		{"developer (org), senior", `"developer (org), senior"`},
+		{"Developer, Kernel (Google)", `"Developer, Kernel (Google)"`},
+		{"Kernel Developer", "Kernel Developer"},
+		{`"kernel, developer"`, `"kernel, developer"`},
+		{`"developer (test)"`, `"developer (test)"`},
+		{"dev@work", `"dev@work"`},
+		{"dev: work", `"dev: work"`},
+		{"dev; work", `"dev; work"`},
+		{"dev.work", `"dev.work"`},
+		{"dev<work>", `"dev<work>"`},
+		{"dev[work]", `"dev[work]"`},
+		{"dev\\work", `"dev\\work"`},
+		{"", ""},
+		{"   ", ""},
+	}
+
+	for _, tc := range tests {
+		actual := QuoteDisplayName(tc.input)
+		if actual != tc.expected {
+			t.Errorf("QuoteDisplayName(%q) = %q; expected %q", tc.input, actual, tc.expected)
+		}
+	}
+}
+
+func TestBuildReplyRecipientsWithSpecialsInDisplayName(t *testing.T) {
+	to, cc := BuildReplyRecipients(
+		"kernel, developer <dev@kernel.org>",
+		"dev@example.com, developer (test) <test@example.com>",
+		"another, reviewer <reviewer@example.com>",
+		"dev@example.com",
+	)
+
+	expectedTo := `"kernel, developer" <dev@kernel.org>`
+	if to != expectedTo {
+		t.Errorf("expected To=%q, got %q", expectedTo, to)
+	}
+
+	expectedCcTest := `"developer (test)" <test@example.com>`
+	if !strings.Contains(cc, expectedCcTest) {
+		t.Errorf("expected Cc to contain %q, got %q", expectedCcTest, cc)
+	}
+
+	expectedCcReviewer := `"another, reviewer" <reviewer@example.com>`
+	if !strings.Contains(cc, expectedCcReviewer) {
+		t.Errorf("expected Cc to contain %q, got %q", expectedCcReviewer, cc)
+	}
+
+	if strings.Contains(cc, "dev@example.com") {
+		t.Errorf("expected Cc to exclude sender's own email, got %q", cc)
+	}
+}
+
+func TestSplitAddressListWithUnquotedCommas(t *testing.T) {
+	input := "kernel, developer <dev@kernel.org>, developer (test) <test@kernel.org>, plain@example.com"
+	parts := SplitAddressList(input)
+	if len(parts) != 3 {
+		t.Fatalf("expected 3 parts, got %d: %#v", len(parts), parts)
+	}
+	if parts[0] != "kernel, developer <dev@kernel.org>" {
+		t.Errorf("unexpected part 0: %q", parts[0])
+	}
+	if parts[1] != "developer (test) <test@kernel.org>" {
+		t.Errorf("unexpected part 1: %q", parts[1])
+	}
+	if parts[2] != "plain@example.com" {
+		t.Errorf("unexpected part 2: %q", parts[2])
+	}
+}
+
 func TestExtractAddresses(t *testing.T) {
 	to := `"Kernel Developer" <dev@example.com>, linux-trace-kernel@vger.kernel.org`
 	cc := `Reviewer <reviewer@kernel.org>, dev@example.com; <extra@kernel.org>`
