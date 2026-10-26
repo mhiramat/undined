@@ -59,3 +59,24 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
   explicitly configured must be displayed with its key followed by its
   default value, preceded by a `#` comment symbol.
 
+## 11. Inline Script Restrictions
+- NEVER run inline scripts such as `python3 -c "..."`, `python -c "..."`, or arbitrary shell one-liners (`sh -c`, `bash -c`) for debugging, smoke testing, or verification.
+- Do not request permission to execute embedded multiline code blocks via CLI flags.
+
+## 12. Preferred Verification Procedures
+Always verify changes using one of the following methods, in order of priority:
+
+1. **Test Suite (Primary)**:
+   - Run existing tests using the project's standard test runner:
+     `pytest tests/path/to/test_file.py -k <test_name>`
+   - If no relevant test exists, add a formal test case to the test suite.
+
+2. **Temporary Script File (Secondary)**:
+   - If an ad-hoc check is strictly necessary and cannot be integrated into a test suite, create a standalone temporary script file (e.g., `tests/tmp_verify.py` or `.tmp/scratch.py`).
+   - Execute the file directly:
+     `python3 tests/tmp_verify.py`
+   - Clean up (delete) the temporary script as soon as the verification is complete.
+
+## 13. Command Execution Rules
+- Always execute commands against existing or newly created file paths.
+- Ensure terminal commands are short, deterministic, and easily auditable in diffs.
