@@ -143,11 +143,18 @@ export function renderSideDiff(container, parsedDiff) {
       html += `</div>`;
     }
 
-    // Postscript / Signature
+    // Postscript / Signature / Continued message body
     if (parsedDiff.postscript) {
+      const isContinuation = parsedDiff.body_continues_after;
+      const headerTitle = isContinuation ? "📝 Message Body (continued)" : "📝 Postscript / Signature";
       html += `
-        <div style="background-color: var(--bg-secondary); padding: 12px 16px; margin-top: 16px; border-radius: 4px; border: 1px solid var(--border-color); min-width: 100%; width: max-content;">
-          <pre class="plaintext-email" style="color: var(--text-muted); font-size: 11px;">${linkifyUrls(parsedDiff.postscript)}</pre>
+        <div class="diff-file-card" style="margin-top: 16px;">
+          <div class="diff-file-header">
+            <span>${headerTitle}</span>
+          </div>
+          <div style="padding: 12px 16px; background-color: var(--bg-primary);">
+            <pre class="plaintext-email" style="margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-primary);">${linkifyUrls(parsedDiff.postscript)}</pre>
+          </div>
         </div>
       `;
     }

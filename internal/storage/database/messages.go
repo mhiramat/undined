@@ -357,6 +357,16 @@ func (d *Database) SetMessageFlags(id int64, flags string) error {
 	return err
 }
 
+// SetMessageIsPatch updates the is_patch flag for a message.
+func (d *Database) SetMessageIsPatch(id int64, isPatch bool) error {
+	val := 0
+	if isPatch {
+		val = 1
+	}
+	_, err := d.DB.Exec("UPDATE messages SET is_patch = ? WHERE id = ?;", val, id)
+	return err
+}
+
 // SetMessageNotes updates has_notes flag for a message.
 func (d *Database) SetMessageNotes(id int64, hasNotes bool) error {
 	val := 0

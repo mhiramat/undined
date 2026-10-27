@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jhillyerd/enmime"
+
+	"undined-go/internal/lkml/patch"
 )
 
 var (
@@ -64,17 +66,21 @@ func ExtractMsgIDs(headerVal string) []string {
 	return ids
 }
 
-// DetectPatch checks if the text contains Linux kernel patch syntax.
+// DetectPatch checks if the text contains a standalone Linux kernel patch.
+// If the patch diff is followed by continuing message body (such as review discussion),
+// it returns false so the message is treated as a normal conversation email.
 func DetectPatch(text string) bool {
 	if text == "" {
 		return false
 	}
-	for _, re := range patchHeaderRegexes {
-		if re.MatchString(text) {
-			return true
-		}
+	if !strings.Contains(text, "diff --git ") && !strings.Contains(text, "--- a/") {
+		return false
 	}
-	return false
+	parsed := patch.ParsePatch(text)
+	if parsed.BodyContinuesAfter {
+		return false
+	}
+	return parsed.IsPatch || len(parsed.Files) > 0
 }
 
 // Attachment represents extracted MIME attachment metadata and payload.

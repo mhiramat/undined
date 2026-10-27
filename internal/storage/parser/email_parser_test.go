@@ -300,3 +300,62 @@ func TestSanitizeAttachmentFileName(t *testing.T) {
 	}
 }
 
+func TestDetectPatch_InlineSnippetVsRealPatch(t *testing.T) {
+	realPatch := `From: Dev <dev@example.com>
+Subject: [PATCH] tracing: Fix probe handling
+
+Commit preamble.
+
+Signed-off-by: Dev <dev@example.com>
+---
+diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c
+--- a/kernel/trace/trace_kprobe.c
++++ b/kernel/trace/trace_kprobe.c
+@@ -100,6 +100,7 @@ static int trace_kprobe_create(...)
++	/* check return value */
+-- 
+2.43.0
+`
+
+	inlineDiffReply := `On Mon, 26 Oct 2026, Dev wrote:
+> The operand loop can read out of bounds.
+
+Can't this part simply be fixed with:
+
+diff --git a/kernel/trace/trace_events_filter.c b/kernel/trace/trace_events_filter.c
+--- a/kernel/trace/trace_events_filter.c
++++ b/kernel/trace/trace_events_filter.c
+@@ -1733,6 +1733,11 @@ static int parse_pred(const char *str, void *data,
+ 	while (isspace(str[i]))
+ 		i++;
+
++	if (!str[i]) {
++		parse_error(pe, FILT_ERR_INVALID_FILTER, pos + i);
++		goto err_free;
++	}
+
+> 2. When the operand is quoted (q != 0), the loop breaks with str[i] at the
+
+This is a separate bug and needs to be a separate patch.
+
+-- 
+Reviewer <reviewer@example.com>
+`
+
+	if !DetectPatch(realPatch) {
+		t.Errorf("expected DetectPatch(realPatch) to be true")
+	}
+	if DetectPatch(inlineDiffReply) {
+		t.Errorf("expected DetectPatch(inlineDiffReply) to be false")
+	}
+
+	// Also verify full ParseEmail parses IsPatch accurately
+	parsedReply, err := ParseEmail([]byte(inlineDiffReply))
+	if err != nil {
+		t.Fatalf("ParseEmail failed: %v", err)
+	}
+	if parsedReply.IsPatch {
+		t.Errorf("expected parsedReply.IsPatch to be false")
+	}
+}
+

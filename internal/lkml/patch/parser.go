@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -56,12 +58,44 @@ type DiffFile struct {
 
 // ParsedEmailDiff represents the complete parsed diff structure of an email.
 type ParsedEmailDiff struct {
-	IsPatch         bool        `json:"is_patch"`
-	IsCorrupted     bool        `json:"is_corrupted"`
-	CorruptedReason string      `json:"corrupted_reason,omitempty"`
-	Preamble        string      `json:"preamble"`
-	Files           []*DiffFile `json:"files"`
-	Postscript      string      `json:"postscript"`
+	IsPatch            bool        `json:"is_patch"`
+	IsCorrupted        bool        `json:"is_corrupted"`
+	CorruptedReason    string      `json:"corrupted_reason,omitempty"`
+	Preamble           string      `json:"preamble"`
+	Files              []*DiffFile `json:"files"`
+	Postscript         string      `json:"postscript"`
+	BodyContinuesAfter bool        `json:"body_continues_after"`
+}
+
+// HasBodyAfterDiff checks if lines after a diff contain substantive email body text
+// (such as review discussion, quoted lines, or paragraphs) rather than standard git signatures.
+func HasBodyAfterDiff(lines []string) bool {
+	firstNonEmpty := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Quoted reply lines (e.g. "> ...") anywhere after the diff strictly indicate email discussion
+		if strings.HasPrefix(trimmed, ">") {
+			return true
+		}
+		if firstNonEmpty == "" {
+			firstNonEmpty = line
+		}
+	}
+
+	if firstNonEmpty == "" {
+		return false
+	}
+
+	trimmedFirst := strings.TrimSpace(firstNonEmpty)
+	// Standard email / git signature separators: "-- " or "--" or "-- <name>"
+	if firstNonEmpty == "-- " || trimmedFirst == "--" || (strings.HasPrefix(trimmedFirst, "--") && len(trimmedFirst) <= 30) {
+		return false
+	}
+
+	return true
 }
 
 // NormalizePath strips leading a/ and b/ from file paths.
@@ -368,7 +402,8 @@ func ParsePatch(text string) *ParsedEmailDiff {
 			}
 
 			if currentHunk != nil {
-				if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ' || line[0] == '\\') {
+				r, _ := utf8.DecodeRuneInString(line)
+				if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ' || line[0] == '\\' || unicode.IsSpace(r) || (isCorrupted && line != "-- " && line != "--" && !strings.HasPrefix(line, ">"))) {
 					hunkRawLines = append(hunkRawLines, line)
 					idx++
 					continue
@@ -377,7 +412,38 @@ func ParsePatch(text string) *ParsedEmailDiff {
 				}
 			}
 
-			// Ignore mode/index lines
+			// Mode/index lines can only occur before any hunk has been processed for the current file
+			if currentFile != nil && len(currentFile.Hunks) == 0 {
+				idx++
+				continue
+			}
+
+			// If we reached here with hunks already parsed, the diff for the current file has ended.
+			// Check if another hunk or file follows after blank lines.
+			if strings.TrimSpace(line) == "" {
+				hasMoreDiff := false
+				for lookahead := idx + 1; lookahead < total; lookahead++ {
+					trimmedNext := strings.TrimSpace(lines[lookahead])
+					if trimmedNext == "" {
+						continue
+					}
+					if hunkHeaderRegex.MatchString(lines[lookahead]) ||
+						diffGitRegex.MatchString(lines[lookahead]) ||
+						(strings.HasPrefix(lines[lookahead], "--- a/") && lookahead+1 < total && strings.HasPrefix(lines[lookahead+1], "+++ b/")) {
+						hasMoreDiff = true
+					}
+					break
+				}
+				if hasMoreDiff {
+					idx++
+					continue
+				}
+			}
+
+			// No more diff hunks or files. Transition to POSTSCRIPT and do not discard lines.
+			commitFile()
+			state = "POSTSCRIPT"
+			postscriptLines = append(postscriptLines, line)
 			idx++
 		} else if state == "POSTSCRIPT" {
 			postscriptLines = append(postscriptLines, line)
@@ -394,14 +460,17 @@ func ParsePatch(text string) *ParsedEmailDiff {
 			break
 		}
 	}
-	isPatch := len(files) > 0 && (hasHunks || isCorrupted)
+
+	bodyContinuesAfter := HasBodyAfterDiff(postscriptLines)
+	isPatch := len(files) > 0 && (hasHunks || isCorrupted) && !bodyContinuesAfter
 
 	return &ParsedEmailDiff{
-		IsPatch:         isPatch,
-		IsCorrupted:     isCorrupted,
-		CorruptedReason: corruptedReason,
-		Preamble:        strings.TrimSpace(strings.Join(preambleLines, "\n")),
-		Files:           files,
-		Postscript:      strings.TrimSpace(strings.Join(postscriptLines, "\n")),
+		IsPatch:            isPatch,
+		IsCorrupted:        isCorrupted,
+		CorruptedReason:    corruptedReason,
+		Preamble:           strings.TrimSpace(strings.Join(preambleLines, "\n")),
+		Files:              files,
+		Postscript:         strings.TrimSpace(strings.Join(postscriptLines, "\n")),
+		BodyContinuesAfter: bodyContinuesAfter,
 	}
 }

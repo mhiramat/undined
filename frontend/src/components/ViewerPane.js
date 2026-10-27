@@ -461,6 +461,13 @@ export function renderViewerPane(container) {
       }
     }
 
+    const hasDiff = detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0 && !isPatchCorrupted;
+    let diffToggleBtn = "";
+    if (hasDiff) {
+      const isDiffDefault = !!detail.parsed_diff.is_patch;
+      diffToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-diff-view" title="${isDiffDefault ? "Show full message body as plain text" : "Show side-by-side patch diff"}">${isDiffDefault ? "📄 Plain text" : "🔀 View diff"}</button>`;
+    }
+
     const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft" || n.state === "submitted") : [];
     const draftCount = draftNotes.length;
     const discardDraftsButton = draftCount > 0
@@ -557,6 +564,7 @@ export function renderViewerPane(container) {
           </button>
         ` : ""}
         ${patchActionButton}
+        ${diffToggleBtn}
         ${discardDraftsButton}
         ${!isDraft ? `
           <button type="button" class="action-btn" id="btn-toggle-patchwork" title="Toggle Patchwork line in header">
@@ -584,9 +592,17 @@ export function renderViewerPane(container) {
 
     // Mount Patch or Plain Text Body
     const bodyContainer = container.querySelector("#viewer-diff-body");
-    if (detail.parsed_diff && detail.parsed_diff.is_patch && !isPatchCorrupted) {
-      renderSideDiff(bodyContainer, detail.parsed_diff);
-    } else if (isPatchCorrupted) {
+    let isDiffView = !!(detail.parsed_diff && detail.parsed_diff.is_patch && !isPatchCorrupted);
+
+    function updateBodyView() {
+      if (isDiffView) {
+        renderSideDiff(bodyContainer, detail.parsed_diff);
+      } else {
+        bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(m.body_plain || "")}</pre>`;
+      }
+    }
+
+    if (isPatchCorrupted) {
       const reason = detail.parsed_diff.corrupted_reason || "Non-ASCII characters detected in patch diff.";
       bodyContainer.innerHTML = `
         <div class="summary-sync-banner patch-corrupted-banner" id="patch-corrupted-banner">
@@ -599,7 +615,23 @@ export function renderViewerPane(container) {
         <pre class="plaintext-email">${linkifyUrlsWithUnicode(m.body_plain || "")}</pre>
       `;
     } else {
-      bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(m.body_plain || "")}</pre>`;
+      updateBodyView();
+    }
+
+    // Event: Toggle Diff / Plain text view
+    const diffToggleBtnEl = container.querySelector("#btn-toggle-diff-view");
+    if (diffToggleBtnEl) {
+      diffToggleBtnEl.addEventListener("click", () => {
+        isDiffView = !isDiffView;
+        updateBodyView();
+        if (isDiffView) {
+          diffToggleBtnEl.textContent = "📄 Plain text";
+          diffToggleBtnEl.title = "Show full message body as plain text";
+        } else {
+          diffToggleBtnEl.textContent = "🔀 View diff";
+          diffToggleBtnEl.title = "Show side-by-side patch diff";
+        }
+      });
     }
 
     // Event: Open reviewed message

@@ -164,10 +164,14 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	isAIReview := msg.IsAIReview || msg.FolderName == constants.FolderAIReviews || msg.FromName == "AI review"
 	var reviewedMsg *database.ReviewedMessage
 
-	// Parse diff if message is a patch and not an AI review
+	// Parse diff if message is a patch or contains inline diff and not an AI review
 	var parsedDiff *patch.ParsedEmailDiff
-	if !isAIReview && msg.IsPatch && msg.BodyPlain != "" {
+	if !isAIReview && msg.BodyPlain != "" && (msg.IsPatch || strings.Contains(msg.BodyPlain, "diff --git") || strings.Contains(msg.BodyPlain, "--- a/")) {
 		parsedDiff = patch.ParsePatch(msg.BodyPlain)
+		if parsedDiff != nil && !parsedDiff.IsPatch && msg.IsPatch {
+			msg.IsPatch = false
+			_ = s.DB.SetMessageIsPatch(msg.ID, false)
+		}
 	}
 
 	// Fetch inline comments

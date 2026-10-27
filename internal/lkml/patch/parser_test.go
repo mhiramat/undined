@@ -128,6 +128,100 @@ index 28df8ad4d13c..61a586d34eec 100644
 	}
 }
 
+func TestParsePatch_InlineSnippetFollowedByDiscussion(t *testing.T) {
+	// Sample review reply containing an inline diff snippet followed by discussion
+	text := `On Mon, 26 Oct 2026, Reviewer wrote:
+> I noticed an issue in parse_pred().
+> Here is what happened:
+
+Maybe something like this would be cleaner:
+
+diff --git a/kernel/trace/trace_events_filter.c b/kernel/trace/trace_events_filter.c
+--- a/kernel/trace/trace_events_filter.c
++++ b/kernel/trace/trace_events_filter.c
+@@ -628,6 +628,7 @@ static int parse_pred(const char *str, void *data,
+ 	int ret;
+
++	/* Reset predicate state */
+ 	clear_pred(pred);
+ 	return 0;
+ }
+
+> What do you think about handling the error return differently?
+
+I agree that the error return could be improved.
+Let's make sure we also update the selftests.
+
+-- 
+Kernel Developer <dev@example.com>
+`
+
+	parsed := ParsePatch(text)
+	if parsed.IsPatch {
+		t.Fatalf("expected IsPatch=false for discussion email with inline diff snippet")
+	}
+	if !parsed.BodyContinuesAfter {
+		t.Fatalf("expected BodyContinuesAfter=true")
+	}
+	if len(parsed.Files) != 1 {
+		t.Fatalf("expected 1 parsed file, got %d", len(parsed.Files))
+	}
+	if !strings.Contains(parsed.Postscript, "What do you think about handling the error return differently?") {
+		t.Errorf("expected Postscript to contain discussion following the diff, got: %q", parsed.Postscript)
+	}
+	if !strings.Contains(parsed.Postscript, "Kernel Developer <dev@example.com>") {
+		t.Errorf("expected Postscript to contain signature, got: %q", parsed.Postscript)
+	}
+}
+
+func TestHasBodyAfterDiff(t *testing.T) {
+	tests := []struct {
+		name     string
+		lines    []string
+		expected bool
+	}{
+		{
+			name:     "empty",
+			lines:    []string{},
+			expected: false,
+		},
+		{
+			name:     "standard git signature",
+			lines:    []string{"-- ", "2.43.0"},
+			expected: false,
+		},
+		{
+			name:     "signature only",
+			lines:    []string{"--", "Kernel Developer <dev@example.com>"},
+			expected: false,
+		},
+		{
+			name:     "quoted line",
+			lines:    []string{"> What do you think?"},
+			expected: true,
+		},
+		{
+			name:     "substantive text",
+			lines:    []string{"Let's verify this in the test suite."},
+			expected: true,
+		},
+		{
+			name:     "whitespace and dashes only",
+			lines:    []string{"", "  ", "-- ", "2.43.0"},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := HasBodyAfterDiff(tc.lines)
+			if got != tc.expected {
+				t.Errorf("expected %v, got %v for lines: %v", tc.expected, got, tc.lines)
+			}
+		})
+	}
+}
+
 func TestParsePatch_UnicodeInPreambleNotCorrupted(t *testing.T) {
 	// Unicode in preamble / commit message (e.g. author name with umlauts or accents)
 	diffText := `Subject: [PATCH] perf/arm: Fix filter ops

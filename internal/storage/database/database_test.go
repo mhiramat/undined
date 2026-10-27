@@ -94,6 +94,20 @@ func TestLegacySchemaMigration(t *testing.T) {
 	if err := db.SetMessageReviewCommit("legacy-1@kernel.org", "abcdef123456"); err != nil {
 		t.Errorf("failed to set review commit: %v", err)
 	}
+	if err := db.SetMessageIsPatch(1, true); err != nil {
+		t.Errorf("failed to set is_patch: %v", err)
+	}
+	m, _ = db.GetMessageByID(1)
+	if !m.IsPatch {
+		t.Errorf("expected is_patch to be true")
+	}
+	if err := db.SetMessageIsPatch(1, false); err != nil {
+		t.Errorf("failed to reset is_patch: %v", err)
+	}
+	m, _ = db.GetMessageByID(1)
+	if m.IsPatch {
+		t.Errorf("expected is_patch to be false")
+	}
 
 	// 5. Verify Outbox migrated to TODO
 	outboxFolder, _ := db.GetFolderByName(constants.FolderOutbox)
