@@ -1,6 +1,6 @@
 module undined-go
 
-go 1.27
+go 1.26.0
 
 require (
 	github.com/emersion/go-imap v1.2.1
