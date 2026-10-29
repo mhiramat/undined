@@ -107,6 +107,17 @@ func (s *Server) handleB4Abort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.Events != nil && res != nil {
+		s.Events.Publish("patch.applied", map[string]any{
+			"message_id":  "",
+			"target_repo": body.TargetGitRepo,
+			"branch":      body.BranchName,
+			"success":     false,
+			"action":      "aborted",
+			"error":       res.Error,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(res)
 }
@@ -320,7 +331,11 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.Events != nil {
-		s.Events.Publish("draft.created", map[string]any{
+		eventType := "draft.created"
+		if body.DraftID > 0 {
+			eventType = "draft.updated"
+		}
+		s.Events.Publish(eventType, map[string]any{
 			"draft_id":  dbID,
 			"subject":   body.Subject,
 			"recipient": toAddr,

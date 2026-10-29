@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/smtp"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,7 +222,7 @@ func (c *Client) mailFrom(smtpClient *smtp.Client, fromAddr string) error {
 // SendRawMessage sends raw RFC822 bytes to SMTP recipients and saves a copy into Sent.
 func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, string, error) {
 	cfg := c.Config.SMTP
-	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	tlsConf := c.getTLSConfig()
 	password := cfg.GetPassword()
 

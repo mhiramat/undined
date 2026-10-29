@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,7 +97,7 @@ func (p *Poller) Connect() (*client.Client, error) {
 	if cfg.UseSSL && port == 143 {
 		port = 993
 	}
-	addr := fmt.Sprintf("%s:%d", cfg.Host, port)
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(port))
 	tlsConf := p.getTLSConfig()
 
 	var c *client.Client

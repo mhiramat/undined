@@ -208,38 +208,24 @@ export function renderFolderPane(container) {
         update();
         showToast(`Downloading full email summaries for "${targetFolderName}"...`, "info");
 
-        // Periodic incremental refreshing during sync
+        // Periodic progress check during full summary download
         let pollTimer = null;
         let isPolling = false;
-        const refreshIncremental = async () => {
+        const refreshProgress = async () => {
           if (isPolling) return;
           isPolling = true;
           try {
-            // Fetch backend sync progress
-            try {
-              const status = await fetchSyncStatus(targetFolderId);
-              store.setFolderSyncProgress(targetFolderId, status);
-            } catch (e) {
-              // Ignore background sync status error
-            }
-
-            // Only refresh message list if target folder is currently active
-            if (store.getState().selectedFolderId === targetFolderId) {
-              const msgs = await fetchMessages(targetFolderId);
-              store.setMessages(msgs);
-            }
-            // Refresh folder unread counts
-            const updatedFolders = await fetchFolders();
-            store.setFolders(updatedFolders);
-          } catch (err) {
-            // Non-critical background polling error
+            const status = await fetchSyncStatus(targetFolderId);
+            store.setFolderSyncProgress(targetFolderId, status);
+          } catch (e) {
+            // Ignore background sync status error
           } finally {
             isPolling = false;
           }
         };
 
-        // Poll every 2 seconds
-        pollTimer = setInterval(refreshIncremental, 2000);
+        // Poll progress during long sync
+        pollTimer = setInterval(refreshProgress, 2000);
 
         try {
           const res = await syncFullFolderSummaries(targetFolderId);
@@ -247,7 +233,6 @@ export function renderFolderPane(container) {
             clearInterval(pollTimer);
             pollTimer = null;
           }
-          await refreshIncremental();
           if (res.status === "cancelled") {
             showToast(`Summary download cancelled: ${res.synced_count ?? 0} messages synced.`, "info");
           } else {

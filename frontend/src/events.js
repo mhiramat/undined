@@ -31,6 +31,18 @@ export class NotificationChannel {
             this.store.setMessages(msgs);
           }
         }
+        // Refresh active message detail if its folder or content changed
+        const activeDetail = this.store.getState().activeMessageDetail;
+        if (activeDetail?.message) {
+          const curId = activeDetail.message.id;
+          const msgFolderId = activeDetail.message.folder_id;
+          const msgFolder = this.store.getState().folders.find((f) => f.id === msgFolderId);
+          if (!targetFolder || (msgFolder && msgFolder.name === targetFolder)) {
+            invalidateMessageDetailCache(curId);
+            const updated = await fetchMessageDetail(curId, { bypassCache: true });
+            this.store.setActiveMessageDetail(updated);
+          }
+        }
       } catch (err) {
         console.warn("[UndineD SSE] Error refreshing folders/messages:", err);
       }

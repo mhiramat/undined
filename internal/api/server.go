@@ -90,6 +90,9 @@ func NewServer(
 	if s.IMAP != nil {
 		s.IMAP.SetEvents(hub)
 	}
+	if s.Review != nil {
+		s.Review.SetEvents(hub)
+	}
 	s.setupRoutes()
 	return s
 }
@@ -99,6 +102,9 @@ func (s *Server) SetEventHub(hub *events.Hub) {
 	s.Events = hub
 	if s.IMAP != nil {
 		s.IMAP.SetEvents(hub)
+	}
+	if s.Review != nil {
+		s.Review.SetEvents(hub)
 	}
 }
 

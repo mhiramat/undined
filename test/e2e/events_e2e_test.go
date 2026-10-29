@@ -181,4 +181,83 @@ func TestE2E_ServerSentEvents(t *testing.T) {
 			}
 		}
 	}
+
+	// 5. Test draft.created and draft.updated
+	draftPayload1 := `{"to": "dev@example.com", "subject": "Test Draft", "body": "Draft body v1"}`
+	draftResp1, err := env.Request("POST", "/api/composer/save-draft", draftPayload1)
+	if err != nil {
+		t.Fatalf("save-draft 1 failed: %v", err)
+	}
+	defer draftResp1.Body.Close()
+	var draftRes1 map[string]any
+	_ = json.NewDecoder(draftResp1.Body).Decode(&draftRes1)
+	draftID := int64(draftRes1["db_id"].(float64))
+
+	// Expect draft.created event
+	receivedDraftCreated := false
+	for !receivedDraftCreated {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for draft.created")
+		default:
+			l, err := replayReader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("error reading draft.created line: %v", err)
+			}
+			l = strings.TrimSpace(l)
+			if l == "event: draft.created" {
+				receivedDraftCreated = true
+			}
+		}
+	}
+
+	// Overwrite draft -> draft.updated
+	draftPayload2 := fmt.Sprintf(`{"to": "dev@example.com", "subject": "Test Draft v2", "body": "Draft body v2", "draft_id": %d}`, draftID)
+	draftResp2, err := env.Request("POST", "/api/composer/save-draft", draftPayload2)
+	if err != nil {
+		t.Fatalf("save-draft 2 failed: %v", err)
+	}
+	draftResp2.Body.Close()
+
+	receivedDraftUpdated := false
+	for !receivedDraftUpdated {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for draft.updated")
+		default:
+			l, err := replayReader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("error reading draft.updated line: %v", err)
+			}
+			l = strings.TrimSpace(l)
+			if l == "event: draft.updated" {
+				receivedDraftUpdated = true
+			}
+		}
+	}
+
+	// 6. Test patch.applied on abort
+	abortPayload := fmt.Sprintf(`{"target_git_repo": %q, "branch_name": "test-branch"}`, env.Config.General.KernelGitDir)
+	abortResp, err := env.Request("POST", "/api/patch/apply/abort", abortPayload)
+	if err != nil {
+		t.Fatalf("abort request failed: %v", err)
+	}
+	abortResp.Body.Close()
+
+	receivedPatchAbort := false
+	for !receivedPatchAbort {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for patch.applied on abort")
+		default:
+			l, err := replayReader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("error reading patch.applied line: %v", err)
+			}
+			l = strings.TrimSpace(l)
+			if l == "event: patch.applied" {
+				receivedPatchAbort = true
+			}
+		}
+	}
 }

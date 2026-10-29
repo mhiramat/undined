@@ -31,17 +31,12 @@ export function renderViewerPane(container) {
   let showPatchwork = false;
   let currentDetail = null;
   let reviewPollTimer = null;
-  let livePollTimer = null;
   let pollingTargetId = null;
 
   function stopReviewPolling() {
     if (reviewPollTimer) {
       clearInterval(reviewPollTimer);
       reviewPollTimer = null;
-    }
-    if (livePollTimer) {
-      clearInterval(livePollTimer);
-      livePollTimer = null;
     }
     pollingTargetId = null;
   }
@@ -818,38 +813,6 @@ export function renderViewerPane(container) {
         }
       });
     });
-
-    // Auto-poll if viewing an AI-reviews email currently Queued or In-progress
-    if (isAiReview) {
-      const bodyTrim = (m.body_plain || "").trim();
-      if (bodyTrim === "Queued" || bodyTrim === "In-progress") {
-        livePollTimer = setInterval(async () => {
-          if (!currentDetail || currentDetail.message?.id !== m.id) {
-            if (livePollTimer) {
-              clearInterval(livePollTimer);
-              livePollTimer = null;
-            }
-            return;
-          }
-          try {
-            const updated = await fetchMessageDetail(m.id, { bypassCache: true });
-            const newBody = (updated.message?.body_plain || "").trim();
-            if (newBody !== bodyTrim) {
-              if (livePollTimer) {
-                clearInterval(livePollTimer);
-                livePollTimer = null;
-              }
-              store.setActiveMessageDetail(updated);
-            }
-          } catch (_) {
-            if (livePollTimer) {
-              clearInterval(livePollTimer);
-              livePollTimer = null;
-            }
-          }
-        }, 2000);
-      }
-    }
 
     // Event: Discard Drafts
     const discardDraftsBtn = container.querySelector("#btn-discard-drafts");

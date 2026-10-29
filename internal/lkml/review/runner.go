@@ -15,6 +15,7 @@ import (
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/events"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
@@ -126,6 +127,7 @@ type Runner struct {
 	Config  *config.Config
 	Maildir *maildir.MaildirStore
 	DB      *database.Database
+	Events  *events.Hub
 
 	mu         sync.Mutex
 	queue      []*Job
@@ -136,6 +138,13 @@ type Runner struct {
 	lastOutput string
 
 	cancelFunc context.CancelFunc
+}
+
+// SetEvents attaches an Event Hub to the ReviewRunner.
+func (r *Runner) SetEvents(hub *events.Hub) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Events = hub
 }
 
 // NewRunner creates a new ReviewRunner.
@@ -544,6 +553,17 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 			if job.ReviewDBID != nil {
 				_ = r.DB.UpdateMessageSubjectAndBody(*job.ReviewDBID, subject, cleanBody)
 			}
+			if r.Events != nil {
+				r.Events.Publish("mail.sync_completed", map[string]any{
+					"folder":    constants.FolderAIReviews,
+					"new_count": 0,
+					"timestamp": time.Now().Unix(),
+				})
+				r.Events.Publish("message.updated", map[string]any{
+					"folder":     constants.FolderAIReviews,
+					"message_id": job.MessageID,
+				})
+			}
 			return
 		}
 	}
@@ -563,5 +583,16 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 	dbID, err := r.DB.IndexEmailFile(folder.ID, savedPath)
 	if err == nil {
 		job.ReviewDBID = &dbID
+		if r.Events != nil {
+			r.Events.Publish("mail.sync_completed", map[string]any{
+				"folder":    constants.FolderAIReviews,
+				"new_count": 1,
+				"timestamp": time.Now().Unix(),
+			})
+			r.Events.Publish("message.updated", map[string]any{
+				"folder":     constants.FolderAIReviews,
+				"message_id": job.MessageID,
+			})
+		}
 	}
 }
