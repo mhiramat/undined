@@ -526,14 +526,16 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "search_emails", "arguments": {"query": "probes"}}}` + "\n")
 	// 5. tools/call: post_review_comment
 	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "post_review_comment", "arguments": {"message_id": "patch-e2e-1@kernel.org", "target": "kernel/trace/trace_kprobe.c:102", "comment": "MCP review comment"}}}` + "\n")
+	// 6. tools/call: get_email
+	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "get_email", "arguments": {"message_id": "<patch-e2e-1@kernel.org>"}}}` + "\n")
 
 	if err := mcpServer.HandleSTDIO(&inBuf, &outBuf); err != nil {
 		t.Fatalf("HandleSTDIO failed: %v", err)
 	}
 
 	lines := strings.Split(strings.TrimSpace(outBuf.String()), "\n")
-	if len(lines) != 5 {
-		t.Fatalf("expected 5 JSON-RPC responses, got %d:\n%s", len(lines), outBuf.String())
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 JSON-RPC responses, got %d:\n%s", len(lines), outBuf.String())
 	}
 
 	// Verify tools/list
@@ -541,8 +543,8 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 	_ = json.Unmarshal([]byte(lines[1]), &toolsResp)
 	toolsResult := toolsResp["result"].(map[string]any)
 	toolsList := toolsResult["tools"].([]any)
-	if len(toolsList) != 14 {
-		t.Errorf("expected 14 MCP tools, got %d", len(toolsList))
+	if len(toolsList) != 16 {
+		t.Errorf("expected 16 MCP tools, got %d", len(toolsList))
 	}
 
 	// Verify list_recent_emails
@@ -568,6 +570,26 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 	}
 	if len(comments) != 1 || comments[0].Text != "MCP review comment" {
 		t.Errorf("expected 1 MCP comment with content, got %+v", comments)
+	}
+
+	// Verify get_email
+	var getEmailResp map[string]any
+	_ = json.Unmarshal([]byte(lines[5]), &getEmailResp)
+	getEmailResult, ok := getEmailResp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected result object in getEmailResp: %+v", getEmailResp)
+	}
+	getEmailStruct, ok := getEmailResult["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structuredContent in getEmailResult: %+v", getEmailResult)
+	}
+	emailObj, ok := getEmailStruct["result"].(map[string]any)
+	if !ok || emailObj["found"] != true {
+		t.Fatalf("expected found=true in get_email response, got %+v", emailObj)
+	}
+	bodyPlain, ok := emailObj["body_plain"].(string)
+	if !ok || !strings.Contains(bodyPlain, "trace_kprobe") {
+		t.Errorf("expected body_plain to contain trace_kprobe, got %+v", emailObj["body_plain"])
 	}
 
 	// Verify MCP access logging

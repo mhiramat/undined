@@ -91,13 +91,50 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 
 ---
 
-### 3.2 `get_thread_context`
+### 3.2 `get_email`
+**Aliases**: `get_message`, `fetch_email`, `read_email`
+
+Finds a specific email by Message-ID (or database ID) and retrieves its complete metadata and plaintext body. If the message body is not cached in the database, Undine automatically hydrates it directly from local storage.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `message_id` | `str` | Yes | — | Canonical Message-ID (with or without angle brackets `<...>`), or numeric database ID. |
+| `id` | `str` | No | `None` | Alias for `message_id`. |
+
+#### Returns:
+```json
+{
+  "found": true,
+  "id": 102,
+  "message_id": "patch.1791745088.git.author@kernel.org",
+  "folder_name": "b4-imports",
+  "subject": "[PATCH v7 1/2] selftests/ftrace: fix path resolution",
+  "from_name": "Developer Name",
+  "from_addr": "developer@kernel.org",
+  "to_addr": "linux-kernel@vger.kernel.org",
+  "cc_addr": "maintainer@kernel.org",
+  "date": "2026-10-12 03:35:00",
+  "in_reply_to": "cover.1791745088.git.author@kernel.org",
+  "references": "cover.1791745088.git.author@kernel.org",
+  "body_plain": "diff --git a/tools/... b/tools/...\n...",
+  "is_patch": true,
+  "is_read": true,
+  "is_replied": false,
+  "has_notes": false,
+  "file_path": ".../maildir/b4-imports/cur/..."
+}
+```
+
+---
+
+### 3.3 `get_thread_context`
 Retrieves the complete thread conversation tree and diff content for a given message ID.
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `message_id` | `str` | Yes | — | Canonical Message-ID or numeric DB ID of any message in the target thread. |
+| `message_id` | `str` | Yes | — | Canonical Message-ID (with or without `<...>`) or numeric DB ID of any message in the target thread. |
 
 #### Returns:
 Array of messages ordered by hierarchy:

@@ -209,6 +209,72 @@ func (s *Server) getToolsList() []map[string]interface{} {
 			},
 		},
 		{
+			"name":        "get_email",
+			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata and complete plaintext body.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "get_emailArguments",
+				"properties": map[string]interface{}{
+					"message_id": map[string]interface{}{
+						"title":       "Message Id",
+						"type":        "string",
+						"description": "Message-ID (with or without angle brackets <...>) or numeric database ID.",
+					},
+					"id": map[string]interface{}{
+						"title":       "Id",
+						"type":        "string",
+						"description": "Alias for message_id.",
+					},
+				},
+				"required": []string{"message_id"},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "get_emailOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "get_message",
+			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata and complete plaintext body (alias for get_email).",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "get_messageArguments",
+				"properties": map[string]interface{}{
+					"message_id": map[string]interface{}{
+						"title":       "Message Id",
+						"type":        "string",
+						"description": "Message-ID (with or without angle brackets <...>) or numeric database ID.",
+					},
+					"id": map[string]interface{}{
+						"title":       "Id",
+						"type":        "string",
+						"description": "Alias for message_id.",
+					},
+				},
+				"required": []string{"message_id"},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "get_messageOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
 			"name":        "get_thread_context",
 			"description": "Retrieve the entire thread tree for a given message ID including plaintext bodies.",
 			"inputSchema": map[string]interface{}{
@@ -216,6 +282,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 				"title": "get_thread_contextArguments",
 				"properties": map[string]interface{}{
 					"message_id": map[string]interface{}{"title": "Message Id", "type": "string"},
+					"id":         map[string]interface{}{"title": "Id", "type": "string"},
 				},
 				"required": []string{"message_id"},
 			},
@@ -571,6 +638,8 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 		return s.toolListRecentEmails(args)
 	case "search_emails":
 		return s.toolSearchEmails(args)
+	case "get_email", "get_message", "fetch_email", "read_email":
+		return s.toolGetEmail(args)
 	case "get_thread_context":
 		return s.toolGetThreadContext(args)
 	case "import_patch_series_b4":
@@ -655,28 +724,156 @@ func (s *Server) toolSearchEmails(args map[string]interface{}) (interface{}, err
 	return matches, nil
 }
 
+func (s *Server) resolveMessage(idOrMsgID string) (*database.Message, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	idOrMsgID = strings.TrimSpace(idOrMsgID)
+	if idOrMsgID == "" {
+		return nil, fmt.Errorf("message ID cannot be empty")
+	}
+
+	// 1. Try numeric DB ID
+	if idVal, err := strconv.ParseInt(idOrMsgID, 10, 64); err == nil {
+		if msg, err := s.DB.GetMessageByID(idVal); err == nil && msg != nil {
+			s.hydrateMessageBody(msg)
+			return msg, nil
+		}
+	}
+
+	// 2. Try cleaned Message-ID (strips angle brackets <...>)
+	cleaned := parser.CleanMsgID(idOrMsgID)
+	if cleaned != "" {
+		if msg, err := s.DB.GetMessageByMsgID(cleaned); err == nil && msg != nil {
+			s.hydrateMessageBody(msg)
+			return msg, nil
+		}
+	}
+
+	// 3. Try raw idOrMsgID if different from cleaned
+	if cleaned != idOrMsgID {
+		if msg, err := s.DB.GetMessageByMsgID(idOrMsgID); err == nil && msg != nil {
+			s.hydrateMessageBody(msg)
+			return msg, nil
+		}
+	}
+
+	return nil, fmt.Errorf("message not found: %s", idOrMsgID)
+}
+
+func (s *Server) hydrateMessageBody(m *database.Message) {
+	if m == nil || m.BodyPlain != "" || m.FilePath == "" {
+		return
+	}
+	if data, err := os.ReadFile(m.FilePath); err == nil {
+		if parsed, err := parser.ParseEmail(data); err == nil && parsed.BodyPlain != "" {
+			m.BodyPlain = parsed.BodyPlain
+			_ = s.DB.UpdateMessageSubjectAndBody(m.ID, m.Subject, m.BodyPlain)
+		}
+	}
+}
+
+func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) {
+	t0 := time.Now()
+	msgID := getString(args, "message_id")
+	if msgID == "" {
+		msgID = getString(args, "id")
+	}
+
+	if s.DB == nil {
+		durMs := time.Since(t0).Seconds() * 1000.0
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: get_email(%q) -> ERROR: Database not initialized (%.1fms)", msgID, durMs))
+		return map[string]interface{}{
+			"found": false,
+			"error": "Database not initialized",
+		}, nil
+	}
+
+	msg, err := s.resolveMessage(msgID)
+	durMs := time.Since(t0).Seconds() * 1000.0
+	if err != nil || msg == nil {
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: get_email(%q) -> NOT FOUND (%.1fms)", msgID, durMs))
+		return map[string]interface{}{
+			"found":      false,
+			"message_id": msgID,
+			"error":      fmt.Sprintf("Message not found: %s", msgID),
+		}, nil
+	}
+
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_email(%q) -> SUCCESS (id=%d, subject=%q) (%.1fms)",
+		msgID, msg.ID, msg.Subject, durMs))
+
+	return map[string]interface{}{
+		"found":            true,
+		"id":               msg.ID,
+		"message_id":       msg.MessageID,
+		"folder_id":        msg.FolderID,
+		"folder_name":      msg.FolderName,
+		"subject":          msg.Subject,
+		"from_name":        msg.FromName,
+		"from_addr":        msg.FromAddr,
+		"to_addr":          msg.ToAddr,
+		"cc_addr":          msg.CcAddr,
+		"date":             msg.Date,
+		"epoch_timestamp":  msg.EpochTimestamp,
+		"in_reply_to":      msg.InReplyTo,
+		"references":       msg.ReferencesHeader,
+		"body_plain":       msg.BodyPlain,
+		"is_patch":         msg.IsPatch,
+		"is_read":          msg.IsRead,
+		"is_replied":       msg.IsReplied,
+		"has_notes":        msg.HasNotes,
+		"file_path":        msg.FilePath,
+		"review_commit_id": msg.ReviewCommitID,
+	}, nil
+}
+
 func (s *Server) toolGetThreadContext(args map[string]interface{}) (interface{}, error) {
 	t0 := time.Now()
 	msgID := getString(args, "message_id")
+	if msgID == "" {
+		msgID = getString(args, "id")
+	}
 
 	var results []map[string]interface{}
 	if s.DB != nil && msgID != "" {
-		msgs, err := s.DB.GetThreadHierarchy(msgID)
-		if err == nil {
-			for _, m := range msgs {
-				results = append(results, map[string]interface{}{
-					"id":          m.ID,
-					"message_id":  m.MessageID,
-					"subject":     m.Subject,
-					"from_name":   m.FromName,
-					"from_addr":   m.FromAddr,
-					"date":        m.Date,
-					"in_reply_to": m.InReplyTo,
-					"references":  m.ReferencesHeader,
-					"body_plain":  m.BodyPlain,
-					"is_patch":    m.IsPatch,
-				})
+		orig, _ := s.resolveMessage(msgID)
+
+		var msgs []*database.Message
+		if orig != nil {
+			msgs, _ = s.DB.GetThreadHierarchy(orig.MessageID)
+		} else {
+			msgs, _ = s.DB.GetThreadHierarchy(msgID)
+		}
+
+		foundOrig := false
+		for _, m := range msgs {
+			if orig != nil && m.ID == orig.ID {
+				foundOrig = true
+				break
 			}
+		}
+		if !foundOrig && orig != nil {
+			msgs = append([]*database.Message{orig}, msgs...)
+		}
+
+		for _, m := range msgs {
+			s.hydrateMessageBody(m)
+			results = append(results, map[string]interface{}{
+				"id":          m.ID,
+				"message_id":  m.MessageID,
+				"folder_name": m.FolderName,
+				"subject":     m.Subject,
+				"from_name":   m.FromName,
+				"from_addr":   m.FromAddr,
+				"to_addr":     m.ToAddr,
+				"cc_addr":     m.CcAddr,
+				"date":        m.Date,
+				"in_reply_to": m.InReplyTo,
+				"references":  m.ReferencesHeader,
+				"body_plain":  m.BodyPlain,
+				"is_patch":    m.IsPatch,
+			})
 		}
 	}
 
@@ -741,15 +938,7 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 
 	var orig *database.Message
 	if targetMsgID != "" {
-		orig, _ = s.DB.GetMessageByMsgID(targetMsgID)
-		if orig == nil {
-			orig, _ = s.DB.GetMessageByMsgID(parser.CleanMsgID(targetMsgID))
-		}
-		if orig == nil {
-			if idVal, err := strconv.ParseInt(targetMsgID, 10, 64); err == nil {
-				orig, _ = s.DB.GetMessageByID(idVal)
-			}
-		}
+		orig, _ = s.resolveMessage(targetMsgID)
 	}
 
 	if targetMsgID != "" && orig == nil && (toAddr == "" || subject == "") {
@@ -1085,15 +1274,7 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 		return map[string]interface{}{"success": false, "error": "Database not initialized"}, nil
 	}
 
-	orig, _ := s.DB.GetMessageByMsgID(effectiveMsgID)
-	if orig == nil {
-		orig, _ = s.DB.GetMessageByMsgID(parser.CleanMsgID(effectiveMsgID))
-	}
-	if orig == nil {
-		if idVal, err := strconv.ParseInt(effectiveMsgID, 10, 64); err == nil {
-			orig, _ = s.DB.GetMessageByID(idVal)
-		}
-	}
+	orig, _ := s.resolveMessage(effectiveMsgID)
 	if orig == nil {
 		durMs := time.Since(t0).Seconds() * 1000.0
 		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s(%q, target=%q) -> REJECTED (Message not found) (%.1fms)",

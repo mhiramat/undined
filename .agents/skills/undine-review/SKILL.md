@@ -46,7 +46,13 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
   ```
   *Note*: If `target` points to an existing file in the patch diff but outside the hunk context window, `mapped` is `false`, but the comment is still persisted as a draft so review feedback is not lost.
 
-### 2. `list_recent_emails`
+### 2. `get_email` (and alias `get_message`)
+Finds a specific email by Message-ID (or database ID) and returns its full metadata and plaintext body (`body_plain`).
+- **Parameters**:
+  - `message_id` (*str*, required): Canonical Message-ID (with or without angle brackets `<...>`), or numeric database ID.
+- **Returns**: Complete email object including `body_plain`, `subject`, `from_name`, `from_addr`, `date`, `is_patch`.
+
+### 3. `list_recent_emails`
 Lists recent email threads and patch messages.
 - **Parameters**:
   - `folder` (*str*, optional): Filter by folder name (e.g. `"b4-imports"` or `"Inbox"`).

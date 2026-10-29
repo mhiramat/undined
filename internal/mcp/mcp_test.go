@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -605,8 +606,8 @@ func TestMCPSTDIOJSONRPC(t *testing.T) {
 	var toolsResp map[string]interface{}
 	_ = json.Unmarshal([]byte(lines[2]), &toolsResp)
 	toolsList := toolsResp["result"].(map[string]interface{})["tools"].([]interface{})
-	if len(toolsList) != 14 {
-		t.Errorf("expected 14 tools, got %d", len(toolsList))
+	if len(toolsList) != 16 {
+		t.Errorf("expected 16 tools, got %d", len(toolsList))
 	}
 
 	// Verify tools/call
@@ -809,6 +810,101 @@ func TestMCPWriteDraftValidation(t *testing.T) {
 	missingMap := missingRes.(map[string]interface{})
 	if missingMap["success"] == true {
 		t.Errorf("expected failure on nonexistent parent message, got %v", missingMap)
+	}
+}
+
+func TestMCPGetEmailAndBody(t *testing.T) {
+	server, db, store, _, msgID, _ := setupTestMCPEnv(t)
+	ctx := context.Background()
+
+	// 1. Get email using canonical Message-ID
+	res1, err := server.CallTool(ctx, "get_email", map[string]interface{}{
+		"message_id": "ftrace-patch-1@kernel.org",
+	})
+	if err != nil {
+		t.Fatalf("get_email failed: %v", err)
+	}
+	email1, ok := res1.(map[string]interface{})
+	if !ok || email1["found"] != true {
+		t.Fatalf("expected found=true, got %v", res1)
+	}
+	if email1["message_id"] != "ftrace-patch-1@kernel.org" {
+		t.Errorf("unexpected message_id: %v", email1["message_id"])
+	}
+	body1, ok := email1["body_plain"].(string)
+	if !ok || !strings.Contains(body1, "new_code") {
+		t.Errorf("expected body_plain to contain new_code, got %v", email1["body_plain"])
+	}
+
+	// 2. Get email using angle brackets <...> and alias get_message
+	res2, err := server.CallTool(ctx, "get_message", map[string]interface{}{
+		"message_id": "<ftrace-patch-1@kernel.org>",
+	})
+	if err != nil {
+		t.Fatalf("get_message with brackets failed: %v", err)
+	}
+	email2, ok := res2.(map[string]interface{})
+	if !ok || email2["found"] != true {
+		t.Fatalf("expected found=true with brackets, got %v", res2)
+	}
+	if email2["body_plain"] != body1 {
+		t.Errorf("expected matching body_plain")
+	}
+
+	// 3. Get email using numeric DB ID via 'id' parameter
+	res3, err := server.CallTool(ctx, "get_email", map[string]interface{}{
+		"id": fmt.Sprintf("%d", msgID),
+	})
+	if err != nil {
+		t.Fatalf("get_email with db id failed: %v", err)
+	}
+	email3, ok := res3.(map[string]interface{})
+	if !ok || email3["found"] != true {
+		t.Fatalf("expected found=true with db id, got %v", res3)
+	}
+	if email3["id"] != msgID {
+		t.Errorf("expected id=%d, got %v", msgID, email3["id"])
+	}
+
+	// 4. Test hydration when body_plain is empty in DB but file exists on disk
+	unhydratedPath, err := store.AddMessage(constants.FolderB4Imports, sampleEmail, "")
+	if err != nil {
+		t.Fatalf("failed to add second email: %v", err)
+	}
+	b4Folder, _ := db.GetFolderByName(constants.FolderB4Imports)
+	emptyBodyMsgID := "unhydrated-patch@kernel.org"
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, file_path, subject, from_addr, body_plain)
+		VALUES (?, ?, ?, 'Unhydrated Subject', 'dev@kernel.org', '');
+	`, emptyBodyMsgID, b4Folder.ID, unhydratedPath)
+	if err != nil {
+		t.Fatalf("failed to insert unhydrated message: %v", err)
+	}
+
+	res4, err := server.CallTool(ctx, "get_email", map[string]interface{}{
+		"message_id": emptyBodyMsgID,
+	})
+	if err != nil {
+		t.Fatalf("get_email unhydrated failed: %v", err)
+	}
+	email4 := res4.(map[string]interface{})
+	if email4["found"] != true {
+		t.Fatalf("expected found=true for unhydrated message")
+	}
+	if !strings.Contains(email4["body_plain"].(string), "new_code") {
+		t.Errorf("expected body to be hydrated from disk, got %v", email4["body_plain"])
+	}
+
+	// 5. Test not found
+	res5, err := server.CallTool(ctx, "get_email", map[string]interface{}{
+		"message_id": "nonexistent@kernel.org",
+	})
+	if err != nil {
+		t.Fatalf("expected no error for not found, got %v", err)
+	}
+	email5 := res5.(map[string]interface{})
+	if email5["found"] != false {
+		t.Errorf("expected found=false for nonexistent message")
 	}
 }
 
