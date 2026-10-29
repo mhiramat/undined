@@ -443,6 +443,14 @@ func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 
+	if s.Events != nil {
+		s.Events.Publish("message.updated", map[string]any{
+			"message_id": msg.MessageID,
+			"folder":     msg.FolderName,
+			"is_read":    isRead,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":       true,
@@ -497,6 +505,14 @@ func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request)
 				log.Printf("Warning: failed to update IMAP replied flag for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
 			}
 		}()
+	}
+
+	if s.Events != nil {
+		s.Events.Publish("message.updated", map[string]any{
+			"message_id": msg.MessageID,
+			"folder":     msg.FolderName,
+			"is_replied": isReplied,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -657,6 +673,14 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.Events != nil {
+		s.Events.Publish("message.updated", map[string]any{
+			"message_id": msg.MessageID,
+			"folder":     msg.FolderName,
+			"tag":        tagKey,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":    true,
@@ -754,6 +778,16 @@ func (s *Server) handleSaveComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.Events != nil && saved != nil {
+		s.Events.Publish("review.comment_added", map[string]any{
+			"message_id": msg.MessageID,
+			"comment_id": saved.ID,
+			"file":       saved.FilePath,
+			"line_no":    saved.LineNo,
+			"author":     saved.Author,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
@@ -770,6 +804,15 @@ func (s *Server) handleDiscardComments(w http.ResponseWriter, r *http.Request) {
 	}
 
 	discarded, _ := s.DB.DiscardDraftComments(msg.MessageID)
+
+	if s.Events != nil {
+		s.Events.Publish("review.comment_added", map[string]any{
+			"message_id":      msg.MessageID,
+			"action":          "discarded",
+			"discarded_count": discarded,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":         true,
@@ -789,6 +832,14 @@ func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to delete comment: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	if s.Events != nil {
+		s.Events.Publish("review.comment_added", map[string]any{
+			"comment_id": cID,
+			"action":     "deleted",
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"success": true})
 }

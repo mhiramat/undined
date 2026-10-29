@@ -20,6 +20,7 @@ import (
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/events"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
@@ -42,11 +43,19 @@ type Poller struct {
 	Config  *config.Config
 	Maildir *maildir.MaildirStore
 	DB      *database.Database
+	Events  *events.Hub
 
 	mu              sync.RWMutex
 	syncProgress    map[int64]*SyncStatus
 	cancelRequested map[int64]bool
 	running         bool
+}
+
+// SetEvents attaches an Event Hub to the IMAP Poller.
+func (p *Poller) SetEvents(hub *events.Hub) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.Events = hub
 }
 
 // NewPoller creates a new IMAP Poller.
@@ -212,6 +221,8 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 	}
 	fetchItems := []imap.FetchItem{imap.FetchUid, imap.FetchFlags, headerSection.FetchItem()}
 
+	totalSynced := 0
+
 	// Fetch in batches of 50
 	const batchSize = 50
 	for i := 0; i < len(uidsToFetch); i += batchSize {
@@ -278,6 +289,8 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 			batchErr = fmt.Errorf("UID FETCH returned no message headers for %d requested messages in %s", len(batch), folderName)
 		}
 
+		totalSynced += batchSynced
+
 		if batchErr != nil {
 			log.Printf("Batch processing error in %s: %v", folderName, batchErr)
 			if maxUID > lastSyncedUID {
@@ -289,6 +302,13 @@ func (p *Poller) SyncFolder(c *client.Client, folderID int64, folderName string,
 
 	if maxUID > lastSyncedUID {
 		_ = p.DB.UpdateFolderLastSyncedUID(folderID, maxUID)
+	}
+	if p.Events != nil && totalSynced > 0 {
+		p.Events.Publish("mail.sync_completed", map[string]any{
+			"folder":    folderName,
+			"new_count": totalSynced,
+			"timestamp": time.Now().Unix(),
+		})
 	}
 	return maxUID, nil
 }
@@ -525,6 +545,14 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 
 	p.syncProgress[folderID].Status = "completed"
 	p.mu.Unlock()
+
+	if p.Events != nil && syncedCount > 0 {
+		p.Events.Publish("mail.sync_completed", map[string]any{
+			"folder":    folderName,
+			"new_count": syncedCount,
+			"timestamp": time.Now().Unix(),
+		})
+	}
 
 	return syncedCount, nil
 }

@@ -552,6 +552,7 @@ func main() {
 	if poller != nil {
 		go poller.Start(ctx)
 	}
+	apiServer.StartDataVersionWatcher(ctx, 2*time.Second)
 
 	srv := &http.Server{
 		Handler: apiServer.Router(),

@@ -46,6 +46,13 @@ func NewDatabase(dbPath string) (*Database, error) {
 	}, nil
 }
 
+// GetDataVersion queries SQLite PRAGMA data_version to detect commits from external connections.
+func (d *Database) GetDataVersion() (int64, error) {
+	var version int64
+	err := d.DB.QueryRow("PRAGMA data_version;").Scan(&version)
+	return version, err
+}
+
 // Close closes the database connection.
 func (d *Database) Close() error {
 	return d.DB.Close()

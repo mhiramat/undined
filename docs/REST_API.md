@@ -56,7 +56,64 @@ Authenticates a user via web form or JSON payload.
 
 ---
 
-## 3. Mailbox / Folder Endpoints
+## 3. Server-Sent Events (SSE) Stream
+
+### `GET /api/events`
+Real-time SSE notification stream broadcasting state invalidations to web clients.
+
+- **Authentication**: Requires session cookie (`undine_session`) or `Authorization: Bearer <token>` header.
+- **Request Headers**:
+  - `Last-Event-ID` (optional, string): Sequence ID of the last processed event. If provided, the server replays missed events cached in its 128-event ring buffer. If the client has fallen behind the buffer, the server emits `system.resync_required`.
+- **Query Parameters**:
+  - `last_event_id` (optional, string): Alternative to `Last-Event-ID` header.
+- **Response Headers**:
+  - `Content-Type: text/event-stream`
+  - `Cache-Control: no-cache`
+  - `Connection: keep-alive`
+  - `X-Accel-Buffering: no`
+- **Wire Format & Comments**:
+  - Initial connection frame: `: connected\n\n`
+  - Periodic heartbeat (every 30 seconds): `: heartbeat\n\n`
+  - Standard event frame:
+    ```
+    id: 42
+    event: review.comment_added
+    data: {"message_id":"<patch@kernel.org>","comment_id":10,"file":"main.c","line_no":12,"author":"Kernel Developer"}
+
+    ```
+- **Event Catalog**:
+  - `mail.sync_completed`: Emitted when IMAP sync finishes indexing new messages.
+    ```json
+    { "folder": "INBOX", "new_count": 3, "timestamp": 1793264400 }
+    ```
+  - `thread.hydrated`: Emitted when `b4 mbox` import finishes downloading a patch series.
+    ```json
+    { "root_message_id": "<cover@kernel.org>", "imported_count": 5, "timestamp": 1793264400 }
+    ```
+  - `review.comment_added`: Emitted when inline comments or notes are added or discarded.
+    ```json
+    { "message_id": "<patch@kernel.org>", "comment_id": 10, "file": "main.c", "line_no": 12, "author": "Kernel Developer" }
+    ```
+  - `patch.applied`: Emitted when `git am` patch application completes.
+    ```json
+    { "message_id": "<patch@kernel.org>", "target_repo": "/linux", "branch": "review-patch", "success": true, "error": "" }
+    ```
+  - `draft.created` / `draft.updated`: Emitted when a composer draft is saved.
+    ```json
+    { "draft_id": 15, "subject": "Re: [PATCH] fix", "recipient": "dev@example.com" }
+    ```
+  - `message.updated`: Emitted when flags, tags, or read/replied status change.
+    ```json
+    { "message_id": "<patch@kernel.org>", "folder": "INBOX", "is_read": true, "tag": "$cl_1" }
+    ```
+  - `system.resync_required`: Emitted when client ring buffer overflows or database was modified externally.
+    ```json
+    { "reason": "missed_events" }
+    ```
+
+---
+
+## 4. Mailbox / Folder Endpoints
 
 ### `GET /api/folders`
 Lists all mailboxes indexed in SQLite and Maildir storage.
@@ -148,7 +205,7 @@ Cancels an ongoing IMAP summary sync.
 
 ---
 
-## 4. Message Management Endpoints
+## 5. Message Management Endpoints
 
 ### `GET /api/messages`
 Lists message summaries with support for sorting, folder filtering, and pagination.
@@ -379,7 +436,7 @@ Applies or removes user-defined color/label tags (`$cl_1` – `$cl_9` or custom 
 
 ---
 
-## 5. Inline Review Comments & Notes
+## 6. Inline Review Comments & Notes
 
 ### `GET /api/messages/{message_id_or_db_id}/comments`
 Lists inline patch review comments for a message.
@@ -459,7 +516,7 @@ Deletes a specific comment by ID.
 
 ---
 
-## 6. AI Review Automation Endpoints
+## 7. AI Review Automation Endpoints
 
 Automates background code reviews using Google Antigravity (`agy --print`) or custom command runners. Reviews are queued and status is recorded in the `AI-reviews` folder as messages with status `Queued` or `In-progress`.
 
@@ -530,7 +587,7 @@ Cancels a running or queued review job.
 
 ---
 
-## 7. Search & b4 Integration Endpoints
+## 8. Search & b4 Integration Endpoints
 
 ### `GET /api/search`
 Searches indexed emails using SQLite Full-Text Search. Supports keyword prefixes (`from:`, `to:`, `subject:`, `body:`, `has:patch`, `is:unread`, `tag:`).
@@ -572,7 +629,7 @@ Fetches a complete patch series or thread from `lore.kernel.org` using `b4 mbox`
 
 ---
 
-## 8. Git Patch Application Endpoints
+## 9. Git Patch Application Endpoints
 
 ### `POST /api/patch/apply`
 Applies a patch series to the local git working tree via `git am -3`.
@@ -624,7 +681,7 @@ Aborts an in-progress patch application (`git am --abort`) and returns the git w
 
 ---
 
-## 9. Patchwork Integration (`patchwork.kernel.org`)
+## 10. Patchwork Integration (`patchwork.kernel.org`)
 
 ### `GET /api/patchwork/info`
 Looks up a patch on Patchwork by `Message-ID`.
@@ -740,7 +797,7 @@ Lists configured or available projects on the Patchwork instance.
 
 ---
 
-## 10. Composer, Editor & SMTP Endpoints
+## 11. Composer, Editor & SMTP Endpoints
 
 ### `POST /api/composer/preview-quote`
 Merges inline diff review comments into the original email body using LKML quoting conventions (`>` quoting, comment indentation, signature).
@@ -844,7 +901,7 @@ Transmits an email via the configured SMTP transport (supporting both STARTTLS a
 
 ---
 
-## 11. Configuration & Metadata Endpoints
+## 12. Configuration & Metadata Endpoints
 
 ### `GET /api/config`
 Retrieves public, non-sensitive configuration parameters for the frontend client.
@@ -886,7 +943,7 @@ Retrieves tag mappings and keyboard shortcuts.
 
 ---
 
-## 12. Known Addresses & Autocomplete Endpoints
+## 13. Known Addresses & Autocomplete Endpoints
 
 ### `GET /api/addresses`
 Queries the Known Addresses database to retrieve email addresses and display names collected from past emails' `To` and `Cc` headers. Results are ordered with prefix matches first, followed by historical frequency and last-seen timestamps.

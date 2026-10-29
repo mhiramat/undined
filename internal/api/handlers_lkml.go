@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"undined-go/internal/bridge"
 	"undined-go/internal/constants"
@@ -29,6 +30,14 @@ func (s *Server) handleB4Import(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if s.Events != nil && len(res) > 0 {
+		s.Events.Publish("thread.hydrated", map[string]any{
+			"root_message_id": body.MessageID,
+			"imported_count":  len(res),
+			"timestamp":       time.Now().Unix(),
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -61,6 +70,16 @@ func (s *Server) handleB4Apply(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	if s.Events != nil && res != nil {
+		s.Events.Publish("patch.applied", map[string]any{
+			"message_id":  body.MessageID,
+			"target_repo": body.TargetGitRepo,
+			"branch":      body.BranchName,
+			"success":     res.Success,
+			"error":       res.Stderr,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -300,6 +319,14 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		msgID = savedMsg.MessageID
 	}
 
+	if s.Events != nil {
+		s.Events.Publish("draft.created", map[string]any{
+			"draft_id":  dbID,
+			"subject":   body.Subject,
+			"recipient": toAddr,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"success":    true,
@@ -387,6 +414,14 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	if s.Events != nil {
+		s.Events.Publish("mail.sync_completed", map[string]any{
+			"folder":    constants.FolderSent,
+			"new_count": 1,
+			"timestamp": time.Now().Unix(),
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1637,6 +1638,115 @@ func TestComposerDraftSaveAndCommentDeleteErrorPropagation(t *testing.T) {
 		t.Errorf("expected 0 comments after delete, got %d", len(cmts))
 	}
 }
+
+func TestAPIEventsStream(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// 1. Unauthorized request should fail with 401
+	unauthReq, _ := http.NewRequest("GET", ts.URL+"/api/events", nil)
+	unauthResp, err := client.Do(unauthReq)
+	if err != nil {
+		t.Fatalf("unauth request failed: %v", err)
+	}
+	unauthResp.Body.Close()
+	if unauthResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401 for unauthenticated /api/events, got %d", unauthResp.StatusCode)
+	}
+
+	// 2. Authorized request should connect to SSE stream
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sseReq, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/api/events", nil)
+	sseReq.Header.Set("Authorization", "Bearer "+token)
+
+	sseClient := &http.Client{}
+	sseResp, err := sseClient.Do(sseReq)
+	if err != nil {
+		t.Fatalf("failed to connect to /api/events: %v", err)
+	}
+	defer sseResp.Body.Close()
+
+	if sseResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for /api/events, got %d", sseResp.StatusCode)
+	}
+	if ct := sseResp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Errorf("expected Content-Type text/event-stream, got %s", ct)
+	}
+
+	reader := bufio.NewReader(sseResp.Body)
+
+	// Read initial connected comment
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatalf("failed reading connected line: %v", err)
+	}
+	if !strings.HasPrefix(line, ": connected") {
+		t.Fatalf("expected ': connected', got %q", line)
+	}
+	_, _ = reader.ReadString('\n') // newline
+
+	// 3. Post a comment via API and assert review.comment_added event is received
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to get INBOX: %v", err)
+	}
+	rawMsg := []byte("From: dev@example.com\nTo: dev@example.com\nSubject: SSE Test\nMessage-ID: <sse-test@kernel.org>\nDate: Thu, 29 Oct 2026 12:00:00 +0000\n\nBody")
+	msgID, err := db.InsertHeaderSummary(folder.ID, 501, rawMsg[:100], false, "")
+	if err != nil {
+		t.Fatalf("failed inserting header summary: %v", err)
+	}
+
+	commentBody := `{"file": "main.c", "line_no": 42, "text": "SSE Comment", "author": "Kernel Developer"}`
+	cmtReq, _ := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/comments", ts.URL, msgID), strings.NewReader(commentBody))
+	cmtReq.Header.Set("Authorization", "Bearer "+token)
+	cmtReq.Header.Set("Content-Type", "application/json")
+	cmtResp, err := client.Do(cmtReq)
+	if err != nil {
+		t.Fatalf("post comment failed: %v", err)
+	}
+	cmtResp.Body.Close()
+	if cmtResp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for comment post, got %d", cmtResp.StatusCode)
+	}
+
+	// Read event frame from SSE stream
+	var eventType, dataStr string
+	for {
+		l, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("failed reading event frame: %v", err)
+		}
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "event: ") {
+			eventType = strings.TrimPrefix(l, "event: ")
+		} else if strings.HasPrefix(l, "data: ") {
+			dataStr = strings.TrimPrefix(l, "data: ")
+			break
+		}
+	}
+
+	if eventType != "review.comment_added" {
+		t.Errorf("expected event 'review.comment_added', got %q", eventType)
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(dataStr), &data); err != nil {
+		t.Fatalf("failed parsing event JSON data: %v", err)
+	}
+	if data["message_id"] != "sse-test@kernel.org" && data["message_id"] != "<sse-test@kernel.org>" {
+		t.Errorf("unexpected message_id in event payload: %v", data["message_id"])
+	}
+	if data["author"] != "Kernel Developer" {
+		t.Errorf("unexpected author in event payload: %v", data["author"])
+	}
+}
+
 
 
 

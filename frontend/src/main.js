@@ -10,6 +10,7 @@ import { initPaneResizer } from "./components/PaneResizer.js";
 import { openFilterDialog } from "./components/FilterDialog.js";
 import { openInternalEditor } from "./components/InternalEditor.js";
 import { store } from "./store.js";
+import { NotificationChannel } from "./events.js";
 import { EVENT_FOLDER_SELECTED } from "./constants.js";
 
 async function init() {
@@ -67,6 +68,13 @@ async function init() {
 
   // Initialize draggable pane resizer
   initPaneResizer();
+
+  // Initialize real-time server-side event stream
+  const notificationChannel = new NotificationChannel(store);
+  notificationChannel.connect();
+  window.addEventListener("beforeunload", () => {
+    notificationChannel.disconnect();
+  });
 
   // Load configuration
   try {

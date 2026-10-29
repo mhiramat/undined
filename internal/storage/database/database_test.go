@@ -502,5 +502,43 @@ func TestGetMessageByMsgIDPrefersHydratedRow(t *testing.T) {
 	}
 }
 
+func TestGetDataVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "version_test.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	defer db.Close()
+
+	v1, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion failed: %v", err)
+	}
+
+	// Open a second connection to the same DB to simulate external process commit
+	db2, err := NewDatabase(db.DBPath)
+	if err != nil {
+		t.Fatalf("failed to open second db connection: %v", err)
+	}
+	defer db2.Close()
+
+	// External commit: create a folder on db2
+	_, err = db2.GetOrCreateFolder("EXTERNAL_TEST", false)
+	if err != nil {
+		t.Fatalf("failed to create folder on db2: %v", err)
+	}
+
+	// Now db1 should detect a new data_version
+	v2, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion failed after external commit: %v", err)
+	}
+	if v2 == v1 {
+		t.Errorf("expected data_version to change after external commit, got %d both times", v1)
+	}
+}
+
+
 
 

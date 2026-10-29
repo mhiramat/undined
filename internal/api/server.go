@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -18,6 +20,7 @@ import (
 	"undined-go/internal/bridge"
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/events"
 	"undined-go/internal/imap"
 	"undined-go/internal/lkml/b4"
 	"undined-go/internal/lkml/review"
@@ -41,6 +44,7 @@ type Server struct {
 	Patchwork    *patchwork.Client
 	Launcher     *bridge.Launcher
 	FrontendDir  string
+	Events       *events.Hub
 	router       *chi.Mux
 
 	logMu        sync.Mutex
@@ -60,7 +64,15 @@ func NewServer(
 	pwClient *patchwork.Client,
 	launcher *bridge.Launcher,
 	frontendDir string,
+	eventsHub ...*events.Hub,
 ) *Server {
+	var hub *events.Hub
+	if len(eventsHub) > 0 && eventsHub[0] != nil {
+		hub = eventsHub[0]
+	} else {
+		hub = events.NewHub()
+	}
+
 	s := &Server{
 		Config:       cfg,
 		DB:           db,
@@ -73,9 +85,21 @@ func NewServer(
 		Patchwork:    pwClient,
 		Launcher:     launcher,
 		FrontendDir:  frontendDir,
+		Events:       hub,
+	}
+	if s.IMAP != nil {
+		s.IMAP.SetEvents(hub)
 	}
 	s.setupRoutes()
 	return s
+}
+
+// SetEventHub overrides or sets the Event Hub instance.
+func (s *Server) SetEventHub(hub *events.Hub) {
+	s.Events = hub
+	if s.IMAP != nil {
+		s.IMAP.SetEvents(hub)
+	}
 }
 
 // Router returns the initialized chi http.Handler.
@@ -110,6 +134,7 @@ func (s *Server) setupRoutes() {
 
 	// API Routes
 	r.Route("/api", func(api chi.Router) {
+		api.Get("/events", s.handleEvents)
 		api.Get("/config", s.handleGetConfig)
 		api.Get("/tags", s.handleGetTags)
 
@@ -416,3 +441,50 @@ func (s *Server) handleFaviconICO(w http.ResponseWriter, r *http.Request) {
 	}
 	s.handleFaviconSVG(w, r)
 }
+
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if s.Events == nil {
+		http.Error(w, "Event streaming unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	s.Events.ServeHTTP(w, r)
+}
+
+// StartDataVersionWatcher begins monitoring SQLite PRAGMA data_version
+// to emit system.resync_required when external processes (e.g. CLI or MCP) modify undine.db.
+func (s *Server) StartDataVersionWatcher(ctx context.Context, checkInterval time.Duration) {
+	if s.DB == nil || s.Events == nil {
+		return
+	}
+	if checkInterval <= 0 {
+		checkInterval = 2 * time.Second
+	}
+	go func() {
+		ticker := time.NewTicker(checkInterval)
+		defer ticker.Stop()
+
+		lastVer, err := s.DB.GetDataVersion()
+		if err != nil {
+			return
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				currVer, err := s.DB.GetDataVersion()
+				if err != nil {
+					continue
+				}
+				if currVer != lastVer {
+					lastVer = currVer
+					s.Events.Publish("system.resync_required", map[string]any{
+						"reason": "external_db_change",
+					})
+				}
+			}
+		}
+	}()
+}
+
