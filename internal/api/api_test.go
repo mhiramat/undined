@@ -725,7 +725,49 @@ func TestAIReviewMessageDetailAndLinks(t *testing.T) {
 	if fmt.Sprintf("%v", detail.Message.ReviewedMessage["id"]) != fmt.Sprintf("%d", origID) {
 		t.Errorf("expected detail.message.reviewed_message.id=%d, got %v", origID, detail.Message.ReviewedMessage["id"])
 	}
+
+	// 4. Fetch the patch message itself via GET /api/messages/{origID}
+	// It should now link back to the AI review message via ai_review_message and has_ai_review
+	reqOrig, _ := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d", ts.URL, origID), nil)
+	reqOrig.Header.Set("Authorization", "Bearer "+token)
+	respOrig, err := client.Do(reqOrig)
+	if err != nil {
+		t.Fatalf("GET /api/messages/{origID} failed: %v", err)
+	}
+	defer respOrig.Body.Close()
+
+	if respOrig.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK for orig patch, got %d", respOrig.StatusCode)
+	}
+
+	var patchDetail struct {
+		Message struct {
+			ID              int64          `json:"id"`
+			HasAIReview     bool           `json:"has_ai_review"`
+			AIReviewMessage map[string]any `json:"ai_review_message"`
+		} `json:"message"`
+		HasAIReview     bool           `json:"has_ai_review"`
+		AIReviewMessage map[string]any `json:"ai_review_message"`
+	}
+
+	if err := json.NewDecoder(respOrig.Body).Decode(&patchDetail); err != nil {
+		t.Fatalf("failed to decode patch detail: %v", err)
+	}
+
+	if !patchDetail.HasAIReview {
+		t.Errorf("expected patchDetail.HasAIReview=true, got false")
+	}
+	if patchDetail.AIReviewMessage == nil {
+		t.Fatalf("expected patchDetail.AIReviewMessage to be non-nil, got nil")
+	}
+	if fmt.Sprintf("%v", patchDetail.AIReviewMessage["id"]) != fmt.Sprintf("%d", aiReviewID) {
+		t.Errorf("expected patchDetail.AIReviewMessage.id=%d, got %v", aiReviewID, patchDetail.AIReviewMessage["id"])
+	}
+	if patchDetail.AIReviewMessage["folder_name"] != "AI-reviews" {
+		t.Errorf("expected patchDetail.AIReviewMessage.folder_name='AI-reviews', got %v", patchDetail.AIReviewMessage["folder_name"])
+	}
 }
+
 
 func TestRESTAPIAccessLogging(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)

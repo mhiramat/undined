@@ -5,7 +5,7 @@
 import { fetchConfig, fetchFolders, fetchMessages, setMessageTag } from "./api.js";
 import { renderFolderPane } from "./components/FolderPane.js";
 import { renderSummaryPane } from "./components/SummaryPane.js";
-import { renderViewerPane, triggerReply, triggerForward, triggerEdit, triggerNewMessage, triggerOpenReviewed, isDraftFolder, isDraftMessage, isAiReviewMessage } from "./components/ViewerPane.js";
+import { renderViewerPane, triggerReply, triggerForward, triggerEdit, triggerNewMessage, triggerOpenReviewed, triggerOpenAiReview, isDraftFolder, isDraftMessage, isAiReviewMessage } from "./components/ViewerPane.js";
 import { initPaneResizer } from "./components/PaneResizer.js";
 import { openFilterDialog } from "./components/FilterDialog.js";
 import { openInternalEditor } from "./components/InternalEditor.js";
@@ -166,6 +166,12 @@ async function init() {
         if (reviewedMsg) {
           e.preventDefault();
           triggerOpenReviewed(reviewedMsg);
+        }
+      } else if (current && !isAiReviewMessage(current)) {
+        const aiReviewMsg = currentDetail?.ai_review_message || current.ai_review_message;
+        if (aiReviewMsg) {
+          e.preventDefault();
+          triggerOpenAiReview(aiReviewMsg);
         }
       }
     } else if (e.key === "/" || e.key === "f" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f")) {

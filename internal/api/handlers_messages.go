@@ -196,8 +196,52 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	var missingParent bool
 	var primaryParentID string
 	var parentInfo *database.ParentInfo
+	var aiReviewMsg *database.ReviewedMessage
 	if !isAIReview {
 		missingParent, primaryParentID, parentInfo = s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
+		if aiRev, err := s.DB.FindAIReviewMessage(msg); err == nil && aiRev != nil {
+			aiReviewMsg = aiRev
+			msg.AIReviewMessage = aiRev
+			msg.HasAIReview = true
+		}
+		// If DB doesn't have it yet, check if review runner has active/queued job with ReviewDBID
+		if aiReviewMsg == nil && s.Review != nil {
+			st := s.Review.GetStatus()
+			cleanMid := parser.CleanMsgID(msg.MessageID)
+			matches := func(jMsgID, jCommitID string, revDBID *int64) *database.ReviewedMessage {
+				cMid := parser.CleanMsgID(jMsgID)
+				if (cleanMid != "" && cMid == cleanMid) || (revCommit != "" && jCommitID == revCommit) {
+					if revDBID != nil && *revDBID > 0 {
+						if revM, _ := s.DB.GetMessageByID(*revDBID); revM != nil {
+							return &database.ReviewedMessage{
+								ID:         revM.ID,
+								MessageID:  revM.MessageID,
+								FolderID:   revM.FolderID,
+								FolderName: constants.FolderAIReviews,
+								Subject:    revM.Subject,
+								CommitID:   jCommitID,
+							}
+						}
+					}
+				}
+				return nil
+			}
+			if st.ActiveMessageID != "" || st.ActiveCommitID != "" {
+				aiReviewMsg = matches(st.ActiveMessageID, st.ActiveCommitID, st.ActiveReviewDBID)
+			}
+			if aiReviewMsg == nil {
+				for _, qj := range st.Queue {
+					if m := matches(qj.MessageID, qj.CommitID, qj.ReviewDBID); m != nil {
+						aiReviewMsg = m
+						break
+					}
+				}
+			}
+			if aiReviewMsg != nil {
+				msg.AIReviewMessage = aiReviewMsg
+				msg.HasAIReview = true
+			}
+		}
 	} else {
 		msg.IsAIReview = true
 		msg.MessageID = ""
@@ -239,6 +283,8 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 		"parent_info":       parentInfo,
 		"primary_parent_id": primaryParentID,
 		"reviewed_message":  reviewedMsg,
+		"ai_review_message": aiReviewMsg,
+		"has_ai_review":     aiReviewMsg != nil,
 		"lore_url":          loreURL,
 	}
 

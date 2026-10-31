@@ -539,6 +539,110 @@ func TestGetDataVersion(t *testing.T) {
 	}
 }
 
+func TestFindAIReviewMessage(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "ai_review_test.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+	defer db.Close()
+
+	inboxFolder, _ := db.GetOrCreateFolder("INBOX", false)
+	aiFolder, _ := db.GetOrCreateFolder(constants.FolderAIReviews, false)
+
+	// Create a patch message in INBOX
+	patchEmlPath := filepath.Join(tmpDir, "patch1.eml")
+	patchRaw := "Message-ID: <patch-01@example.com>\r\nFrom: Dev <dev@example.com>\r\nSubject: [PATCH] Fix test bug\r\nDate: Sat, 22 Aug 2026 23:09:06 +0800\r\n\r\n--- a/file\n+++ b/file\n@@ -1,1 +1,1 @@\n-old\n+new\n"
+	if err := os.WriteFile(patchEmlPath, []byte(patchRaw), 0600); err != nil {
+		t.Fatalf("failed to write patch eml: %v", err)
+	}
+	patchMsgID, err := db.IndexEmailFile(inboxFolder.ID, patchEmlPath)
+	if err != nil {
+		t.Fatalf("failed to index patch email: %v", err)
+	}
+	if err := db.SetMessageReviewCommit("patch-01@example.com", "commit12345678"); err != nil {
+		t.Fatalf("failed to set review commit: %v", err)
+	}
+
+	patchMsg, err := db.GetMessageByID(patchMsgID)
+	if err != nil {
+		t.Fatalf("failed to get patch message: %v", err)
+	}
+
+	// Before AI review is indexed, FindAIReviewMessage should return nil
+	foundRev, err := db.FindAIReviewMessage(patchMsg)
+	if err != nil {
+		t.Fatalf("FindAIReviewMessage returned error: %v", err)
+	}
+	if foundRev != nil {
+		t.Fatalf("expected nil review message before review created, got %+v", foundRev)
+	}
+
+	// Now create an AI review email in AI-reviews folder with matching ReviewCommitID
+	reviewEmlPath := filepath.Join(tmpDir, "ai_rev1.eml")
+	reviewRaw := "Message-ID: <ai-rev-01@example.com>\r\nFrom: Reviewer <dev@example.com>\r\nSubject: AI review: [PATCH] Fix test bug\r\nDate: Sat, 22 Aug 2026 23:15:00 +0800\r\nIn-Reply-To: <patch-01@example.com>\r\nX-Reviewed-Commit-ID: commit12345678\r\n\r\nReview findings...\n"
+	if err := os.WriteFile(reviewEmlPath, []byte(reviewRaw), 0600); err != nil {
+		t.Fatalf("failed to write review eml: %v", err)
+	}
+	revMsgID, err := db.IndexEmailFile(aiFolder.ID, reviewEmlPath)
+	if err != nil {
+		t.Fatalf("failed to index review email: %v", err)
+	}
+	if err := db.SetMessageReviewCommit("ai-rev-01@example.com", "commit12345678"); err != nil {
+		t.Fatalf("failed to set review commit on review msg: %v", err)
+	}
+
+	// FindAIReviewMessage should now find the review message by commit ID
+	foundRev, err = db.FindAIReviewMessage(patchMsg)
+	if err != nil {
+		t.Fatalf("FindAIReviewMessage returned error: %v", err)
+	}
+	if foundRev == nil {
+		t.Fatalf("expected to find AI review message, got nil")
+	}
+	if foundRev.ID != revMsgID {
+		t.Errorf("expected review ID %d, got %d", revMsgID, foundRev.ID)
+	}
+	if foundRev.FolderName != constants.FolderAIReviews {
+		t.Errorf("expected folder name %s, got %s", constants.FolderAIReviews, foundRev.FolderName)
+	}
+	if foundRev.CommitID != "commit12345678" {
+		t.Errorf("expected commit ID commit12345678, got %s", foundRev.CommitID)
+	}
+
+	// Test finding by InReplyTo when patch has no commit ID
+	patch2EmlPath := filepath.Join(tmpDir, "patch2.eml")
+	patch2Raw := "Message-ID: <patch-02@example.com>\r\nFrom: Dev <dev@example.com>\r\nSubject: [PATCH] Second test patch\r\nDate: Sat, 22 Aug 2026 23:20:00 +0800\r\n\r\nDiff content\n"
+	if err := os.WriteFile(patch2EmlPath, []byte(patch2Raw), 0600); err != nil {
+		t.Fatalf("failed to write patch 2: %v", err)
+	}
+	patch2MsgID, err := db.IndexEmailFile(inboxFolder.ID, patch2EmlPath)
+	if err != nil {
+		t.Fatalf("failed to index patch 2: %v", err)
+	}
+	patch2Msg, _ := db.GetMessageByID(patch2MsgID)
+
+	review2EmlPath := filepath.Join(tmpDir, "ai_rev2.eml")
+	review2Raw := "Message-ID: <ai-rev-02@example.com>\r\nFrom: Reviewer <dev@example.com>\r\nSubject: AI review: [PATCH] Second test patch\r\nDate: Sat, 22 Aug 2026 23:25:00 +0800\r\nIn-Reply-To: <patch-02@example.com>\r\n\r\nReview findings 2...\n"
+	if err := os.WriteFile(review2EmlPath, []byte(review2Raw), 0600); err != nil {
+		t.Fatalf("failed to write review 2: %v", err)
+	}
+	rev2MsgID, err := db.IndexEmailFile(aiFolder.ID, review2EmlPath)
+	if err != nil {
+		t.Fatalf("failed to index review 2: %v", err)
+	}
+
+	foundRev2, err := db.FindAIReviewMessage(patch2Msg)
+	if err != nil {
+		t.Fatalf("FindAIReviewMessage for patch2 failed: %v", err)
+	}
+	if foundRev2 == nil || foundRev2.ID != rev2MsgID {
+		t.Errorf("expected review2 ID %d, got %+v", rev2MsgID, foundRev2)
+	}
+}
+
+
 
 
 

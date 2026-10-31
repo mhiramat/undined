@@ -135,7 +135,8 @@ export function renderViewerPane(container) {
     const encodedMsgId = encodeURIComponent(cleanMsgId);
     const loreUrl = detail.lore_url || (cleanMsgId ? `https://lore.kernel.org/r/${encodedMsgId}` : "");
     const sashikoUrl = cleanMsgId ? `https://sashiko.dev/#/patchset/${encodedMsgId}` : "";
-    const commitId = m.review_commit_id || m["review-commit-id"];
+    const commitId = m.review_commit_id || m["review-commit-id"] || detail.review_commit_id;
+    const aiReviewMsg = detail.ai_review_message || m.ai_review_message;
     const mboxPath = m.file_path || "";
 
     function getHeaderToggleText(mode) {
@@ -271,6 +272,13 @@ export function renderViewerPane(container) {
                 <button type="button" class="btn-copy-commit" id="btn-copy-commit" title="Copy commit ID to clipboard">📋</button>
               </span>
             ` : ""}
+
+            ${aiReviewMsg ? `
+              <span class="meta-label">AI review:</span>
+              <span class="meta-val ai-review-meta-val">
+                <button type="button" class="meta-link-btn" id="link-open-ai-review" title="Open AI review report in AI-reviews mailbox (o)">🤖 View AI review (${escapeHtml(aiReviewMsg.subject || "Report")}) →</button>
+              </span>
+            ` : ""}
           ` : ""}
 
           ${headerMode === "full" && m.in_reply_to ? `<span class="meta-label">In-Reply:</span><span class="meta-val">&lt;${escapeHtml(m.in_reply_to)}&gt;</span>` : ""}
@@ -323,6 +331,11 @@ export function renderViewerPane(container) {
         patchActionButton = `
           <button type="button" class="action-btn" id="btn-ai-review" disabled title="AI review is queued for this patch">⏳ Queued...</button>
           <button type="button" class="action-btn danger btn-cancel-ai-review" id="btn-cancel-ai-review" title="Cancel queued AI review">🛑 Cancel Review</button>
+        `;
+      } else if (aiReviewMsg) {
+        patchActionButton = `
+          <button type="button" class="action-btn primary" id="btn-open-ai-review" title="Open existing AI review in AI-reviews mailbox (o)">🤖 View AI review</button>
+          <button type="button" class="action-btn text-muted" id="btn-ai-review" title="Re-run AI review on this patch">🔄 Re-run review</button>
         `;
       } else if (isReviewActive) {
         patchActionButton = `<button type="button" class="action-btn" id="btn-ai-review" title="Queue background AI review with agy --print">🤖 Queue AI review</button>`;
@@ -520,6 +533,16 @@ export function renderViewerPane(container) {
       });
     }
 
+    // Event: Open AI review message
+    const openAiReviewBtns = container.querySelectorAll("#btn-open-ai-review, #link-open-ai-review");
+    if (openAiReviewBtns.length > 0 && aiReviewMsg) {
+      openAiReviewBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          triggerOpenAiReview(aiReviewMsg);
+        });
+      });
+    }
+
     // Event: Jump to parent in b4/other folder
     const jumpBtn = container.querySelector("#btn-jump-b4");
     if (jumpBtn && parentInfo) {
@@ -613,6 +636,11 @@ export function renderViewerPane(container) {
       aiReviewBtn.addEventListener("click", async () => {
         const targetId = m.message_id || m.id;
         if (store.getAiReviewStatusForTarget && store.getAiReviewStatusForTarget(targetId)) return;
+        if (aiReviewMsg) {
+          if (!confirm("An AI review has already been run on this patch/commit. Do you want to run it again?")) {
+            return;
+          }
+        }
         try {
           aiReviewBtn.disabled = true;
           const res = await triggerAiReview(targetId, commitId);
@@ -1487,6 +1515,25 @@ export function triggerOpenReviewed(reviewedMsg) {
     store.selectFolder(targetFolderId, targetMsgId);
   } else {
     showToast("Could not determine mailbox for reviewed message", "error");
+  }
+}
+
+export function triggerOpenAiReview(aiReviewMsg) {
+  if (!aiReviewMsg) return;
+  let targetFolderId = aiReviewMsg.folder_id;
+  const targetMsgId = aiReviewMsg.id || aiReviewMsg.message_id;
+  if (targetFolderId == null) {
+    const folders = store.getState().folders || [];
+    const aiFolder = folders.find((f) => f.name === FOLDER_AI_REVIEWS || f.name === "AI-reviews");
+    if (aiFolder) {
+      targetFolderId = aiFolder.id;
+    }
+  }
+  if (targetFolderId != null) {
+    showToast("Opening AI review report in AI-reviews...", "info");
+    store.selectFolder(targetFolderId, targetMsgId);
+  } else {
+    showToast("Could not determine mailbox for AI review", "error");
   }
 }
 

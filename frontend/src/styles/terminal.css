@@ -791,6 +791,12 @@ body.undine-app {
   gap: 8px;
 }
 
+.ai-review-meta-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .commit-hash {
   font-family: var(--font-mono, monospace);
   font-size: 11px;

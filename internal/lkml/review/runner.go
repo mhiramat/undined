@@ -217,6 +217,9 @@ func (r *Runner) matchesJob(job *Job, target string) bool {
 	if job.OrigDBID != 0 && fmt.Sprintf("%d", job.OrigDBID) == target {
 		return true
 	}
+	if job.CommitID != "" && (job.CommitID == target || job.CommitID == cleanTarget) {
+		return true
+	}
 	return false
 }
 
@@ -292,6 +295,18 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 		return nil, fmt.Errorf("invalid commit ID format: must be a valid commit hash or ref")
 	}
 
+	// Also check if a review is already running or queued for the same commit
+	if r.isRunning && r.activeJob != nil && r.activeJob.CommitID == resolvedCommit {
+		r.mu.Unlock()
+		return nil, fmt.Errorf("a review is already in progress for commit %s", resolvedCommit)
+	}
+	for _, qj := range r.queue {
+		if qj.CommitID == resolvedCommit {
+			r.mu.Unlock()
+			return nil, fmt.Errorf("a review is already queued for commit %s", resolvedCommit)
+		}
+	}
+
 	job := &Job{
 		MessageID: cleanedID,
 		CommitID:  resolvedCommit,
@@ -302,6 +317,9 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 		job.OrigSubject = origMsg.Subject
 		job.OrigDBID = origMsg.ID
 		job.OrigFolderID = origMsg.FolderID
+		if origMsg.ReviewCommitID == "" && resolvedCommit != "" && r.DB != nil {
+			_ = r.DB.SetMessageReviewCommit(origMsg.MessageID, resolvedCommit)
+		}
 	}
 
 	// 3. Save placeholder email in AI-reviews mailbox
@@ -578,6 +596,9 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 	if job.OrigFolderID != 0 {
 		rawLines = append(rawLines, fmt.Sprintf("X-Reviewed-Folder-ID: %d", job.OrigFolderID))
 	}
+	if job.CommitID != "" {
+		rawLines = append(rawLines, fmt.Sprintf("X-Reviewed-Commit-ID: %s", job.CommitID))
+	}
 	rawLines = append(rawLines, "", cleanBody, "")
 	rawBytes := []byte(strings.Join(rawLines, "\r\n"))
 
@@ -587,6 +608,9 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 			_ = os.WriteFile(job.FilePath, rawBytes, 0600)
 			if job.ReviewDBID != nil {
 				_ = r.DB.UpdateMessageSubjectAndBody(*job.ReviewDBID, subject, cleanBody)
+				if job.CommitID != "" {
+					_, _ = r.DB.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", job.CommitID, *job.ReviewDBID)
+				}
 			}
 			if r.Events != nil {
 				r.Events.Publish("message.updated", map[string]any{
@@ -613,6 +637,9 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 	dbID, err := r.DB.IndexEmailFile(folder.ID, savedPath)
 	if err == nil {
 		job.ReviewDBID = &dbID
+		if job.CommitID != "" {
+			_, _ = r.DB.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", job.CommitID, dbID)
+		}
 		if r.Events != nil {
 			r.Events.Publish("mail.sync_completed", map[string]any{
 				"folder":    constants.FolderAIReviews,

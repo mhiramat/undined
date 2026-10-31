@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"undined-go/internal/constants"
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
 )
@@ -47,6 +48,8 @@ type Message struct {
 	HasChildren  bool   `json:"has_children"`
 	IsAIReview   bool   `json:"is_ai_review,omitempty"`
 	ReviewedMessage *ReviewedMessage `json:"reviewed_message,omitempty"`
+	AIReviewMessage *ReviewedMessage `json:"ai_review_message,omitempty"`
+	HasAIReview     bool             `json:"has_ai_review,omitempty"`
 	Attachments     []*parser.Attachment `json:"attachments,omitempty"`
 }
 
@@ -649,13 +652,14 @@ func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*M
 	return deleted, nil
 }
 
-// ReviewedMessage represents the original patch email linked to an AI review.
+// ReviewedMessage represents the original patch email or AI review linked to an email.
 type ReviewedMessage struct {
 	ID         int64  `json:"id"`
 	MessageID  string `json:"message_id"`
 	FolderID   int64  `json:"folder_id"`
 	FolderName string `json:"folder_name"`
 	Subject    string `json:"subject"`
+	CommitID   string `json:"commit_id,omitempty"`
 }
 
 // FindReviewedMessage locates the original email reviewed by an AI-review message.
@@ -766,6 +770,136 @@ func (d *Database) FindReviewedMessage(msg *Message) (*ReviewedMessage, error) {
 		FolderID:   orig.FolderID,
 		FolderName: fName,
 		Subject:    orig.Subject,
+	}, nil
+}
+
+// FindAIReviewMessage locates the AI-review email associated with a patch message or commit.
+func (d *Database) FindAIReviewMessage(msg *Message) (*ReviewedMessage, error) {
+	if msg == nil {
+		return nil, nil
+	}
+
+	aiFolder, err := d.GetFolderByName(constants.FolderAIReviews)
+	if err != nil || aiFolder == nil {
+		return nil, nil
+	}
+
+	cleanedMid := parser.CleanMsgID(msg.MessageID)
+	commitID := msg.ReviewCommitID
+	if commitID == "" && cleanedMid != "" {
+		commitID, _ = d.GetReviewCommit(cleanedMid)
+	}
+
+	var aiMsg *Message
+
+	// 1. Check by review_commit_id in AI-reviews folder if present
+	if commitID != "" {
+		row := d.DB.QueryRow(`
+			SELECT id FROM messages
+			WHERE folder_id = ? AND review_commit_id = ?
+			ORDER BY id DESC LIMIT 1;
+		`, aiFolder.ID, commitID)
+		var revID int64
+		if err := row.Scan(&revID); err == nil && revID > 0 {
+			aiMsg, _ = d.GetMessageByID(revID)
+		}
+	}
+
+	// 2. Check by in_reply_to or references_header matching msg.MessageID
+	if aiMsg == nil && cleanedMid != "" {
+		refPattern := "%" + cleanedMid + "%"
+		row := d.DB.QueryRow(`
+			SELECT id FROM messages
+			WHERE folder_id = ? AND (in_reply_to LIKE ? OR references_header LIKE ?)
+			ORDER BY id DESC LIMIT 1;
+		`, aiFolder.ID, refPattern, refPattern)
+		var revID int64
+		if err := row.Scan(&revID); err == nil && revID > 0 {
+			aiMsg, _ = d.GetMessageByID(revID)
+		}
+	}
+
+	// 3. Check by in_reply_to matching "id-<dbID>"
+	if aiMsg == nil && msg.ID > 0 {
+		idPattern := fmt.Sprintf("%%id-%d%%", msg.ID)
+		row := d.DB.QueryRow(`
+			SELECT id FROM messages
+			WHERE folder_id = ? AND in_reply_to LIKE ?
+			ORDER BY id DESC LIMIT 1;
+		`, aiFolder.ID, idPattern)
+		var revID int64
+		if err := row.Scan(&revID); err == nil && revID > 0 {
+			aiMsg, _ = d.GetMessageByID(revID)
+		}
+	}
+
+	// 4. Fallback: Check header files in AI-reviews folder for X-Reviewed-Commit-ID,
+	// X-Reviewed-Message-ID, or X-Reviewed-Message-DB-ID
+	if aiMsg == nil {
+		rows, err := d.DB.Query(`SELECT id, file_path FROM messages WHERE folder_id = ? ORDER BY id DESC`, aiFolder.ID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var fid int64
+				var fpath string
+				if err := rows.Scan(&fid, &fpath); err == nil && fpath != "" {
+					if content, err := os.ReadFile(fpath); err == nil {
+						rawHeaders := string(content)
+						if idx := strings.Index(rawHeaders, "\n\n"); idx != -1 {
+							rawHeaders = rawHeaders[:idx]
+						} else if idx := strings.Index(rawHeaders, "\r\n\r\n"); idx != -1 {
+							rawHeaders = rawHeaders[:idx]
+						}
+						matched := false
+						for _, line := range strings.Split(rawHeaders, "\n") {
+							line = strings.TrimSpace(line)
+							lower := strings.ToLower(line)
+							if commitID != "" && strings.HasPrefix(lower, "x-reviewed-commit-id:") {
+								cVal := strings.TrimSpace(line[len("x-reviewed-commit-id:"):])
+								if cVal == commitID {
+									matched = true
+									break
+								}
+							}
+							if cleanedMid != "" && strings.HasPrefix(lower, "x-reviewed-message-id:") {
+								mVal := parser.CleanMsgID(line[len("x-reviewed-message-id:"):])
+								if mVal == cleanedMid {
+									matched = true
+									break
+								}
+							}
+							if msg.ID > 0 && strings.HasPrefix(lower, "x-reviewed-message-db-id:") {
+								idVal := strings.TrimSpace(line[len("x-reviewed-message-db-id:"):])
+								if idVal == fmt.Sprintf("%d", msg.ID) {
+									matched = true
+									break
+								}
+							}
+						}
+						if matched {
+							aiMsg, _ = d.GetMessageByID(fid)
+							if commitID != "" && aiMsg != nil {
+								_, _ = d.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", commitID, fid)
+							}
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if aiMsg == nil {
+		return nil, nil
+	}
+
+	return &ReviewedMessage{
+		ID:         aiMsg.ID,
+		MessageID:  aiMsg.MessageID,
+		FolderID:   aiFolder.ID,
+		FolderName: aiFolder.Name,
+		Subject:    aiMsg.Subject,
+		CommitID:   commitID,
 	}, nil
 }
 

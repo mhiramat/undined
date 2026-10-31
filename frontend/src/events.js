@@ -256,10 +256,13 @@ export class NotificationChannel {
             const reviewedMsgId = (reviewedMsg?.message_id || "").replace(/^<|>$/g, "").trim();
 
             const targetMid = (data.active_message_id || "").replace(/^<|>$/g, "").trim();
+            const targetCid = (data.active_commit_id || "").trim();
+            const curCommitId = (activeDetail.message.review_commit_id || activeDetail.message["review-commit-id"] || "").trim();
             const targetDbId = data.active_review_db_id;
 
             const isCurrentAffected =
               (targetMid && (curMsgId === targetMid || reviewedMsgId === targetMid)) ||
+              (targetCid && curCommitId && curCommitId === targetCid) ||
               (targetDbId != null && (curDbId === targetDbId || reviewedDbId === targetDbId));
 
             if (isCurrentAffected) {
