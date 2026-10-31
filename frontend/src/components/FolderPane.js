@@ -374,88 +374,6 @@ export function renderFolderPane(container) {
     }
   }, { passive: true });
 
-  let backgroundReviewTimer = null;
-  let isBackgroundReviewPolling = false;
-
-  function isReviewRunningInBackground() {
-    if (!store.isAiReviewActive()) {
-      return false;
-    }
-    const activeDetail = store.getState().activeMessageDetail;
-    const currentMsg = activeDetail?.message;
-    if (!currentMsg) {
-      return true;
-    }
-    if (store.getAiReviewStatusForTarget(currentMsg.id) || store.getAiReviewStatusForTarget(currentMsg.message_id)) {
-      return false;
-    }
-    const reviewedMsg = activeDetail?.reviewed_message || currentMsg.reviewed_message;
-    if (reviewedMsg && (store.getAiReviewStatusForTarget(reviewedMsg.id) || store.getAiReviewStatusForTarget(reviewedMsg.message_id))) {
-      return false;
-    }
-    return true;
-  }
-
-  function stopBackgroundReviewPolling() {
-    if (backgroundReviewTimer) {
-      clearInterval(backgroundReviewTimer);
-      backgroundReviewTimer = null;
-    }
-  }
-
-  async function pollBackgroundReviewStatus() {
-    if (isBackgroundReviewPolling) return;
-    isBackgroundReviewPolling = true;
-    try {
-      const status = await fetchAiReviewStatus();
-      const hasRemaining = status.is_running || (status.queue_length && status.queue_length > 0);
-      store.setAiReviewState({
-        isRunning: status.is_running,
-        messageId: status.active_message_id,
-        activeReviewDbId: status.active_review_db_id || null,
-        status: status.status,
-        error: status.error || null,
-        output: status.output || null,
-        queue: status.queue || [],
-      });
-
-      if (!hasRemaining) {
-        stopBackgroundReviewPolling();
-        if (status.status === "error") {
-          showToast(`AI review failed: ${status.error || "Unknown error"}`, "error");
-        } else if (status.status === "cancelled") {
-          showToast("AI review was cancelled.", "info");
-        } else {
-          showToast("AI review completed! Report saved to AI-reviews mailbox.", "success");
-        }
-
-        const updatedFolders = await fetchFolders();
-        store.setFolders(updatedFolders);
-        const currentFolderId = store.getState().selectedFolderId;
-        const currentFolder = store.getState().folders.find((f) => f.id === currentFolderId);
-        if (currentFolder && (currentFolder.name === FOLDER_AI_REVIEWS || currentFolder.name === "AI-reviews")) {
-          const msgs = await fetchMessages(currentFolderId);
-          store.setMessages(msgs);
-        }
-      }
-    } catch (err) {
-      console.error("Error polling background AI review status in mailbox pane:", err);
-    } finally {
-      isBackgroundReviewPolling = false;
-    }
-  }
-
-  function syncBackgroundReviewPolling() {
-    if (isReviewRunningInBackground()) {
-      if (!backgroundReviewTimer) {
-        backgroundReviewTimer = setInterval(pollBackgroundReviewStatus, 2000);
-        pollBackgroundReviewStatus();
-      }
-    } else {
-      stopBackgroundReviewPolling();
-    }
-  }
-
   store.subscribe((event) => {
     if (
       event === EVENT_FOLDERS_UPDATED ||
@@ -471,18 +389,9 @@ export function renderFolderPane(container) {
       }
       update();
     }
-
-    if (
-      event === EVENT_AI_REVIEW_STATE_CHANGED ||
-      event === EVENT_MESSAGE_SELECTED ||
-      event === EVENT_MESSAGE_DETAIL_LOADED ||
-      event === EVENT_FOLDER_SELECTED
-    ) {
-      syncBackgroundReviewPolling();
-    }
   });
 
-  // On mount, check if there is an in-flight review to sync background tracking
+  // On mount, check if there is an in-flight review to hydrate initial store state
   fetchAiReviewStatus()
     .then((status) => {
       if (status && (status.is_running || (status.queue_length && status.queue_length > 0))) {
@@ -495,7 +404,6 @@ export function renderFolderPane(container) {
           output: status.output || null,
           queue: status.queue || [],
         });
-        syncBackgroundReviewPolling();
       }
     })
     .catch(() => {});

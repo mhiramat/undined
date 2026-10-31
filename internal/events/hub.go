@@ -66,6 +66,19 @@ func (h *Hub) RingSize() int {
 	return len(h.ring)
 }
 
+// EventsSince returns all buffered events with sequence IDs greater than lastID.
+func (h *Hub) EventsSince(lastID uint64) []Event {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	res := make([]Event, 0)
+	for _, ev := range h.ring {
+		if ev.ID > lastID {
+			res = append(res, ev)
+		}
+	}
+	return res
+}
+
 // Publish increments sequence counter, stores event in the replay buffer, and fans out to clients.
 func (h *Hub) Publish(eventType string, payload any) {
 	newSeq := atomic.AddUint64(&h.seq, 1)

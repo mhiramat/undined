@@ -9,6 +9,7 @@ import (
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/events"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
 )
@@ -216,5 +217,57 @@ fi
 	}
 	if !strings.Contains(status.Output, "STDIN:") {
 		t.Errorf("expected prompt via STDIN, got:\n%s", status.Output)
+	}
+}
+
+func TestReviewRunnerStatusUpdatedSSEEvent(t *testing.T) {
+	runner, db, _, tmpDir := setupTestReviewRunner(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	hub := events.NewHub()
+	runner.SetEvents(hub)
+
+	res, err := runner.TriggerReview("20261017-test-msg@example.com", "abc123456789")
+	if err != nil {
+		t.Fatalf("TriggerReview failed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		st := runner.GetStatus()
+		if !st.IsRunning && st.Status == "completed" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Verify events were published to the hub ring buffer
+	if hub.RingSize() == 0 {
+		t.Fatalf("expected SSE events to be published to Hub, got 0")
+	}
+
+	eventsList := hub.EventsSince(0)
+	var foundStatusUpdated bool
+	var foundCompleted bool
+	for _, ev := range eventsList {
+		if ev.Type == "review.status_updated" {
+			foundStatusUpdated = true
+			if st, ok := ev.Payload.(StatusResponse); ok {
+				if st.Status == "completed" {
+					foundCompleted = true
+				}
+			}
+		}
+	}
+
+	if !foundStatusUpdated {
+		t.Errorf("expected at least one 'review.status_updated' event")
+	}
+	if !foundCompleted {
+		t.Errorf("expected a 'review.status_updated' event with Status=completed")
 	}
 }

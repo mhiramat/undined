@@ -158,11 +158,7 @@ func NewRunner(cfg *config.Config, store *maildir.MaildirStore, db *database.Dat
 	}
 }
 
-// GetStatus returns the current review runner status and queue.
-func (r *Runner) GetStatus() StatusResponse {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
+func (r *Runner) getStatusLocked() StatusResponse {
 	res := StatusResponse{
 		IsRunning:   r.isRunning,
 		Status:      r.status,
@@ -190,6 +186,21 @@ func (r *Runner) GetStatus() StatusResponse {
 	return res
 }
 
+// publishStatus broadcasts status to connected SSE clients.
+func (r *Runner) publishStatus(st StatusResponse) {
+	if r.Events == nil {
+		return
+	}
+	r.Events.Publish("review.status_updated", st)
+}
+
+// GetStatus returns the current review runner status and queue.
+func (r *Runner) GetStatus() StatusResponse {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.getStatusLocked()
+}
+
 func (r *Runner) matchesJob(job *Job, target string) bool {
 	target = strings.TrimSpace(target)
 	cleanTarget := parser.CleanMsgID(target)
@@ -212,7 +223,6 @@ func (r *Runner) matchesJob(job *Job, target string) bool {
 // TriggerReview validates parameters, queues the job, and starts the worker if needed.
 func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	cleanedID := parser.CleanMsgID(msgID)
 	if cleanedID == "" {
@@ -220,16 +230,19 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 	}
 
 	if !safeMsgIDRegex.MatchString(cleanedID) {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("invalid message ID format: contains illegal characters")
 	}
 
 	// 1. Check duplicate running or queued jobs
 	if r.isRunning && r.activeJob != nil && r.matchesJob(r.activeJob, cleanedID) {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("a review is already in progress for message %s", msgID)
 	}
 
 	for _, qj := range r.queue {
 		if r.matchesJob(qj, cleanedID) {
+			r.mu.Unlock()
 			return nil, fmt.Errorf("a review is already queued for message %s", msgID)
 		}
 	}
@@ -252,10 +265,12 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 	}
 
 	if r.DB != nil && origMsg == nil {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("message %s not found in local mailbox", cleanedID)
 	}
 
 	if origMsg != nil && !origMsg.IsPatch {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("message %s is not a patch", cleanedID)
 	}
 
@@ -268,10 +283,12 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 	}
 
 	if resolvedCommit == "" {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("message has no associated review-commit-id. Apply the patch first")
 	}
 
 	if strings.HasPrefix(resolvedCommit, "-") || !safeCommitRegex.MatchString(resolvedCommit) {
+		r.mu.Unlock()
 		return nil, fmt.Errorf("invalid commit ID format: must be a valid commit hash or ref")
 	}
 
@@ -301,6 +318,10 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 		go r.workerLoop()
 	}
 
+	st := r.getStatusLocked()
+	r.mu.Unlock()
+	r.publishStatus(st)
+
 	return &TriggerResult{
 		Success:   true,
 		Status:    statusStr,
@@ -312,7 +333,7 @@ func (r *Runner) TriggerReview(msgID, commitID string) (*TriggerResult, error) {
 // CancelReview cancels an in-progress or queued review.
 func (r *Runner) CancelReview(target string) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	cancelled := false
 
 	cleanTarget := strings.TrimSpace(target)
 
@@ -322,9 +343,8 @@ func (r *Runner) CancelReview(target string) bool {
 			if r.cancelFunc != nil {
 				r.cancelFunc()
 			}
-			return true
-		}
-		if len(r.queue) > 0 {
+			cancelled = true
+		} else if len(r.queue) > 0 {
 			q := r.queue[0]
 			r.queue = r.queue[1:]
 			q.Status = "cancelled"
@@ -332,33 +352,35 @@ func (r *Runner) CancelReview(target string) bool {
 			r.status = "cancelled"
 			r.lastError = "Review was cancelled"
 			r.saveOrUpdateReviewMessage(q, "Review was cancelled", " (cancelled)")
-			return true
+			cancelled = true
 		}
-		return false
-	}
-
-	// Match active job
-	if r.isRunning && r.activeJob != nil && r.matchesJob(r.activeJob, cleanTarget) {
+	} else if r.isRunning && r.activeJob != nil && r.matchesJob(r.activeJob, cleanTarget) {
 		if r.cancelFunc != nil {
 			r.cancelFunc()
 		}
-		return true
-	}
-
-	// Match queued jobs
-	for i, qj := range r.queue {
-		if r.matchesJob(qj, cleanTarget) {
-			r.queue = append(r.queue[:i], r.queue[i+1:]...)
-			qj.Status = "cancelled"
-			qj.Error = "Review was cancelled"
-			r.status = "cancelled"
-			r.lastError = "Review was cancelled"
-			r.saveOrUpdateReviewMessage(qj, "Review was cancelled", " (cancelled)")
-			return true
+		cancelled = true
+	} else {
+		// Match queued jobs
+		for i, qj := range r.queue {
+			if r.matchesJob(qj, cleanTarget) {
+				r.queue = append(r.queue[:i], r.queue[i+1:]...)
+				qj.Status = "cancelled"
+				qj.Error = "Review was cancelled"
+				r.status = "cancelled"
+				r.lastError = "Review was cancelled"
+				r.saveOrUpdateReviewMessage(qj, "Review was cancelled", " (cancelled)")
+				cancelled = true
+				break
+			}
 		}
 	}
 
-	return false
+	st := r.getStatusLocked()
+	r.mu.Unlock()
+	if cancelled {
+		r.publishStatus(st)
+	}
+	return cancelled
 }
 
 func (r *Runner) workerLoop() {
@@ -371,7 +393,9 @@ func (r *Runner) workerLoop() {
 			if r.status == "running" {
 				r.status = "idle"
 			}
+			st := r.getStatusLocked()
 			r.mu.Unlock()
+			r.publishStatus(st)
 			return
 		}
 
@@ -394,7 +418,9 @@ func (r *Runner) workerLoop() {
 
 		job.Status = "in-progress"
 		r.saveOrUpdateReviewMessage(job, "In-progress", "")
+		st := r.getStatusLocked()
 		r.mu.Unlock()
+		r.publishStatus(st)
 
 		r.executeJob(ctx, job)
 	}
@@ -426,7 +452,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 			job.Error = fmt.Sprintf("invalid review command %q: %v", cmdStr, err)
 			r.lastError = job.Error
 			r.saveOrUpdateReviewMessage(job, job.Error, " (failed)")
+			st := r.getStatusLocked()
 			r.mu.Unlock()
+			r.publishStatus(st)
 			return
 		}
 
@@ -464,8 +492,6 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	output := string(outBytes)
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.lastOutput = output
 	job.Output = output
 
@@ -475,6 +501,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 		r.lastError = "Review was cancelled"
 		job.Error = r.lastError
 		r.saveOrUpdateReviewMessage(job, "Review was cancelled", " (cancelled)")
+		st := r.getStatusLocked()
+		r.mu.Unlock()
+		r.publishStatus(st)
 		return
 	}
 
@@ -484,6 +513,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 		r.lastError = fmt.Sprintf("%s: %s", err.Error(), strings.TrimSpace(output))
 		job.Error = r.lastError
 		r.saveOrUpdateReviewMessage(job, r.lastError, " (failed)")
+		st := r.getStatusLocked()
+		r.mu.Unlock()
+		r.publishStatus(st)
 		return
 	}
 
@@ -492,6 +524,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	r.lastError = ""
 	job.Error = ""
 	r.saveOrUpdateReviewMessage(job, output, "")
+	st := r.getStatusLocked()
+	r.mu.Unlock()
+	r.publishStatus(st)
 }
 
 func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string) {

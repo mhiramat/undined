@@ -3,7 +3,7 @@
  * and the patch diff viewer or plain-text body.
  */
 
-import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchAiReviewStatus, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment } from "../api.js";
+import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment } from "../api.js";
 import { store } from "../store.js";
 import { getTags } from "../tags.js";
 import { renderSideDiff } from "./SideDiff.js";
@@ -30,126 +30,8 @@ export function renderViewerPane(container) {
   }
   let showPatchwork = false;
   let currentDetail = null;
-  let reviewPollTimer = null;
-  let pollingTargetId = null;
-
-  function stopReviewPolling() {
-    if (reviewPollTimer) {
-      clearInterval(reviewPollTimer);
-      reviewPollTimer = null;
-    }
-    pollingTargetId = null;
-  }
-
-  function startReviewPolling(targetMsg) {
-    if (!targetMsg) return;
-    const targetDbId = targetMsg.id;
-    const targetMsgId = (targetMsg.message_id || "").replace(/^<|>$/g, "").trim();
-    const key = String(targetDbId || targetMsgId);
-
-    if (reviewPollTimer && pollingTargetId === key) {
-      return;
-    }
-    stopReviewPolling();
-    pollingTargetId = key;
-
-    reviewPollTimer = setInterval(async () => {
-      // Check if message pane has opened another message
-      if (!currentDetail || !currentDetail.message) {
-        stopReviewPolling();
-        return;
-      }
-      const cur = currentDetail.message;
-      const curDbId = cur.id;
-      const curMsgId = (cur.message_id || "").replace(/^<|>$/g, "").trim();
-      const reviewedMsg = currentDetail.reviewed_message || cur.reviewed_message;
-      const reviewedDbId = reviewedMsg?.id;
-      const reviewedMsgId = (reviewedMsg?.message_id || "").replace(/^<|>$/g, "").trim();
-
-      const isSameMessage =
-        curDbId === targetDbId ||
-        (targetMsgId && curMsgId === targetMsgId) ||
-        (targetDbId && reviewedDbId === targetDbId) ||
-        (targetMsgId && reviewedMsgId === targetMsgId);
-
-      if (!isSameMessage) {
-        stopReviewPolling();
-        return;
-      }
-
-      try {
-        const status = await fetchAiReviewStatus();
-        if (!currentDetail || !currentDetail.message) {
-          stopReviewPolling();
-          return;
-        }
-        const nowCur = currentDetail.message;
-        const nowCurDbId = nowCur.id;
-        const nowCurMsgId = (nowCur.message_id || "").replace(/^<|>$/g, "").trim();
-        const nowReviewed = currentDetail.reviewed_message || nowCur.reviewed_message;
-        const nowReviewedDbId = nowReviewed?.id;
-        const nowReviewedMsgId = (nowReviewed?.message_id || "").replace(/^<|>$/g, "").trim();
-
-        const stillSame =
-          nowCurDbId === targetDbId ||
-          (targetMsgId && nowCurMsgId === targetMsgId) ||
-          (targetDbId && nowReviewedDbId === targetDbId) ||
-          (targetMsgId && nowReviewedMsgId === targetMsgId);
-
-        if (!stillSame) {
-          stopReviewPolling();
-          return;
-        }
-
-        const hasRemaining = status.is_running || (status.queue_length && status.queue_length > 0);
-        if (store.setAiReviewState) {
-          store.setAiReviewState({
-            isRunning: status.is_running,
-            messageId: status.active_message_id,
-            activeReviewDbId: status.active_review_db_id || null,
-            status: status.status,
-            error: status.error || null,
-            output: status.output || null,
-            queue: status.queue || [],
-          });
-        }
-
-        const currentTargetStatus = store.getAiReviewStatusForTarget
-          ? (store.getAiReviewStatusForTarget(targetDbId) || store.getAiReviewStatusForTarget(targetMsgId))
-          : null;
-
-        if (!currentTargetStatus || (!status.is_running && (!status.queue_length || status.queue_length === 0))) {
-          stopReviewPolling();
-          if (status.status === "error") {
-            showToast(`AI review failed: ${status.error || "Unknown error"}`, "error");
-          } else if (status.status === "cancelled") {
-            showToast("AI review was cancelled.", "info");
-          } else {
-            showToast("AI review completed! Report saved to AI-reviews mailbox.", "success");
-          }
-
-          const updatedFolders = await fetchFolders();
-          store.setFolders(updatedFolders);
-          if (store.getState().selectedFolderId) {
-            const updatedMsgs = await fetchMessages(store.getState().selectedFolderId);
-            store.setMessages(updatedMsgs);
-          }
-
-          if (currentDetail && currentDetail.message && currentDetail.message.id === targetDbId) {
-            const updated = await fetchMessageDetail(targetDbId, { bypassCache: true });
-            if (currentDetail?.message?.id === targetDbId) {
-              store.setActiveMessageDetail(updated);
-            }
-          }
-        }
-      } catch (e) {
-        console.error("Error polling review status in ViewerPane:", e);
-      }
-    }, 1500);
-  }
 
   async function loadDetail(msg) {
-    stopReviewPolling();
     if (!msg) {
       currentDetail = null;
       const isDraft = isDraftFolder(store.getState().selectedFolderId);
@@ -737,28 +619,18 @@ export function renderViewerPane(container) {
           const isQueued = res.status === "queued";
           showToast(isQueued ? "AI review queued in background..." : "AI review started in background...", "info");
 
-          // Refresh status and store
-          try {
-            const status = await fetchAiReviewStatus();
-            if (store.setAiReviewState) {
-              store.setAiReviewState({
-                isRunning: status.is_running,
-                messageId: status.active_message_id,
-                status: status.status,
-                queue: status.queue || [],
-              });
-            }
-          } catch (_) {}
-
-          // Refresh folders and messages so AI-reviews folder updates immediately
-          const folders = await fetchFolders();
-          store.setFolders(folders);
-          if (store.getState().selectedFolderId) {
-            const msgs = await fetchMessages(store.getState().selectedFolderId);
-            store.setMessages(msgs);
+          // Optimistically set running state in store; SSE review.status_updated keeps it updated
+          if (store.setAiReviewState) {
+            store.setAiReviewState({
+              isRunning: true,
+              messageId: res.message_id || targetId,
+              status: res.status || (isQueued ? "queued" : "running"),
+            });
           }
 
-          startReviewPolling(m);
+          // Refresh folders so AI-reviews folder badge reflects the queued/in-progress message
+          const folders = await fetchFolders();
+          store.setFolders(folders);
         } catch (err) {
           if (store.setAiReviewState) {
             store.setAiReviewState({
@@ -779,25 +651,11 @@ export function renderViewerPane(container) {
     cancelAiReviewBtns.forEach((btn) => {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
-        stopReviewPolling();
         try {
           const reviewedMsg = detail.reviewed_message || m.reviewed_message;
           const targetId = m.message_id || m.id || (reviewedMsg ? (reviewedMsg.message_id || reviewedMsg.id) : null);
           await cancelAiReview(targetId);
           showToast("AI review cancelled", "info");
-
-          try {
-            const status = await fetchAiReviewStatus();
-            if (store.setAiReviewState) {
-              store.setAiReviewState({
-                isRunning: status.is_running,
-                messageId: status.active_message_id,
-                activeReviewDbId: status.active_review_db_id || null,
-                status: status.status,
-                queue: status.queue || [],
-              });
-            }
-          } catch (_) {}
 
           const folders = await fetchFolders();
           store.setFolders(folders);
@@ -1177,17 +1035,6 @@ export function renderViewerPane(container) {
         render(currentDetail);
       });
     });
-
-    const isPendingReview = reviewTargetStatus === "in-progress" || reviewTargetStatus === "running" || reviewTargetStatus === "queued";
-    const bodyTrim = (m.body_plain || "").trim();
-    const isAiReviewPending = isAiReview && (bodyTrim === "Queued" || bodyTrim === "In-progress" ||
-      (reviewedMsg && store.getAiReviewStatusForTarget && (store.getAiReviewStatusForTarget(reviewedMsg.id) || store.getAiReviewStatusForTarget(reviewedMsg.message_id))));
-
-    if (isPendingReview || isAiReviewPending) {
-      startReviewPolling(m);
-    } else {
-      stopReviewPolling();
-    }
   }
 
   async function loadPatchworkStatus(m, container, refresh = false) {

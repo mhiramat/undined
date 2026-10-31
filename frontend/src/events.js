@@ -5,6 +5,17 @@
 
 import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
 
+function showToast(message, type = "info") {
+  if (typeof document === "undefined") return;
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+  toast.innerText = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 4000);
+}
+
 // Debounce utility to coalesce burst notifications (e.g., multiple emails or comments)
 export function debounce(fn, delayMs = 300) {
   let timer = null;
@@ -193,6 +204,80 @@ export class NotificationChannel {
         this.debouncedSyncComments(data?.message_id);
       } catch (_) {
         this.debouncedSyncComments();
+      }
+    });
+
+    this.es.addEventListener("review.status_updated", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (!data) return;
+
+        const prevReview = this.store.getState().activeReview || {};
+        const wasRunning = Boolean(
+          prevReview.isRunning || (prevReview.queue && prevReview.queue.length > 0)
+        );
+        const isNowRunning = Boolean(
+          data.is_running || (data.queue_length && data.queue_length > 0)
+        );
+
+        this.store.setAiReviewState({
+          isRunning: Boolean(data.is_running),
+          messageId: data.active_message_id || null,
+          activeReviewDbId: data.active_review_db_id || null,
+          status: data.status,
+          error: data.error || null,
+          output: data.output || null,
+          queue: data.queue || [],
+        });
+
+        const prevStatus = prevReview.status;
+        const curStatus = data.status;
+
+        if (curStatus === "completed" && prevStatus !== "completed") {
+          showToast("AI review completed! Report saved to AI-reviews mailbox.", "success");
+        } else if (curStatus === "error" && prevStatus !== "error") {
+          showToast(`AI review failed: ${data.error || "Unknown error"}`, "error");
+        } else if (curStatus === "cancelled" && prevStatus !== "cancelled") {
+          showToast("AI review was cancelled.", "info");
+        }
+
+        if (
+          curStatus === "completed" ||
+          curStatus === "error" ||
+          curStatus === "cancelled" ||
+          (wasRunning && !isNowRunning)
+        ) {
+          const activeDetail = this.store.getState().activeMessageDetail;
+          if (activeDetail?.message) {
+            const curDbId = activeDetail.message.id;
+            const curMsgId = (activeDetail.message.message_id || "").replace(/^<|>$/g, "").trim();
+            const reviewedMsg = activeDetail.reviewed_message || activeDetail.message.reviewed_message;
+            const reviewedDbId = reviewedMsg?.id;
+            const reviewedMsgId = (reviewedMsg?.message_id || "").replace(/^<|>$/g, "").trim();
+
+            const targetMid = (data.active_message_id || "").replace(/^<|>$/g, "").trim();
+            const targetDbId = data.active_review_db_id;
+
+            const isCurrentAffected =
+              (targetMid && (curMsgId === targetMid || reviewedMsgId === targetMid)) ||
+              (targetDbId != null && (curDbId === targetDbId || reviewedDbId === targetDbId));
+
+            if (isCurrentAffected) {
+              invalidateMessageDetailCache(curDbId);
+              fetchMessageDetail(curDbId, { bypassCache: true })
+                .then((updated) => {
+                  if (this.store.getState().activeMessageDetail?.message?.id === curDbId) {
+                    this.store.setActiveMessageDetail(updated);
+                  }
+                })
+                .catch(() => {});
+            }
+          }
+
+          this.debouncedSyncFolders("AI-reviews");
+        }
+      } catch (err) {
+        console.warn("[UndineD SSE] Error handling review.status_updated event:", err);
       }
     });
 

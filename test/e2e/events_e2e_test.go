@@ -260,4 +260,45 @@ func TestE2E_ServerSentEvents(t *testing.T) {
 			}
 		}
 	}
+
+	// 7. Test review.status_updated over SSE when AI review is triggered and completes
+	env.Config.Review.Command = "echo 'E2E review output'"
+	_ = env.DB.SetMessageReviewCommit(msg.MessageID, "c0ffee123456")
+
+	triggerPayload := fmt.Sprintf(`{"message_id": %q, "commit_id": "c0ffee123456"}`, msg.MessageID)
+	trigResp, err := env.Request("POST", "/api/review/trigger", triggerPayload)
+	if err != nil {
+		t.Fatalf("trigger review failed: %v", err)
+	}
+	trigResp.Body.Close()
+
+	receivedReviewStatus := false
+	receivedReviewCompleted := false
+	reviewTimeout := time.After(4 * time.Second)
+	for !receivedReviewCompleted {
+		select {
+		case <-reviewTimeout:
+			t.Fatal("timed out waiting for review.status_updated completed event")
+		default:
+			l, err := replayReader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("error reading review event line: %v", err)
+			}
+			l = strings.TrimSpace(l)
+			if l == "event: review.status_updated" {
+				receivedReviewStatus = true
+				dataLine, err := replayReader.ReadString('\n')
+				if err == nil && strings.Contains(dataLine, `"status":"completed"`) {
+					receivedReviewCompleted = true
+				}
+			}
+		}
+	}
+
+	if !receivedReviewStatus {
+		t.Errorf("expected review.status_updated event over SSE")
+	}
+	if !receivedReviewCompleted {
+		t.Errorf("expected review.status_updated completed event over SSE")
+	}
 }
