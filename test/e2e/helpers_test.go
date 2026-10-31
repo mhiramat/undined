@@ -107,6 +107,7 @@ type E2EEnv struct {
 
 // setupE2EEnv initializes all mock upstream servers and boots UndineD in an isolated environment.
 func setupE2EEnv(t *testing.T) *E2EEnv {
+	t.Helper()
 	workspaceDir := t.TempDir()
 
 	// 1. Start mock servers

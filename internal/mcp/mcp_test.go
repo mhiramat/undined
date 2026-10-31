@@ -36,6 +36,7 @@ diff --git a/kernel/trace/ftrace.c b/kernel/trace/ftrace.c
 `)
 
 func setupTestMCPEnv(t *testing.T) (*Server, *database.Database, *maildir.MaildirStore, *config.Config, int64, *bytes.Buffer) {
+	t.Helper()
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "test.db")
 	maildirPath := filepath.Join(tmpDir, "maildir")
@@ -574,7 +575,7 @@ func TestMCPSTDIOJSONRPC(t *testing.T) {
 	// 6. invalid method
 	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 5, "method": "unknown_method"}` + "\n")
 
-	err := server.HandleSTDIO(&inBuf, &outBuf)
+	err := server.HandleSTDIO(context.Background(), &inBuf, &outBuf)
 	if err != nil {
 		t.Fatalf("HandleSTDIO error: %v", err)
 	}

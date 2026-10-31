@@ -15,6 +15,7 @@ import (
 )
 
 func getFreePort(t *testing.T) int {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to obtain free port: %v", err)
@@ -25,6 +26,7 @@ func getFreePort(t *testing.T) int {
 }
 
 func findRepoRoot(t *testing.T) string {
+	t.Helper()
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		t.Fatalf("failed to find git repository root: %v", err)

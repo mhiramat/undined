@@ -155,7 +155,8 @@ func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 	}
 	count, _ := res.RowsAffected()
 
-	// Update has_notes flag if no comments remain
+	// Update has_notes flag if no comments remain.
+	// Discard scan error: if query fails, remaining defaults to 0 and has_notes is safely cleared.
 	var remaining int
 	_ = d.DB.QueryRow("SELECT COUNT(*) FROM patch_comments WHERE message_id = ?;", cleanMsgID).Scan(&remaining)
 	hasNotes := 0
@@ -169,6 +170,8 @@ func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 
 // DeleteComment deletes a single comment by ID.
 func (d *Database) DeleteComment(commentID int64) error {
+	// Look up message_id before deletion so we can recalculate remaining comments.
+	// Discard scan error: if comment does not exist, msgID remains empty.
 	var msgID string
 	_ = d.DB.QueryRow("SELECT message_id FROM patch_comments WHERE id = ?;", commentID).Scan(&msgID)
 
@@ -178,6 +181,7 @@ func (d *Database) DeleteComment(commentID int64) error {
 	}
 
 	if msgID != "" {
+		// Discard scan error: if query fails, count defaults to 0 and has_notes is safely cleared.
 		var count int
 		_ = d.DB.QueryRow("SELECT COUNT(*) FROM patch_comments WHERE message_id = ?;", msgID).Scan(&count)
 		hasNotes := 0

@@ -181,52 +181,52 @@ func TestHasBodyAfterDiff(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:     "empty",
+			name:     "Empty",
 			lines:    []string{},
 			expected: false,
 		},
 		{
-			name:     "standard git signature",
+			name:     "StandardGitSignature",
 			lines:    []string{"-- ", "2.43.0"},
 			expected: false,
 		},
 		{
-			name:     "signature only",
+			name:     "SignatureOnly",
 			lines:    []string{"--", "Kernel Developer <dev@example.com>"},
 			expected: false,
 		},
 		{
-			name:     "quoted line",
+			name:     "QuotedLine",
 			lines:    []string{"> What do you think?"},
 			expected: true,
 		},
 		{
-			name:     "substantive text",
+			name:     "SubstantiveText",
 			lines:    []string{"Let's verify this in the test suite."},
 			expected: true,
 		},
 		{
-			name:     "whitespace and dashes only",
+			name:     "WhitespaceAndDashesOnly",
 			lines:    []string{"", "  ", "-- ", "2.43.0"},
 			expected: false,
 		},
 		{
-			name:     "git version without separator",
+			name:     "GitVersionWithoutSeparator",
 			lines:    []string{"2.43.0"},
 			expected: false,
 		},
 		{
-			name:     "git version with prefix without separator",
+			name:     "GitVersionWithPrefixWithoutSeparator",
 			lines:    []string{"git version 2.43.0"},
 			expected: false,
 		},
 		{
-			name:     "three dashes signature",
+			name:     "ThreeDashesSignature",
 			lines:    []string{"---", "Kernel Developer <dev@example.com>"},
 			expected: false,
 		},
 		{
-			name:     "three dashes with space signature",
+			name:     "ThreeDashesWithSpaceSignature",
 			lines:    []string{"--- ", "Kernel Developer"},
 			expected: false,
 		},
@@ -236,7 +236,7 @@ func TestHasBodyAfterDiff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := HasBodyAfterDiff(tc.lines)
 			if got != tc.expected {
-				t.Errorf("expected %v, got %v for lines: %v", tc.expected, got, tc.lines)
+				t.Errorf("HasBodyAfterDiff(%v) = %v, want %v", tc.lines, got, tc.expected)
 			}
 		})
 	}

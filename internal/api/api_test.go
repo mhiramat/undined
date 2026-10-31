@@ -28,6 +28,7 @@ import (
 )
 
 func setupTestAPIServer(t *testing.T) (*Server, *database.Database, string, string) {
+	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "undined-api-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -887,6 +888,7 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 }
 
 func startAPIMockIMAPServer(t *testing.T) (net.Listener, int, *[]string) {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start mock IMAP server: %v", err)

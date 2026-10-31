@@ -428,8 +428,10 @@ func main() {
 	// Mode A: MCP STDIO Server Mode
 	if mcpStdio {
 		// In STDIO mode, stdout is strictly reserved for JSON-RPC messages.
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
 		mcpServer := mcp.NewServer(cfg, store, db, b4Runner, pwClient)
-		if err := mcpServer.HandleSTDIO(os.Stdin, os.Stdout); err != nil && err != io.EOF {
+		if err := mcpServer.HandleSTDIO(ctx, os.Stdin, os.Stdout); err != nil && err != io.EOF && err != context.Canceled {
 			fmt.Fprintf(os.Stderr, "MCP STDIO error: %v\n", err)
 			os.Exit(1)
 		}
@@ -451,9 +453,9 @@ func main() {
 	}
 
 	if renewToken {
-		log.Printf("UndineD security token renewed. Token SHA-256 fingerprint: %s", sec.GetTokenFingerprint())
+		log.Printf("UndineD security token renewed. Token SHA-256 fingerprint: %s", sec.TokenFingerprint())
 	} else {
-		log.Printf("UndineD security initialized. Token SHA-256 fingerprint: %s", sec.GetTokenFingerprint())
+		log.Printf("UndineD security initialized. Token SHA-256 fingerprint: %s", sec.TokenFingerprint())
 	}
 
 	if noServer {

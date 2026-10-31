@@ -146,10 +146,15 @@ func (sm *SecurityManager) IsTokenValid(provided string) bool {
 	return subtle.ConstantTimeCompare([]byte(provided), []byte(sm.Token)) == 1
 }
 
-// GetTokenFingerprint returns the hex-encoded SHA-256 hash of the auth token.
-func (sm *SecurityManager) GetTokenFingerprint() string {
+// TokenFingerprint returns the hex-encoded SHA-256 hash of the auth token.
+func (sm *SecurityManager) TokenFingerprint() string {
 	h := sha256.Sum256([]byte(sm.Token))
 	return hex.EncodeToString(h[:])
+}
+
+// GetTokenFingerprint is an alias for TokenFingerprint retained for backward compatibility.
+func (sm *SecurityManager) GetTokenFingerprint() string {
+	return sm.TokenFingerprint()
 }
 
 // ValidateHost ensures the incoming Host header matches allowed interfaces (DNS rebinding defense).

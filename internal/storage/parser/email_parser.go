@@ -76,7 +76,7 @@ func DetectPatch(text string) bool {
 	if !strings.Contains(text, "diff --git ") && !strings.Contains(text, "--- a/") {
 		return false
 	}
-	parsed := patch.ParsePatch(text)
+	parsed := patch.Parse(text)
 	if parsed.BodyContinuesAfter {
 		return false
 	}

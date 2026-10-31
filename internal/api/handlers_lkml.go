@@ -217,7 +217,7 @@ func (s *Server) handlePreviewQuote(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	parsed := patch.ParsePatch(msg.BodyPlain)
+	parsed := patch.Parse(msg.BodyPlain)
 	sig := s.Config.SMTP.EffectiveSignature()
 	quoteText := quote.MergePatchReviewQuote(
 		msg.Date, msg.FromName, msg.FromAddr, msg.BodyPlain,

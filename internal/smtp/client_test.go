@@ -97,6 +97,7 @@ func TestBuildMessageHeaderInjectionSanitization(t *testing.T) {
 }
 
 func startMockSMTPServer(t *testing.T) (net.Listener, int) {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start mock SMTP server: %v", err)
@@ -212,6 +213,7 @@ func TestSendRawMessageWithMockSMTP(t *testing.T) {
 }
 
 func startRecordingMockSMTPServer(t *testing.T, advertiseSMTPUTF8 bool) (net.Listener, int, func() []string) {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start mock SMTP server: %v", err)
@@ -478,28 +480,28 @@ func TestBuildMessageReceiverDisplayNameQuoting(t *testing.T) {
 			expectedCc: `Cc: "developer (test)" <dev@kernel.org>`,
 		},
 		{
-			name:       "mixed multiple receivers with commas and parentheses",
+			name:       "MixedMultipleReceivers",
 			to:         "kernel, developer <dev@kernel.org>, Normal Developer <norm@example.com>",
 			cc:         "developer (test) <test@example.com>, plain@example.com",
 			expectedTo: `To: "kernel, developer" <dev@kernel.org>, Normal Developer <norm@example.com>`,
 			expectedCc: `Cc: "developer (test)" <test@example.com>, plain@example.com`,
 		},
 		{
-			name:       "already quoted comma display name is not double-quoted",
+			name:       "AlreadyQuotedCommaDisplayName",
 			to:         `"kernel, developer" <dev@kernel.org>`,
 			cc:         `"developer (test)" <test@example.com>`,
 			expectedTo: `To: "kernel, developer" <dev@kernel.org>`,
 			expectedCc: `Cc: "developer (test)" <test@example.com>`,
 		},
 		{
-			name:       "plain display name without specials is preserved",
+			name:       "PlainDisplayNamePreserved",
 			to:         "Kernel Developer <dev@kernel.org>",
 			cc:         "Reviewer <reviewer@kernel.org>",
 			expectedTo: "To: Kernel Developer <dev@kernel.org>",
 			expectedCc: "Cc: Reviewer <reviewer@kernel.org>",
 		},
 		{
-			name:       "display name with both parentheses and commas",
+			name:       "DisplayNameParenthesesAndCommas",
 			to:         "Developer, Kernel (Google) <dev@kernel.org>",
 			cc:         "",
 			expectedTo: `To: "Developer, Kernel (Google)" <dev@kernel.org>`,

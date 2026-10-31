@@ -8,6 +8,7 @@ import (
 )
 
 func setupTestDBForAddresses(t *testing.T) (*Database, func()) {
+	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "undined-addr-test-*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)

@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"undined-go/internal/constants"
@@ -92,7 +93,9 @@ func initDB(db *sql.DB) error {
 	var addrCount int
 	_ = db.QueryRow("SELECT COUNT(*) FROM known_addresses;").Scan(&addrCount)
 	if addrCount == 0 {
-		seedKnownAddresses(db)
+		if err := seedKnownAddresses(db); err != nil {
+			log.Printf("[database] migration failed to seed known addresses: %v", err)
+		}
 	}
 
 	// 7. Migrate legacy comments erroneously saved as 'submitted' to 'draft'
@@ -101,16 +104,16 @@ func initDB(db *sql.DB) error {
 	return nil
 }
 
-func seedKnownAddresses(db *sql.DB) {
+func seedKnownAddresses(db *sql.DB) error {
 	rows, err := db.Query("SELECT to_addr, cc_addr FROM messages WHERE (to_addr IS NOT NULL AND to_addr != '') OR (cc_addr IS NOT NULL AND cc_addr != '');")
 	if err != nil {
-		return
+		return err
 	}
 	defer rows.Close()
 
 	tx, err := db.Begin()
 	if err != nil {
-		return
+		return err
 	}
 	defer tx.Rollback()
 
@@ -123,7 +126,7 @@ func seedKnownAddresses(db *sql.DB) {
 		name = CASE WHEN excluded.name != '' THEN excluded.name ELSE known_addresses.name END;
 	`)
 	if err != nil {
-		return
+		return err
 	}
 	defer stmt.Close()
 
@@ -138,7 +141,7 @@ func seedKnownAddresses(db *sql.DB) {
 		}
 	}
 
-	_ = tx.Commit()
+	return tx.Commit()
 }
 
 func getTableColumns(db *sql.DB, tableName string) (map[string]struct{}, error) {

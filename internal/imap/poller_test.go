@@ -148,6 +148,7 @@ func TestPollerInsertHeaderSummaryAndHydration(t *testing.T) {
 }
 
 func startMockIMAPServer(t *testing.T) (net.Listener, int, *[]string) {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start mock IMAP server: %v", err)
@@ -289,6 +290,7 @@ type mockSyncIMAPServer struct {
 }
 
 func startMockSyncIMAPServer(t *testing.T, uids []uint32) *mockSyncIMAPServer {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Failed to start mock IMAP server: %v", err)

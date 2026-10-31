@@ -15,6 +15,7 @@ import (
 )
 
 func setupTestReviewRunner(t *testing.T) (*Runner, *database.Database, *maildir.MaildirStore, string) {
+	t.Helper()
 	tmpDir, err := os.MkdirTemp("", "undined-review-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)

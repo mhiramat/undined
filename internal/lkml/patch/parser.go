@@ -265,8 +265,8 @@ func AlignHunkLines(rawLines []string, oldStart, newStart int) ([]PairedRow, []U
 	return paired, unified
 }
 
-// ParsePatch parses email text into preamble, structured diff files/hunks, and postscript.
-func ParsePatch(text string) *ParsedEmailDiff {
+// Parse parses email text into preamble, structured diff files/hunks, and postscript.
+func Parse(text string) *ParsedEmailDiff {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
@@ -490,4 +490,9 @@ func ParsePatch(text string) *ParsedEmailDiff {
 		Postscript:         strings.TrimSpace(strings.Join(postscriptLines, "\n")),
 		BodyContinuesAfter: bodyContinuesAfter,
 	}
+}
+
+// ParsePatch is an alias for Parse retained for backward compatibility.
+func ParsePatch(text string) *ParsedEmailDiff {
+	return Parse(text)
 }

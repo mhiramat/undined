@@ -86,7 +86,7 @@ func (l *Launcher) PrepareDraftContent(req OpenEditorRequest) (string, error) {
 	if req.CustomBody != nil {
 		quoteBody = *req.CustomBody
 	} else if msg != nil {
-		parsed := patch.ParsePatch(msg.BodyPlain)
+		parsed := patch.Parse(msg.BodyPlain)
 		var notes []quote.InlineNote
 		if len(req.Notes) > 0 {
 			notes = req.Notes

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -578,7 +579,7 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 	// 6. tools/call: get_email
 	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "get_email", "arguments": {"message_id": "<patch-e2e-1@kernel.org>"}}}` + "\n")
 
-	if err := mcpServer.HandleSTDIO(&inBuf, &outBuf); err != nil {
+	if err := mcpServer.HandleSTDIO(context.Background(), &inBuf, &outBuf); err != nil {
 		t.Fatalf("HandleSTDIO failed: %v", err)
 	}
 

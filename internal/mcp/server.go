@@ -1019,7 +1019,7 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 			}
 		}
 		if len(notes) > 0 {
-			parsed := patch.ParsePatch(orig.BodyPlain)
+			parsed := patch.Parse(orig.BodyPlain)
 			sig := ""
 			if s.Config != nil {
 				sig = s.Config.SMTP.GetSignature()
@@ -1282,7 +1282,7 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 		return map[string]interface{}{"success": false, "error": fmt.Sprintf("Message not found: %s", effectiveMsgID)}, nil
 	}
 
-	parsed := patch.ParsePatch(orig.BodyPlain)
+	parsed := patch.Parse(orig.BodyPlain)
 	canonicalFile := filePart
 	lineMapped := false
 	chosenSide := strings.ToLower(strings.TrimSpace(side))
@@ -1390,7 +1390,7 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 }
 
 // HandleSTDIO reads newline-delimited JSON-RPC requests from r and writes responses to w.
-func (s *Server) HandleSTDIO(r io.Reader, w io.Writer) error {
+func (s *Server) HandleSTDIO(ctx context.Context, r io.Reader, w io.Writer) error {
 	scanner := bufio.NewScanner(r)
 	// Support up to 16MB per JSON message line
 	const maxScanTokenSize = 16 * 1024 * 1024
@@ -1398,6 +1398,9 @@ func (s *Server) HandleSTDIO(r io.Reader, w io.Writer) error {
 	scanner.Buffer(buf, maxScanTokenSize)
 
 	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
@@ -1475,7 +1478,7 @@ func (s *Server) HandleSTDIO(r io.Reader, w io.Writer) error {
 				continue
 			}
 
-			result, err := s.CallTool(context.Background(), p.Name, p.Arguments)
+			result, err := s.CallTool(ctx, p.Name, p.Arguments)
 			if err != nil {
 				// Tool not found or execution failure
 				resp := jsonRPCResponse{

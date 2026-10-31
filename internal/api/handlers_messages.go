@@ -167,7 +167,7 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	// Parse diff if message is a patch or contains inline diff and not an AI review
 	var parsedDiff *patch.ParsedEmailDiff
 	if !isAIReview && msg.BodyPlain != "" && (msg.IsPatch || strings.Contains(msg.BodyPlain, "diff --git") || strings.Contains(msg.BodyPlain, "--- a/")) {
-		parsedDiff = patch.ParsePatch(msg.BodyPlain)
+		parsedDiff = patch.Parse(msg.BodyPlain)
 		if parsedDiff != nil && !parsedDiff.IsPatch && msg.IsPatch {
 			msg.IsPatch = false
 			_ = s.DB.SetMessageIsPatch(msg.ID, false)

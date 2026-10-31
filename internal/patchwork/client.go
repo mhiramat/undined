@@ -52,8 +52,8 @@ func NewClient(cfg *config.Config, db *database.Database, store *maildir.Maildir
 	}
 }
 
-// GetBaseURL constructs the base API URL (e.g. https://patchwork.kernel.org/api/1.4).
-func (c *Client) GetBaseURL() string {
+// BaseURL constructs the base API URL (e.g. https://patchwork.kernel.org/api/1.4).
+func (c *Client) BaseURL() string {
 	rawURL := strings.TrimRight(c.Config.Patchwork.URL, "/")
 	if rawURL == "" {
 		rawURL = constants.DefaultPatchworkURL
@@ -63,6 +63,11 @@ func (c *Client) GetBaseURL() string {
 		ver = constants.DefaultPatchworkAPIVersion
 	}
 	return fmt.Sprintf("%s/api/%s", rawURL, ver)
+}
+
+// GetBaseURL is an alias for BaseURL retained for backward compatibility.
+func (c *Client) GetBaseURL() string {
+	return c.BaseURL()
 }
 
 func (c *Client) isSameOriginAsBase(targetURL string) bool {
@@ -85,7 +90,7 @@ func (c *Client) isSameOriginAsBase(targetURL string) bool {
 func (c *Client) newRequest(method, endpoint string, body io.Reader) (*http.Request, error) {
 	reqURL := endpoint
 	if !strings.HasPrefix(endpoint, "http://") && !strings.HasPrefix(endpoint, "https://") {
-		reqURL = fmt.Sprintf("%s/%s", c.GetBaseURL(), strings.TrimLeft(endpoint, "/"))
+		reqURL = fmt.Sprintf("%s/%s", c.BaseURL(), strings.TrimLeft(endpoint, "/"))
 	} else if !c.isSameOriginAsBase(reqURL) {
 		return nil, fmt.Errorf("refusing to send Patchwork request to untrusted origin: %s", reqURL)
 	}
