@@ -13,7 +13,17 @@ import (
 var (
 	hunkHeaderRegex = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: ?(.*))?$`)
 	diffGitRegex    = regexp.MustCompile(`^diff --git (?:a/)?(\S+) (?:b/)?(\S+)`)
+	gitVersionRegex = regexp.MustCompile(`^(?:git version\s+)?v?\d+\.\d+(?:\.\d+)*(?:[\.-][a-zA-Z0-9]+)*$`)
 )
+
+func isSignatureSeparator(line string) bool {
+	trimmed := strings.TrimRight(line, " \t\r")
+	return trimmed == "--" || trimmed == "---"
+}
+
+func isGitVersionLine(line string) bool {
+	return gitVersionRegex.MatchString(strings.TrimSpace(line))
+}
 
 // DiffCell represents a single cell in a side-by-side diff table.
 type DiffCell struct {
@@ -90,8 +100,13 @@ func HasBodyAfterDiff(lines []string) bool {
 	}
 
 	trimmedFirst := strings.TrimSpace(firstNonEmpty)
-	// Standard email / git signature separators: "-- " or "--" or "-- <name>"
-	if firstNonEmpty == "-- " || trimmedFirst == "--" || (strings.HasPrefix(trimmedFirst, "--") && len(trimmedFirst) <= 30) {
+	// Standard email / git signature separators: "-- ", "--", "---", "-- <name>"
+	if isSignatureSeparator(firstNonEmpty) || isSignatureSeparator(trimmedFirst) || (strings.HasPrefix(trimmedFirst, "--") && len(trimmedFirst) <= 30) {
+		return false
+	}
+
+	// Git version number signatures (e.g. "2.43.0", "git version 2.43.0")
+	if isGitVersionLine(trimmedFirst) {
 		return false
 	}
 
@@ -252,6 +267,8 @@ func AlignHunkLines(rawLines []string, oldStart, newStart int) ([]PairedRow, []U
 
 // ParsePatch parses email text into preamble, structured diff files/hunks, and postscript.
 func ParsePatch(text string) *ParsedEmailDiff {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
 	lines := strings.Split(text, "\n")
 	var preambleLines []string
 	files := make([]*DiffFile, 0)
@@ -338,7 +355,7 @@ func ParsePatch(text string) *ParsedEmailDiff {
 				continue
 			}
 		} else if state == "DIFF" {
-			if line == "-- " || line == "--" {
+			if isSignatureSeparator(line) || isGitVersionLine(line) {
 				state = "POSTSCRIPT"
 				commitFile()
 				postscriptLines = append(postscriptLines, line)
@@ -403,7 +420,7 @@ func ParsePatch(text string) *ParsedEmailDiff {
 
 			if currentHunk != nil {
 				r, _ := utf8.DecodeRuneInString(line)
-				if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ' || line[0] == '\\' || unicode.IsSpace(r) || (isCorrupted && line != "-- " && line != "--" && !strings.HasPrefix(line, ">"))) {
+				if len(line) > 0 && (line[0] == '+' || line[0] == '-' || line[0] == ' ' || line[0] == '\\' || unicode.IsSpace(r) || (isCorrupted && !isSignatureSeparator(line) && !isGitVersionLine(line) && !strings.HasPrefix(line, ">"))) {
 					hunkRawLines = append(hunkRawLines, line)
 					idx++
 					continue

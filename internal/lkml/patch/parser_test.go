@@ -210,6 +210,26 @@ func TestHasBodyAfterDiff(t *testing.T) {
 			lines:    []string{"", "  ", "-- ", "2.43.0"},
 			expected: false,
 		},
+		{
+			name:     "git version without separator",
+			lines:    []string{"2.43.0"},
+			expected: false,
+		},
+		{
+			name:     "git version with prefix without separator",
+			lines:    []string{"git version 2.43.0"},
+			expected: false,
+		},
+		{
+			name:     "three dashes signature",
+			lines:    []string{"---", "Kernel Developer <dev@example.com>"},
+			expected: false,
+		},
+		{
+			name:     "three dashes with space signature",
+			lines:    []string{"--- ", "Kernel Developer"},
+			expected: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -277,5 +297,87 @@ diff --git a/test.c b/test.c
 	}
 	if strings.Contains(jsonStr, `"unified_lines":null`) {
 		t.Errorf("expected unified_lines:[], got null in: %s", jsonStr)
+	}
+}
+
+func TestParsePatch_GitAppendedSignature(t *testing.T) {
+	patchWithCRLF := "Subject: [PATCH] tracing: Fix probe handling\r\n\r\n" +
+		"Commit message preamble.\r\n\r\n" +
+		"Signed-off-by: Kernel Developer <dev@example.com>\r\n---\r\n" +
+		"diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c\r\n" +
+		"--- a/kernel/trace/trace_kprobe.c\r\n" +
+		"+++ b/kernel/trace/trace_kprobe.c\r\n" +
+		"@@ -50,6 +50,7 @@ static int kprobe_init(void)\r\n" +
+		"  \tint ret;\r\n" +
+		" \r\n" +
+		"+\tpr_info(\"probe init\\n\");\r\n" +
+		" \treturn 0;\r\n" +
+		" }\r\n" +
+		"-- \r\n" +
+		"2.43.0\r\n"
+
+	parsed := ParsePatch(patchWithCRLF)
+	if !parsed.IsPatch {
+		t.Fatalf("expected IsPatch=true for patch email sent with git and CRLF line endings")
+	}
+	if parsed.BodyContinuesAfter {
+		t.Fatalf("expected BodyContinuesAfter=false for git version signature")
+	}
+	if len(parsed.Files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(parsed.Files))
+	}
+	if len(parsed.Files[0].Hunks) != 1 {
+		t.Fatalf("expected 1 hunk, got %d", len(parsed.Files[0].Hunks))
+	}
+	// Verify that the signature was not sucked into the hunk as a deletion line
+	for _, row := range parsed.Files[0].Hunks[0].PairedRows {
+		if strings.Contains(row.Left.Content, "--") || strings.Contains(row.Right.Content, "--") {
+			t.Errorf("diff hunk should not contain signature separator: left=%q right=%q", row.Left.Content, row.Right.Content)
+		}
+	}
+	if !strings.Contains(parsed.Postscript, "2.43.0") {
+		t.Errorf("expected Postscript to contain git version, got %q", parsed.Postscript)
+	}
+
+	// Test with author signature below patch
+	patchWithAuthorSig := `Subject: [PATCH] mm: optimize slab
+Signed-off-by: Kernel Developer <dev@example.com>
+---
+diff --git a/mm/slab.c b/mm/slab.c
+--- a/mm/slab.c
++++ b/mm/slab.c
+@@ -10,3 +10,4 @@
+ int init_slab(void) {
++    return 1;
+ }
+-- 
+Kernel Developer <dev@example.com>
+`
+	parsedAuthor := ParsePatch(patchWithAuthorSig)
+	if !parsedAuthor.IsPatch {
+		t.Fatalf("expected IsPatch=true with author signature below patch")
+	}
+	if parsedAuthor.BodyContinuesAfter {
+		t.Fatalf("expected BodyContinuesAfter=false with author signature below patch")
+	}
+
+	// Test with bare git version line below patch (no separator)
+	patchWithBareVersion := `Subject: [PATCH] net: filter fix
+---
+diff --git a/net/core/filter.c b/net/core/filter.c
+--- a/net/core/filter.c
++++ b/net/core/filter.c
+@@ -10,3 +10,4 @@
+ int filter(void) {
++    return 0;
+ }
+2.43.0
+`
+	parsedBare := ParsePatch(patchWithBareVersion)
+	if !parsedBare.IsPatch {
+		t.Fatalf("expected IsPatch=true with bare git version below patch")
+	}
+	if parsedBare.BodyContinuesAfter {
+		t.Fatalf("expected BodyContinuesAfter=false with bare git version below patch")
 	}
 }

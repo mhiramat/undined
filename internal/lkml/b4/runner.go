@@ -4,6 +4,7 @@ package b4
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -296,18 +297,58 @@ func (b *B4Runner) ApplyPatch(
 	b4Exec.Stdout = &b4Out
 	b4Exec.Stderr = &b4Err
 
+	var amStdin io.Reader = &b4Out
+
 	if err := b4Exec.Run(); err != nil {
-		return &ApplyResult{
-			Success:        false,
-			ExitCode:       1,
-			Stdout:         b4Out.String(),
-			Stderr:         b4Err.String(),
-			TargetGitRepo:  repoPath,
-			Branch:         branchName,
-			BaseCommit:     baseCommit,
-			OriginalBranch: originalBranch,
-			HeadBefore:     headBefore,
-		}, nil
+		// If b4 failed (e.g. message not on public lore.kernel.org), check if the message exists locally
+		appliedLocally := false
+		if b.DB != nil {
+			if origMsg, dbErr := b.DB.GetMessageByMsgID(cleanedID); dbErr == nil && origMsg != nil {
+				var localData []byte
+				if origMsg.FilePath != "" {
+					localData, _ = os.ReadFile(origMsg.FilePath)
+				}
+				if len(localData) == 0 && origMsg.BodyPlain != "" {
+					var buf bytes.Buffer
+					fromName := origMsg.FromName
+					if fromName == "" {
+						fromName = "Kernel Developer"
+					}
+					fromAddr := origMsg.FromAddr
+					if fromAddr == "" {
+						fromAddr = "dev@example.com"
+					}
+					buf.WriteString(fmt.Sprintf("From %s Mon Jan 01 00:00:00 2026\n", fromAddr))
+					buf.WriteString(fmt.Sprintf("From: %s <%s>\n", fromName, fromAddr))
+					buf.WriteString(fmt.Sprintf("Subject: %s\n", origMsg.Subject))
+					buf.WriteString(fmt.Sprintf("Message-ID: <%s>\n", origMsg.MessageID))
+					if origMsg.Date != "" {
+						buf.WriteString(fmt.Sprintf("Date: %s\n", origMsg.Date))
+					}
+					buf.WriteString("\n")
+					buf.WriteString(origMsg.BodyPlain)
+					buf.WriteString("\n")
+					localData = buf.Bytes()
+				}
+				if len(localData) > 0 {
+					amStdin = bytes.NewReader(localData)
+					appliedLocally = true
+				}
+			}
+		}
+		if !appliedLocally {
+			return &ApplyResult{
+				Success:        false,
+				ExitCode:       1,
+				Stdout:         b4Out.String(),
+				Stderr:         b4Err.String(),
+				TargetGitRepo:  repoPath,
+				Branch:         branchName,
+				BaseCommit:     baseCommit,
+				OriginalBranch: originalBranch,
+				HeadBefore:     headBefore,
+			}, nil
+		}
 	}
 
 	// Capture HEAD before git am if not captured yet
@@ -319,7 +360,7 @@ func (b *B4Runner) ApplyPatch(
 
 	// 3. Pipe into git am
 	gitAm := exec.Command("git", "-C", repoPath, "am")
-	gitAm.Stdin = &b4Out
+	gitAm.Stdin = amStdin
 	var gitOut, gitErr bytes.Buffer
 	gitAm.Stdout = &gitOut
 	gitAm.Stderr = &gitErr

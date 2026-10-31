@@ -259,3 +259,104 @@ func TestRecordSeriesCommits_SubjectAndIndexMatching(t *testing.T) {
 		t.Errorf("expected review commit for patch-b to be %s, got %s", hash2, c2)
 	}
 }
+
+func TestApplyPatch_LocalFallbackWithGitSignature(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	patchBody := "From: Kernel Developer <dev@example.com>\n" +
+		"Subject: [PATCH] kernel: add custom trace feature\n" +
+		"Date: Sat, 24 Oct 2026 12:00:00 +0000\n" +
+		"Message-ID: <patch-sig-test@example.com>\n\n" +
+		"This adds custom trace feature.\n\n" +
+		"Signed-off-by: Kernel Developer <dev@example.com>\n" +
+		"---\n" +
+		" test_file.c | 1 +\n" +
+		" 1 file changed, 1 insertion(+)\n\n" +
+		"diff --git a/test_file.c b/test_file.c\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ b/test_file.c\n" +
+		"@@ -0,0 +1,1 @@\n" +
+		"+/* custom trace feature */\n" +
+		"-- \n" +
+		"2.43.0\n"
+
+	msgHeader := []byte("Message-ID: <patch-sig-test@example.com>\n" +
+		"Subject: [PATCH] kernel: add custom trace feature\n" +
+		"From: Kernel Developer <dev@example.com>\n" +
+		"Date: Sat, 24 Oct 2026 12:00:00 +0000\n\n")
+
+	msgID, err := db.InsertHeaderSummary(folder.ID, 1, msgHeader, false, "")
+	if err != nil {
+		t.Fatalf("failed to insert header: %v", err)
+	}
+	if err := db.HydrateMessageBody(msgID, "", patchBody, true); err != nil {
+		t.Fatalf("failed to hydrate body: %v", err)
+	}
+
+	gitDir := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("failed to create git dir: %v", err)
+	}
+
+	runGit := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", gitDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v, out: %s", args, err, string(out))
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	runGit("init")
+	runGit("config", "user.name", "Kernel Developer")
+	runGit("config", "user.email", "dev@example.com")
+	runGit("commit", "--allow-empty", "-m", "Initial commit")
+
+	// Set B4Cmd to 'false' so b4 lore fetch fails, triggering local database fallback
+	cfg := &config.Config{
+		LKML: config.LKMLConfig{
+			B4Cmd: "false",
+		},
+	}
+	runner := NewB4Runner(cfg, nil, db)
+
+	res, err := runner.ApplyPatch("patch-sig-test@example.com", gitDir, "review/trace-feature", "")
+	if err != nil {
+		t.Fatalf("ApplyPatch returned unexpected error: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected ApplyPatch success=true with local fallback, got false; stderr=%s, stdout=%s", res.Stderr, res.Stdout)
+	}
+	if res.CommitID == "" {
+		t.Fatalf("expected CommitID to be populated")
+	}
+
+	// Verify commit was created on the repository
+	headSubject := runGit("log", "-1", "--format=%s")
+	if headSubject != "kernel: add custom trace feature" {
+		t.Errorf("unexpected commit subject: %q", headSubject)
+	}
+
+	// Verify file was created
+	content, err := os.ReadFile(filepath.Join(gitDir, "test_file.c"))
+	if err != nil || !strings.Contains(string(content), "/* custom trace feature */") {
+		t.Errorf("expected test_file.c to be created by git am: %v, content: %q", err, string(content))
+	}
+
+	// Verify database recorded review commit
+	recordedCommit, err := db.GetReviewCommit("patch-sig-test@example.com")
+	if err != nil || recordedCommit != res.CommitID {
+		t.Errorf("expected recorded commit %s, got %s (err: %v)", res.CommitID, recordedCommit, err)
+	}
+}

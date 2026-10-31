@@ -171,6 +171,9 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 		if parsedDiff != nil && !parsedDiff.IsPatch && msg.IsPatch {
 			msg.IsPatch = false
 			_ = s.DB.SetMessageIsPatch(msg.ID, false)
+		} else if parsedDiff != nil && parsedDiff.IsPatch && !msg.IsPatch {
+			msg.IsPatch = true
+			_ = s.DB.SetMessageIsPatch(msg.ID, true)
 		}
 	}
 

@@ -345,6 +345,10 @@ Reviewer <reviewer@example.com>
 	if !DetectPatch(realPatch) {
 		t.Errorf("expected DetectPatch(realPatch) to be true")
 	}
+	realPatchCRLF := strings.ReplaceAll(realPatch, "\n", "\r\n")
+	if !DetectPatch(realPatchCRLF) {
+		t.Errorf("expected DetectPatch(realPatchCRLF) to be true")
+	}
 	if DetectPatch(inlineDiffReply) {
 		t.Errorf("expected DetectPatch(inlineDiffReply) to be false")
 	}
