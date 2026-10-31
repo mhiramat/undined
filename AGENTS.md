@@ -16,6 +16,7 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 
 ## 3. Git Commit Hygiene
 - **Run E2E Tests Before Committing**: Run `make test-e2e` and ensure all tests pass prior to committing any changes.
+- **Pre-Commit Go Review Subagent**: Before committing changes that affect Go source files (`*.go`), invoke a subagent with the `go-review-agent` skill to review the uncommitted changes (`git diff`). Address all identified findings before proceeding with the commit.
 - **Separate Commits**: When addressing multiple distinct bugs, vulnerabilities, or enhancements, commit each logical change separately with an explanatory commit message. Avoid bundling unrelated changes into a single commit.
 - **Message Wrapping**: Commit messages must be wrapped before the 80-character mark (recommend 72 characters for body text and 50–72 characters for subjects). Never exceed 80 characters per line.
 
@@ -92,3 +93,8 @@ Always verify changes using one of the following methods, in order of priority:
 - **In-Place Row Patching on Updates**: The frontend SSE listener for `message.updated` must never trigger a full message list fetch (`fetchMessages()`). It must compare the payload against local state, treat identical state as a no-op, and patch row DOM elements (classes, read dots, tags) in-place.
 - **Self-Echo Suppression**: Client-initiated REST calls that modify or inspect messages must register a temporary suppression window (via `suppressEventForMessage`) to prevent incoming self-echo SSE events from redundantly re-fetching message details or threads.
 - **Single-Flight Fetch Guards**: High-frequency fetch functions (such as `fetchFolders()` and `fetchMessages()`) must use in-flight promise guards to prevent concurrent or overlapping executions from causing duplicate DOM renders.
+
+## 16. Pre-Commit Go Code Review Subagent Invariant
+- **Mandatory Subagent Review**: Whenever changes to Go code (`*.go`) are prepared for commit, launch a subagent using `invoke_subagent` (TypeName: `"self"`, Role: `"Go Code Reviewer"`) instructed to evaluate the uncommitted diff against the `go-review-agent` skill and Google Go Style Decisions.
+- **Pre-Commit Remediation**: The parent agent must review the subagent's findings, remediate any non-idiomatic patterns, naming stuttering, unhandled/discarded errors, or test hygiene defects, and re-run `make test` and `make test-e2e` before committing.
+
