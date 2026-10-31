@@ -620,34 +620,101 @@ func (d *Database) GetFolderIMAPUIDs(folderID int64) ([]uint32, error) {
 // DeleteMessagesByIMAPUIDs removes messages from the database matching the given IMAP UIDs, returning the deleted records.
 func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*Message, error) {
 	if len(uids) == 0 {
-		return nil, nil
+		return []*Message{}, nil
 	}
 
-	var deleted []*Message
+	tx, err := d.DB.Begin()
+	if err != nil {
+		return []*Message{}, fmt.Errorf("failed to begin delete transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	deleted := make([]*Message, 0, len(uids))
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.folder_id = ? AND m.imap_uid = ?;
+	`, messageSelectColumns)
+
+	var anyDeleted bool
 	for _, uid := range uids {
-		var m Message
-		var isPatch, isRead, isReplied, hasNotes any
-		row := d.DB.QueryRow(`
-			SELECT id, message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr,
-				   to_addr, cc_addr, date, epoch_timestamp, in_reply_to, references_header,
-				   body_plain, is_patch, is_read, is_replied, has_notes, flags, review_commit_id, created_at
-			FROM messages WHERE folder_id = ? AND imap_uid = ?;
-		`, folderID, uid)
-		err := row.Scan(
-			&m.ID, &m.MessageID, &m.FolderID, &m.IMAPUID, &m.FilePath, &m.Subject, &m.FromName, &m.FromAddr,
-			&m.ToAddr, &m.CcAddr, &m.Date, &m.EpochTimestamp, &m.InReplyTo, &m.ReferencesHeader,
-			&m.BodyPlain, &isPatch, &isRead, &isReplied, &hasNotes, &m.Flags, &m.ReviewCommitID, &m.CreatedAt,
-		)
-		if err == nil {
-			m.IsPatch = toBool(isPatch)
-			m.IsRead = toBool(isRead)
-			m.IsReplied = toBool(isReplied)
-			m.HasNotes = toBool(hasNotes)
-			if _, delErr := d.DB.Exec("DELETE FROM messages WHERE id = ?;", m.ID); delErr == nil {
-				deleted = append(deleted, &m)
-				d.MarkInProcessWrite()
+		msg, scanErr := scanMessage(tx.QueryRow(query, folderID, uid))
+		res, delErr := tx.Exec("DELETE FROM messages WHERE folder_id = ? AND imap_uid = ?;", folderID, uid)
+		if delErr != nil {
+			return []*Message{}, delErr
+		}
+		rowsAffected, _ := res.RowsAffected()
+		if rowsAffected > 0 {
+			anyDeleted = true
+			if scanErr == nil && msg != nil {
+				deleted = append(deleted, msg)
+			} else {
+				u := uid
+				deleted = append(deleted, &Message{
+					FolderID: folderID,
+					IMAPUID:  &u,
+				})
 			}
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return []*Message{}, fmt.Errorf("failed to commit delete transaction: %w", err)
+	}
+
+	if anyDeleted {
+		d.MarkInProcessWrite()
+	}
+
+	return deleted, nil
+}
+
+// DeleteMessagesWithoutIMAPUID removes any messages in the specified folder that do not have an IMAP UID.
+func (d *Database) DeleteMessagesWithoutIMAPUID(folderID int64) ([]*Message, error) {
+	tx, err := d.DB.Begin()
+	if err != nil {
+		return []*Message{}, fmt.Errorf("failed to begin delete transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.folder_id = ? AND (m.imap_uid IS NULL OR m.imap_uid = 0);
+	`, messageSelectColumns)
+
+	rows, err := tx.Query(query, folderID)
+	if err != nil {
+		return []*Message{}, err
+	}
+	defer rows.Close()
+
+	deleted := make([]*Message, 0)
+	for rows.Next() {
+		msg, scanErr := scanMessage(rows)
+		if scanErr == nil && msg != nil {
+			deleted = append(deleted, msg)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return []*Message{}, err
+	}
+	rows.Close()
+
+	res, delErr := tx.Exec("DELETE FROM messages WHERE folder_id = ? AND (imap_uid IS NULL OR imap_uid = 0);", folderID)
+	if delErr != nil {
+		return []*Message{}, delErr
+	}
+	rowsAffected, _ := res.RowsAffected()
+
+	if err := tx.Commit(); err != nil {
+		return []*Message{}, fmt.Errorf("failed to commit delete transaction: %w", err)
+	}
+
+	if rowsAffected > 0 {
+		d.MarkInProcessWrite()
 	}
 	return deleted, nil
 }

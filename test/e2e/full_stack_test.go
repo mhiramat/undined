@@ -647,3 +647,79 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 		t.Errorf("expected [undine.mcp] log output, got:\n%s", logBuf.String())
 	}
 }
+
+// TestE2E_FullSyncPurgesRemovedMessages tests that POST /api/folders/{id}/sync-full
+// detects emails deleted remotely from the IMAP server (e.g. Gmail side) and removes
+// them from the message database and Maildir storage.
+func TestE2E_FullSyncPurgesRemovedMessages(t *testing.T) {
+	env := setupE2EEnv(t)
+
+	// 1. Seed Mock IMAP server with two patch emails
+	uid1 := env.IMAPServer.AddMessage("INBOX", sampleKernelPatch1)
+	uid2 := env.IMAPServer.AddMessage("INBOX", sampleKernelPatch2)
+
+	inboxFolder, err := env.DB.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to get INBOX folder: %v", err)
+	}
+
+	// 2. Hydrate both messages into SQLite & Maildir
+	msg1, err := env.Poller.FetchAndHydrateMessage("INBOX", inboxFolder.ID, uid1, 0)
+	if err != nil {
+		t.Fatalf("FetchAndHydrateMessage 1 failed: %v", err)
+	}
+	msg2, err := env.Poller.FetchAndHydrateMessage("INBOX", inboxFolder.ID, uid2, 0)
+	if err != nil {
+		t.Fatalf("FetchAndHydrateMessage 2 failed: %v", err)
+	}
+
+	// Verify both are present in database
+	uids, err := env.DB.GetFolderIMAPUIDs(inboxFolder.ID)
+	if err != nil || len(uids) != 2 {
+		t.Fatalf("expected 2 UIDs in database, got %v (err: %v)", uids, err)
+	}
+
+	// 3. Remove message 1 from the IMAP server (simulating removal on Gmail side)
+	removed := env.IMAPServer.RemoveMessage("INBOX", uid1)
+	if !removed {
+		t.Fatalf("failed to remove message 1 from mock IMAP server")
+	}
+
+	// 4. Trigger full sync via REST API: POST /api/folders/{id}/sync-full
+	resp, err := env.Request("POST", fmt.Sprintf("/api/folders/%d/sync-full", inboxFolder.ID), "")
+	if err != nil {
+		t.Fatalf("sync-full request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK from sync-full, got %d", resp.StatusCode)
+	}
+
+	var syncRes map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&syncRes); err != nil {
+		t.Fatalf("failed to decode sync-full response: %v", err)
+	}
+
+	if removedCount, ok := syncRes["removed_count"].(float64); !ok || int(removedCount) != 1 {
+		t.Errorf("expected removed_count=1 in response, got %+v", syncRes)
+	}
+
+	// 5. Verify database now only contains message 2
+	uidsAfter, err := env.DB.GetFolderIMAPUIDs(inboxFolder.ID)
+	if err != nil || len(uidsAfter) != 1 || uidsAfter[0] != uid2 {
+		t.Errorf("expected only UID %d remaining in DB, got %v", uid2, uidsAfter)
+	}
+
+	// Verify deleted message is no longer retrievable by ID
+	deletedMsg, _ := env.DB.GetMessageByID(msg1.ID)
+	if deletedMsg != nil {
+		t.Errorf("expected message 1 to be deleted from DB, but still found: %+v", deletedMsg)
+	}
+
+	// Verify remaining message 2 is still retrievable
+	remainingMsg, err := env.DB.GetMessageByID(msg2.ID)
+	if err != nil || remainingMsg == nil {
+		t.Errorf("expected message 2 to remain in DB, err: %v", err)
+	}
+}

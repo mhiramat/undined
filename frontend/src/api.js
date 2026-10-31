@@ -53,8 +53,8 @@ export async function syncFullFolderSummaries(folderId) {
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Failed to download full summaries" }));
-    throw new Error(err.detail || "Failed to download full summaries");
+    const err = await res.json().catch(() => ({ detail: "Failed to sync email summaries" }));
+    throw new Error(err.detail || "Failed to sync email summaries");
   }
   return res.json();
 }

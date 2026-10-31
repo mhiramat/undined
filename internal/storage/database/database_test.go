@@ -642,6 +642,107 @@ func TestFindAIReviewMessage(t *testing.T) {
 	}
 }
 
+func TestDeleteMessagesByIMAPUIDs_WithNullColumns(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	// Insert message directly with NULLs for nullable columns:
+	// review_commit_id, in_reply_to, references_header, body_plain
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (
+			message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr,
+			to_addr, cc_addr, date, epoch_timestamp, in_reply_to, references_header,
+			body_plain, is_patch, is_read, is_replied, has_notes, flags, review_commit_id
+		) VALUES (
+			'msg-with-nulls@example.com', ?, 42, '/path/to/msg.eml', 'Subject with NULL columns',
+			'Kernel Developer', 'dev@example.com', 'dev@example.com', '', 'Sat, 17 Oct 2026 12:00:00 +0000',
+			1760702400, NULL, NULL, NULL, 0, 0, 0, 0, '', NULL
+		);
+	`, folder.ID)
+	if err != nil {
+		t.Fatalf("failed to insert message with NULL columns: %v", err)
+	}
+
+	// Delete by IMAP UID 42
+	deleted, err := db.DeleteMessagesByIMAPUIDs(folder.ID, []uint32{42})
+	if err != nil {
+		t.Fatalf("DeleteMessagesByIMAPUIDs failed: %v", err)
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("expected 1 deleted message, got %d", len(deleted))
+	}
+	if deleted[0].MessageID != "msg-with-nulls@example.com" {
+		t.Errorf("expected deleted MessageID msg-with-nulls@example.com, got %s", deleted[0].MessageID)
+	}
+	if deleted[0].FilePath != "/path/to/msg.eml" {
+		t.Errorf("expected deleted FilePath /path/to/msg.eml, got %s", deleted[0].FilePath)
+	}
+
+	// Verify message no longer in database
+	uids, err := db.GetFolderIMAPUIDs(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderIMAPUIDs failed: %v", err)
+	}
+	if len(uids) != 0 {
+		t.Errorf("expected 0 UIDs in folder after deletion, got %v", uids)
+	}
+}
+
+func TestDeleteMessagesWithoutIMAPUID(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := NewDatabase(filepath.Join(tmpDir, "test.db"))
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	// Insert message with NULL imap_uid
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (
+			message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr,
+			date, epoch_timestamp
+		) VALUES (
+			'msg-no-uid@example.com', ?, NULL, '/path/to/orphan.eml', 'Orphan Message',
+			'Kernel Developer', 'dev@example.com', 'Sat, 17 Oct 2026 12:00:00 +0000', 1760702400
+		);
+	`, folder.ID)
+	if err != nil {
+		t.Fatalf("failed to insert orphan message: %v", err)
+	}
+
+	deleted, err := db.DeleteMessagesWithoutIMAPUID(folder.ID)
+	if err != nil {
+		t.Fatalf("DeleteMessagesWithoutIMAPUID failed: %v", err)
+	}
+	if len(deleted) != 1 {
+		t.Fatalf("expected 1 deleted orphan message, got %d", len(deleted))
+	}
+	if deleted[0].MessageID != "msg-no-uid@example.com" {
+		t.Errorf("expected deleted MessageID msg-no-uid@example.com, got %s", deleted[0].MessageID)
+	}
+
+	// Verify it's gone
+	var count int
+	_ = db.DB.QueryRow("SELECT COUNT(*) FROM messages WHERE folder_id = ?;", folder.ID).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected 0 messages remaining, got %d", count)
+	}
+}
+
 
 
 

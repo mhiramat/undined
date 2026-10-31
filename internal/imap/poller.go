@@ -389,13 +389,30 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 
 	removedCount := 0
 	if len(removedUIDs) > 0 {
-		deletedMsgs, _ := p.DB.DeleteMessagesByIMAPUIDs(folderID, removedUIDs)
-		for _, m := range deletedMsgs {
+		deletedMsgs, err := p.DB.DeleteMessagesByIMAPUIDs(folderID, removedUIDs)
+		if err != nil {
+			log.Printf("Failed to delete removed messages in folder %s: %v", folderName, err)
+		} else {
+			for _, m := range deletedMsgs {
+				if m.FilePath != "" && p.Maildir != nil {
+					_ = p.Maildir.DeleteMessage(m.FilePath)
+				}
+			}
+			removedCount = len(deletedMsgs)
+		}
+	}
+
+	// Purge any orphan messages in this folder lacking an IMAP UID
+	orphanMsgs, err := p.DB.DeleteMessagesWithoutIMAPUID(folderID)
+	if err != nil {
+		log.Printf("Failed to purge orphan messages in folder %s: %v", folderName, err)
+	} else if len(orphanMsgs) > 0 {
+		for _, m := range orphanMsgs {
 			if m.FilePath != "" && p.Maildir != nil {
 				_ = p.Maildir.DeleteMessage(m.FilePath)
 			}
 		}
-		removedCount = len(deletedMsgs)
+		removedCount += len(orphanMsgs)
 	}
 
 	// Missing UIDs to fetch
@@ -416,6 +433,8 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 		p.mu.Unlock()
 		if len(serverUIDs) > 0 {
 			_ = p.DB.UpdateFolderLastSyncedUID(folderID, serverUIDs[len(serverUIDs)-1])
+		} else {
+			_ = p.DB.ResetFolderLastSyncedUID(folderID)
 		}
 		if p.Events != nil && removedCount > 0 {
 			p.Events.Publish("mail.sync_completed", map[string]any{
@@ -533,6 +552,8 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 
 	if safeCheckpoint > 0 {
 		_ = p.DB.UpdateFolderLastSyncedUID(folderID, safeCheckpoint)
+	} else if len(serverUIDs) == 0 {
+		_ = p.DB.ResetFolderLastSyncedUID(folderID)
 	}
 
 	p.mu.Lock()

@@ -52,14 +52,14 @@ export function renderSummaryPane(container) {
       return;
     }
 
-    let infoText = "Downloading full email summaries...";
+    let infoText = "Syncing email summaries...";
     let pctWidth = 0;
     if (progress && progress.total > 0) {
       const pct = Math.round((progress.synced / progress.total) * 100);
       pctWidth = Math.min(100, Math.max(0, pct));
-      infoText = `Downloading full email summaries: ${progress.synced} of ${progress.total} messages synced (${pctWidth}%)`;
+      infoText = `Syncing email summaries: ${progress.synced} of ${progress.total} messages synced (${pctWidth}%)`;
     } else if (progress && progress.synced > 0) {
-      infoText = `Downloading full email summaries: ${progress.synced} messages synced...`;
+      infoText = `Syncing email summaries: ${progress.synced} messages synced...`;
     }
 
     bannerSlot.innerHTML = `
@@ -69,7 +69,7 @@ export function renderSummaryPane(container) {
             <span class="spinner" style="font-size: 11px; margin-right: 6px;">🔄</span>
             <span>${escapeHtml(infoText)}</span>
           </div>
-          <button type="button" class="sync-cancel-btn" id="btn-cancel-sync" title="Cancel summary download">
+          <button type="button" class="sync-cancel-btn" id="btn-cancel-sync" title="Cancel summary sync">
             ✕ Cancel
           </button>
         </div>

@@ -89,6 +89,22 @@ func (s *MockIMAPServer) AddMessage(mailbox string, rawRFC822 string) uint32 {
 	return uid
 }
 
+// RemoveMessage removes a message with the specified UID from the mailbox.
+func (s *MockIMAPServer) RemoveMessage(mailbox string, uid uint32) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mb := strings.ToUpper(mailbox)
+	msgs := s.mailboxes[mb]
+	for i, m := range msgs {
+		if m.UID == uid {
+			s.mailboxes[mb] = append(msgs[:i], msgs[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
 func (s *MockIMAPServer) handleConn(c net.Conn) {
 	defer c.Close()
 	r := bufio.NewReader(c)

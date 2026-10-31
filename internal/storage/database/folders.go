@@ -163,3 +163,15 @@ func (d *Database) UpdateFolderLastSyncedUID(folderID int64, uid uint32) error {
 	}
 	return err
 }
+
+// ResetFolderLastSyncedUID unconditionally resets last_synced_uid to 0 for a folder (e.g. when the mailbox on the server is completely emptied).
+func (d *Database) ResetFolderLastSyncedUID(folderID int64) error {
+	_, err := d.DB.Exec(
+		"UPDATE folders SET last_synced_uid = 0 WHERE id = ?;",
+		folderID,
+	)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
+	return err
+}

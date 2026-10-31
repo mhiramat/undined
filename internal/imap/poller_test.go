@@ -843,3 +843,165 @@ func TestSyncFolder_EmptyHeaderStopsAndDoesNotAdvanceCheckpoint(t *testing.T) {
 		t.Errorf("Expected last_synced_uid=0, got %d", fAfter.LastSyncedUID)
 	}
 }
+
+func TestSyncFullFolder_RemovesPurgedMessagesAndDeletesMaildir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to init database: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	// Create 3 maildir files
+	f1, err := store.AddMessage("INBOX", []byte("Message-ID: <msg1@example.com>\r\nSubject: Msg 1\r\n\r\nBody 1"), "")
+	if err != nil {
+		t.Fatalf("Failed to add message 1: %v", err)
+	}
+	f2, err := store.AddMessage("INBOX", []byte("Message-ID: <msg2@example.com>\r\nSubject: Msg 2\r\n\r\nBody 2"), "")
+	if err != nil {
+		t.Fatalf("Failed to add message 2: %v", err)
+	}
+	f3, err := store.AddMessage("INBOX", []byte("Message-ID: <msg3@example.com>\r\nSubject: Msg 3\r\n\r\nBody 3"), "")
+	if err != nil {
+		t.Fatalf("Failed to add message 3: %v", err)
+	}
+
+	// Insert into DB with UIDs 101, 102, 103
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr, date, epoch_timestamp)
+		VALUES ('msg1@example.com', ?, 101, ?, 'Msg 1', 'Kernel Developer', 'dev@example.com', 'Sat, 17 Oct 2026 12:00:00 +0000', 100),
+		       ('msg2@example.com', ?, 102, ?, 'Msg 2', 'Kernel Developer', 'dev@example.com', 'Sat, 17 Oct 2026 12:01:00 +0000', 101),
+		       ('msg3@example.com', ?, 103, ?, 'Msg 3', 'Kernel Developer', 'dev@example.com', 'Sat, 17 Oct 2026 12:02:00 +0000', 102);
+	`, folder.ID, f1, folder.ID, f2, folder.ID, f3)
+	if err != nil {
+		t.Fatalf("Failed to insert test messages: %v", err)
+	}
+
+	// Set folder last_synced_uid to 103
+	_ = db.UpdateFolderLastSyncedUID(folder.ID, 103)
+
+	// Start mock IMAP server with ONLY UID 102 (101 and 103 were removed on server side)
+	server := startMockSyncIMAPServer(t, []uint32{102})
+	defer server.listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = server.port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+	cfg.IMAP.SyncFolders = []string{"INBOX"}
+
+	poller := NewPoller(cfg, store, db)
+
+	synced, err := poller.SyncFullFolder(folder.ID, "INBOX")
+	if err != nil {
+		t.Fatalf("SyncFullFolder failed: %v", err)
+	}
+	if synced != 0 {
+		t.Errorf("expected 0 newly synced, got %d", synced)
+	}
+
+	st := poller.GetSyncStatus(folder.ID)
+	if st.Removed != 2 {
+		t.Errorf("expected 2 removed messages in sync status, got %d", st.Removed)
+	}
+
+	// Verify local DB only contains UID 102
+	uids, err := db.GetFolderIMAPUIDs(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderIMAPUIDs failed: %v", err)
+	}
+	if len(uids) != 1 || uids[0] != 102 {
+		t.Errorf("expected only UID 102 remaining, got %v", uids)
+	}
+
+	// Verify Maildir files for 101 and 103 were deleted, while 102 remains
+	if _, err := os.Stat(f1); !os.IsNotExist(err) {
+		t.Errorf("expected file %s to be deleted, but it exists", f1)
+	}
+	if _, err := os.Stat(f3); !os.IsNotExist(err) {
+		t.Errorf("expected file %s to be deleted, but it exists", f3)
+	}
+	if _, err := os.Stat(f2); err != nil {
+		t.Errorf("expected file %s to exist, err: %v", f2, err)
+	}
+}
+
+func TestSyncFullFolder_AllMessagesRemovedResetsCheckpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to init database: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("Failed to create folder: %v", err)
+	}
+
+	f1, err := store.AddMessage("INBOX", []byte("Message-ID: <msg1@example.com>\r\nSubject: Msg 1\r\n\r\nBody 1"), "")
+	if err != nil {
+		t.Fatalf("Failed to add message 1: %v", err)
+	}
+
+	_, err = db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, imap_uid, file_path, subject, from_name, from_addr, date, epoch_timestamp)
+		VALUES ('msg1@example.com', ?, 101, ?, 'Msg 1', 'Kernel Developer', 'dev@example.com', 'Sat, 17 Oct 2026 12:00:00 +0000', 100);
+	`, folder.ID, f1)
+	if err != nil {
+		t.Fatalf("Failed to insert test message: %v", err)
+	}
+	_ = db.UpdateFolderLastSyncedUID(folder.ID, 101)
+
+	// Server has NO messages
+	server := startMockSyncIMAPServer(t, []uint32{})
+	defer server.listener.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = server.port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+	cfg.IMAP.SyncFolders = []string{"INBOX"}
+
+	poller := NewPoller(cfg, store, db)
+
+	synced, err := poller.SyncFullFolder(folder.ID, "INBOX")
+	if err != nil {
+		t.Fatalf("SyncFullFolder failed: %v", err)
+	}
+	if synced != 0 {
+		t.Errorf("expected 0 newly synced, got %d", synced)
+	}
+
+	st := poller.GetSyncStatus(folder.ID)
+	if st.Removed != 1 {
+		t.Errorf("expected 1 removed message, got %d", st.Removed)
+	}
+
+	fAfter, err := db.GetFolderByID(folder.ID)
+	if err != nil {
+		t.Fatalf("GetFolderByID failed: %v", err)
+	}
+	if fAfter.LastSyncedUID != 0 {
+		t.Errorf("expected last_synced_uid to be reset to 0, got %d", fAfter.LastSyncedUID)
+	}
+}

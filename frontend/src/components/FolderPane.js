@@ -43,16 +43,16 @@ export function renderFolderPane(container) {
     if (isMenuOpen) {
       let itemsHtml = "";
 
-      // Include option to download full email summaries only when selected mailbox is IMAP
+      // Include option to sync email summaries only when selected mailbox is IMAP
       if (isImap) {
         if (isSyncing) {
           const progress = store.getFolderSyncProgress(selectedFolder.id);
-          let syncBtnLabel = "Downloading summaries...";
+          let syncBtnLabel = "Syncing summaries...";
           if (progress && progress.total > 0) {
             const pct = Math.round((progress.synced / progress.total) * 100);
-            syncBtnLabel = `Downloading: ${progress.synced}/${progress.total} (${pct}%)`;
+            syncBtnLabel = `Syncing: ${progress.synced}/${progress.total} (${pct}%)`;
           } else if (progress && progress.synced > 0) {
-            syncBtnLabel = `Downloaded ${progress.synced} summaries...`;
+            syncBtnLabel = `Synced ${progress.synced} summaries...`;
           }
           itemsHtml += `
             <button type="button" class="mailbox-dropdown-item disabled" id="btn-download-full-summaries" disabled>
@@ -61,15 +61,15 @@ export function renderFolderPane(container) {
             </button>
             <button type="button" class="mailbox-dropdown-item" id="btn-cancel-sync-menu">
               <span style="font-size: 13px; color: var(--accent-red);">✕</span>
-              <span style="color: var(--accent-red);">Cancel summary download</span>
+              <span style="color: var(--accent-red);">Cancel summary sync</span>
             </button>
             <div class="mailbox-dropdown-divider"></div>
           `;
         } else {
           itemsHtml += `
             <button type="button" class="mailbox-dropdown-item" id="btn-download-full-summaries">
-              <span style="font-size: 13px;">📥</span>
-              <span>Download full email summaries</span>
+              <span style="font-size: 13px;">🔄</span>
+              <span>Sync email summaries</span>
             </button>
             <div class="mailbox-dropdown-divider"></div>
           `;
@@ -138,11 +138,11 @@ export function renderFolderPane(container) {
       if (isFolderSyncing) {
         if (progress && progress.total > 0) {
           const pct = Math.round((progress.synced / progress.total) * 100);
-          syncingBadge = `<span class="folder-sync-badge" title="Downloading summaries: ${progress.synced} of ${progress.total} (${pct}%)"><span class="spinner" style="font-size: 10px;">🔄</span> ${progress.synced}/${progress.total}</span>`;
+          syncingBadge = `<span class="folder-sync-badge" title="Syncing summaries: ${progress.synced} of ${progress.total} (${pct}%)"><span class="spinner" style="font-size: 10px;">🔄</span> ${progress.synced}/${progress.total}</span>`;
         } else if (progress && progress.synced > 0) {
-          syncingBadge = `<span class="folder-sync-badge" title="Downloaded ${progress.synced} summaries"><span class="spinner" style="font-size: 10px;">🔄</span> ${progress.synced}</span>`;
+          syncingBadge = `<span class="folder-sync-badge" title="Synced ${progress.synced} summaries"><span class="spinner" style="font-size: 10px;">🔄</span> ${progress.synced}</span>`;
         } else {
-          syncingBadge = `<span class="folder-syncing-icon spinner" title="Downloading summaries..." style="margin-left: 5px; font-size: 11px;">🔄</span>`;
+          syncingBadge = `<span class="folder-syncing-icon spinner" title="Syncing summaries..." style="margin-left: 5px; font-size: 11px;">🔄</span>`;
         }
       } else if (f.name === "TODO" && isSyncingTodo) {
         syncingBadge = `<span class="folder-syncing-icon spinner" title="Syncing TODO from Patchwork..." style="margin-left: 5px; font-size: 11px;">🔄</span>`;
@@ -206,9 +206,9 @@ export function renderFolderPane(container) {
         const targetFolderName = selectedFolder.name;
         store.startFolderSync(targetFolderId);
         update();
-        showToast(`Downloading full email summaries for "${targetFolderName}"...`, "info");
+        showToast(`Syncing email summaries for "${targetFolderName}"...`, "info");
 
-        // Periodic progress check during full summary download
+        // Periodic progress check during email summary sync
         let pollTimer = null;
         let isPolling = false;
         const refreshProgress = async () => {
@@ -234,18 +234,29 @@ export function renderFolderPane(container) {
             pollTimer = null;
           }
           if (res.status === "cancelled") {
-            showToast(`Summary download cancelled: ${res.synced_count ?? 0} messages synced.`, "info");
+            showToast(`Summary sync cancelled: ${res.synced_count ?? 0} messages synced.`, "info");
           } else {
             const synced = res.synced_count ?? 0;
             const removed = res.removed_count ?? 0;
             if (synced > 0 && removed > 0) {
-              showToast(`Full summaries updated: ${synced} new added, ${removed} removed.`, "success");
+              showToast(`Email summaries synced: ${synced} new added, ${removed} removed.`, "success");
             } else if (synced > 0) {
-              showToast(`Full summaries downloaded: ${synced} new messages synced.`, "success");
+              showToast(`Email summaries synced: ${synced} new messages synced.`, "success");
             } else if (removed > 0) {
-              showToast(`Full summaries updated: ${removed} removed message(s) purged.`, "success");
+              showToast(`Email summaries synced: ${removed} removed message(s) purged.`, "success");
             } else {
-              showToast("Full summaries checked: Mailbox is already up to date.", "success");
+              showToast("Email summaries synced: Mailbox is already up to date.", "success");
+            }
+          }
+          const updatedFolders = await fetchFolders();
+          store.setFolders(updatedFolders);
+          const currentFolderId = store.getState().selectedFolderId;
+          if (currentFolderId) {
+            const msgs = await fetchMessages(currentFolderId);
+            store.setMessages(msgs);
+            const activeMsg = store.getState().activeMessageDetail;
+            if (activeMsg && !msgs.some(m => m.id === activeMsg.id)) {
+              store.setActiveMessageDetail(null);
             }
           }
         } catch (err) {
@@ -253,7 +264,7 @@ export function renderFolderPane(container) {
             clearInterval(pollTimer);
             pollTimer = null;
           }
-          showToast(err.detail || err.message || "Failed to download full summaries", "error");
+          showToast(err.detail || err.message || "Failed to sync email summaries", "error");
         } finally {
           if (pollTimer) {
             clearInterval(pollTimer);
