@@ -639,7 +639,9 @@ class UndineDStore {
 
     this.recomputeMessages();
     this.notify(EVENT_MESSAGE_READ_UPDATED, { id: messageId, is_read: isRead ? 1 : 0 });
-    this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+    if (this.state.parsedFilter != null) {
+      this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+    }
   }
 
   updateMessageReplied(messageId, isReplied = true) {
@@ -659,7 +661,9 @@ class UndineDStore {
       this.state.activeMessageDetail.message.is_replied = isReplied ? 1 : 0;
     }
     this.notify(EVENT_MESSAGE_REPLIED_UPDATED, { id: rawMsg ? rawMsg.id : messageId, is_replied: isReplied ? 1 : 0 });
-    this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+    if (this.state.parsedFilter != null) {
+      this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+    }
   }
 
   updateMessageTag(messageId, tagKey, tagName, tagColor) {

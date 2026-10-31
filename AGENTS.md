@@ -8,9 +8,10 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 
 ## 2. Build and Test Invariants
 - **FTS5 Build Tag**: Undine relies on SQLite FTS5 for full-text search. All test and build invocations must include the `fts5` tag:
-  - `make test` or `go test -tags "fts5" ./...`
-  - `make test-e2e` or `go test -tags "fts5" ./test/e2e/...`
-  - `make build` or `go build -tags "fts5" -o bin/undined ./cmd/undined`
+  - `make test` or `GOTOOLCHAIN=local go test -tags "fts5" ./...`
+  - `make test-e2e` or `GOTOOLCHAIN=local go test -tags "fts5" ./test/e2e/...`
+  - `make build` or `GOTOOLCHAIN=local go build -tags "fts5" -o bin/undined ./cmd/undined`
+- **Go 1.26 Compatibility**: Maintain Go 1.26 language and toolchain compatibility. Always prefix Go invocations with `GOTOOLCHAIN=local` to prevent unexpected automatic toolchain upgrades in `go.mod`.
 - **Pre-Commit E2E Testing Requirement**: Always run the End-to-End test suite (`make test-e2e`) and full test suite (`make test`) before making any git commit to verify that no end-to-end user workflows or daemon processes are broken.
 
 ## 3. Git Commit Hygiene
@@ -80,3 +81,14 @@ Always verify changes using one of the following methods, in order of priority:
 ## 13. Command Execution Rules
 - Always execute commands against existing or newly created file paths.
 - Ensure terminal commands are short, deterministic, and easily auditable in diffs.
+
+## 14. Real-Time Notifications (SSE) & Database Watcher Invariants
+- **No Broadcast on Read-Path Hydration**: Lazy fetching or hydration of message bodies from IMAP (e.g., during `GET /api/messages/{id}`) must never emit SSE broadcast events that trigger message list or folder reloads.
+- **Prevent SQLite Watcher Self-Triggering**: When monitoring `PRAGMA data_version;` to detect external out-of-process changes (such as `--mcp-stdio` or CLI mutations), all in-process daemon writes must call `d.MarkInProcessWrite()`. The watcher must reconcile daemon writes and only emit `system.resync_required` for actual external modifications.
+- **Actual-Change Publishing**: `mail.sync_completed` must only be published when new messages are added (`new_count > 0`) or messages are expunged (`removed_count > 0`). Never publish sync completion on no-op polling cycles.
+- **Detailed `message.updated` Payloads**: Payloads for `message.updated` must include the specific modified fields (e.g. `message_id`, `message_db_id`, `folder`, `is_read`, `is_replied`, `tag`, and `flags`).
+
+## 15. Frontend Granular State Patching & Deduplication Invariants
+- **In-Place Row Patching on Updates**: The frontend SSE listener for `message.updated` must never trigger a full message list fetch (`fetchMessages()`). It must compare the payload against local state, treat identical state as a no-op, and patch row DOM elements (classes, read dots, tags) in-place.
+- **Self-Echo Suppression**: Client-initiated REST calls that modify or inspect messages must register a temporary suppression window (via `suppressEventForMessage`) to prevent incoming self-echo SSE events from redundantly re-fetching message details or threads.
+- **Single-Flight Fetch Guards**: High-frequency fetch functions (such as `fetchFolders()` and `fetchMessages()`) must use in-flight promise guards to prevent concurrent or overlapping executions from causing duplicate DOM renders.

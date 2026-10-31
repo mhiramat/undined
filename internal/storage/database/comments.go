@@ -70,6 +70,7 @@ func (d *Database) SavePatchComment(c *PatchComment) (*PatchComment, error) {
 		if err != nil {
 			return nil, err
 		}
+		d.MarkInProcessWrite()
 		return c, nil
 	}
 
@@ -101,6 +102,7 @@ func (d *Database) SavePatchComment(c *PatchComment) (*PatchComment, error) {
 
 	// Mark message as having notes
 	_, _ = d.DB.Exec("UPDATE messages SET has_notes = 1 WHERE message_id = ?;", cleanMsgID)
+	d.MarkInProcessWrite()
 
 	return c, nil
 }
@@ -161,6 +163,7 @@ func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 		hasNotes = 1
 	}
 	_, _ = d.DB.Exec("UPDATE messages SET has_notes = ? WHERE message_id = ?;", hasNotes, cleanMsgID)
+	d.MarkInProcessWrite()
 	return count, nil
 }
 
@@ -183,5 +186,6 @@ func (d *Database) DeleteComment(commentID int64) error {
 		}
 		_, _ = d.DB.Exec("UPDATE messages SET has_notes = ? WHERE message_id = ?;", hasNotes, msgID)
 	}
+	d.MarkInProcessWrite()
 	return nil
 }

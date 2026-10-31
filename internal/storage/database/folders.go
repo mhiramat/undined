@@ -78,6 +78,7 @@ func (d *Database) GetOrCreateFolder(name string, syncEnabled bool) (*Folder, er
 	if err != nil {
 		return nil, err
 	}
+	d.MarkInProcessWrite()
 
 	return &Folder{
 		ID:            id,
@@ -157,5 +158,8 @@ func (d *Database) UpdateFolderLastSyncedUID(folderID int64, uid uint32) error {
 		"UPDATE folders SET last_synced_uid = MAX(last_synced_uid, ?) WHERE id = ?;",
 		uid, folderID,
 	)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }

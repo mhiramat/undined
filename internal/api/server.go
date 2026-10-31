@@ -473,6 +473,7 @@ func (s *Server) StartDataVersionWatcher(ctx context.Context, checkInterval time
 		if err != nil {
 			return
 		}
+		s.DB.SetBaselineVersion(lastVer)
 
 		for {
 			select {
@@ -483,8 +484,7 @@ func (s *Server) StartDataVersionWatcher(ctx context.Context, checkInterval time
 				if err != nil {
 					continue
 				}
-				if currVer != lastVer {
-					lastVer = currVer
+				if s.DB.CheckAndResetExternalChange(currVer) {
 					s.Events.Publish("system.resync_required", map[string]any{
 						"reason": "external_db_change",
 					})

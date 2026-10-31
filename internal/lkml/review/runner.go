@@ -554,11 +554,6 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 				_ = r.DB.UpdateMessageSubjectAndBody(*job.ReviewDBID, subject, cleanBody)
 			}
 			if r.Events != nil {
-				r.Events.Publish("mail.sync_completed", map[string]any{
-					"folder":    constants.FolderAIReviews,
-					"new_count": 0,
-					"timestamp": time.Now().Unix(),
-				})
 				r.Events.Publish("message.updated", map[string]any{
 					"folder":     constants.FolderAIReviews,
 					"message_id": job.MessageID,

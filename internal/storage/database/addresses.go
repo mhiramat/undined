@@ -36,6 +36,9 @@ func (d *Database) RecordKnownAddress(name, address string) error {
 		name = CASE WHEN excluded.name != '' THEN excluded.name ELSE known_addresses.name END;
 	`
 	_, err := d.DB.Exec(query, name, address)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -71,7 +74,11 @@ func (d *Database) RecordKnownAddressesFromHeaders(headers ...string) error {
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	d.MarkInProcessWrite()
+	return nil
 }
 
 // CollectKnownAddresses scans all messages in the messages table, extracts To/Cc addresses,
@@ -119,6 +126,7 @@ func (d *Database) CollectKnownAddresses() (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	d.MarkInProcessWrite()
 	return count, nil
 }
 
@@ -192,5 +200,8 @@ func (d *Database) GetKnownAddressCount() (int, error) {
 // DeleteKnownAddress removes a specific address record by ID.
 func (d *Database) DeleteKnownAddress(id int64) error {
 	_, err := d.DB.Exec("DELETE FROM known_addresses WHERE id = ?;", id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }

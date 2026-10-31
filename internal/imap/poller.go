@@ -417,6 +417,14 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 		if len(serverUIDs) > 0 {
 			_ = p.DB.UpdateFolderLastSyncedUID(folderID, serverUIDs[len(serverUIDs)-1])
 		}
+		if p.Events != nil && removedCount > 0 {
+			p.Events.Publish("mail.sync_completed", map[string]any{
+				"folder":        folderName,
+				"new_count":     0,
+				"removed_count": removedCount,
+				"timestamp":     time.Now().Unix(),
+			})
+		}
 		return 0, nil
 	}
 	p.syncProgress[folderID].Status = "syncing"
@@ -547,11 +555,12 @@ func (p *Poller) SyncFullFolder(folderID int64, folderName string) (int, error) 
 	p.syncProgress[folderID].Status = "completed"
 	p.mu.Unlock()
 
-	if p.Events != nil && syncedCount > 0 {
+	if p.Events != nil && (syncedCount > 0 || removedCount > 0) {
 		p.Events.Publish("mail.sync_completed", map[string]any{
-			"folder":    folderName,
-			"new_count": syncedCount,
-			"timestamp": time.Now().Unix(),
+			"folder":        folderName,
+			"new_count":     syncedCount,
+			"removed_count": removedCount,
+			"timestamp":     time.Now().Unix(),
 		})
 	}
 

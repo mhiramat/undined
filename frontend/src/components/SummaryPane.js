@@ -14,6 +14,7 @@ import {
   EVENT_MESSAGE_SELECTED,
   EVENT_MESSAGE_READ_UPDATED,
   EVENT_MESSAGE_REPLIED_UPDATED,
+  EVENT_MESSAGE_TAG_UPDATED,
   EVENT_FOLDER_SYNC_STARTED,
   EVENT_FOLDER_SYNC_FINISHED,
   EVENT_FOLDER_SYNC_PROGRESS,
@@ -545,6 +546,40 @@ export function renderSummaryPane(container) {
     }
   }
 
+  function updateRowTagState(messageId, tagKey, tagName, tagColor) {
+    if (messageId == null) return;
+    const tbody = tableContainer.querySelector(".summary-tbody");
+    if (!tbody) return;
+    const row = tbody.querySelector(`.summary-row[data-id="${messageId}"]`);
+    if (!row) return;
+
+    const tagCell = row.cells ? row.cells[3] : row.querySelector(".summary-tag-cell");
+    const dateCell = row.cells ? row.cells[4] : row.querySelector(".summary-date-cell");
+    const safeTagColor = tagColor ? escapeHtml(tagColor) : "";
+    const safeTagName = tagName || tagKey || "";
+
+    if (tagCell) {
+      tagCell.innerHTML = safeTagName
+        ? `<span class="summary-tag-badge" style="color: ${safeTagColor || "inherit"}; border-color: ${safeTagColor || "currentColor"};">${escapeHtml(safeTagName)}</span>`
+        : "";
+    }
+    if (safeTagColor) {
+      row.style.color = safeTagColor;
+      row.setAttribute("data-has-tag", "true");
+      if (dateCell) {
+        dateCell.style.color = safeTagColor;
+        dateCell.style.opacity = "0.85";
+      }
+    } else {
+      row.style.color = "";
+      row.removeAttribute("data-has-tag");
+      if (dateCell) {
+        dateCell.style.color = "var(--text-muted)";
+        dateCell.style.opacity = "";
+      }
+    }
+  }
+
   store.subscribe((event, payload) => {
     if (
       event === EVENT_MESSAGES_UPDATED ||
@@ -562,6 +597,8 @@ export function renderSummaryPane(container) {
       const rawMsg = store.getState().rawMessages.find((item) => item.id === payload?.id);
       const isRead = rawMsg ? Boolean(rawMsg.is_read) : true;
       updateRowReadState(payload?.id, isRead);
+    } else if (event === EVENT_MESSAGE_TAG_UPDATED) {
+      updateRowTagState(payload?.messageId, payload?.tagKey, payload?.tagName, payload?.tagColor);
     } else if (
       event === EVENT_FOLDER_SYNC_STARTED ||
       event === EVENT_FOLDER_SYNC_FINISHED ||

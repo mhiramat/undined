@@ -3,7 +3,7 @@
  * Receives real-time invalidation events and triggers debounced REST re-fetching.
  */
 
-import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, invalidateMessageDetailCache } from "./api.js";
+import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
 
 // Debounce utility to coalesce burst notifications (e.g., multiple emails or comments)
 export function debounce(fn, delayMs = 300) {
@@ -31,18 +31,6 @@ export class NotificationChannel {
             this.store.setMessages(msgs);
           }
         }
-        // Refresh active message detail if its folder or content changed
-        const activeDetail = this.store.getState().activeMessageDetail;
-        if (activeDetail?.message) {
-          const curId = activeDetail.message.id;
-          const msgFolderId = activeDetail.message.folder_id;
-          const msgFolder = this.store.getState().folders.find((f) => f.id === msgFolderId);
-          if (!targetFolder || (msgFolder && msgFolder.name === targetFolder)) {
-            invalidateMessageDetailCache(curId);
-            const updated = await fetchMessageDetail(curId, { bypassCache: true });
-            this.store.setActiveMessageDetail(updated);
-          }
-        }
       } catch (err) {
         console.warn("[UndineD SSE] Error refreshing folders/messages:", err);
       }
@@ -50,6 +38,7 @@ export class NotificationChannel {
 
     this.debouncedSyncThread = debounce(async (rootMsgId) => {
       try {
+        if (rootMsgId && isEventSuppressed(rootMsgId)) return;
         const folders = await fetchFolders();
         this.store.setFolders(folders);
         const currentFolderId = this.store.getState().selectedFolderId;
@@ -63,6 +52,7 @@ export class NotificationChannel {
           const curMsgId = (activeDetail.message.message_id || "").replace(/^<|>$/g, "").trim();
           const cleanRoot = (rootMsgId || "").replace(/^<|>$/g, "").trim();
           if (cleanRoot && (curMsgId === cleanRoot || activeDetail.message.in_reply_to?.includes(cleanRoot))) {
+            if (isEventSuppressed(curId) || isEventSuppressed(curMsgId)) return;
             invalidateMessageDetailCache(curId);
             const updated = await fetchMessageDetail(curId, { bypassCache: true });
             this.store.setActiveMessageDetail(updated);
@@ -75,11 +65,13 @@ export class NotificationChannel {
 
     this.debouncedSyncComments = debounce(async (msgId) => {
       try {
+        if (msgId && isEventSuppressed(msgId)) return;
         const activeDetail = this.store.getState().activeMessageDetail;
         if (!activeDetail?.message) return;
         const curDbId = activeDetail.message.id;
         const curMsgId = (activeDetail.message.message_id || "").replace(/^<|>$/g, "").trim();
         const cleanMsgId = String(msgId || "").replace(/^<|>$/g, "").trim();
+        if (isEventSuppressed(curDbId) || (curMsgId && isEventSuppressed(curMsgId))) return;
         if (!cleanMsgId || curMsgId === cleanMsgId || String(curDbId) === cleanMsgId) {
           const comments = await fetchMessageComments(curDbId);
           this.store.setActiveMessageDetail({
@@ -113,9 +105,76 @@ export class NotificationChannel {
     this.es.addEventListener("message.updated", (e) => {
       try {
         const data = JSON.parse(e.data);
-        this.debouncedSyncFolders(data?.folder);
-      } catch (_) {
-        this.debouncedSyncFolders();
+        if (!data) return;
+
+        const msgIdStr = data.message_id || "";
+        const msgDbId = data.message_db_id;
+        const cleanMsgId = msgIdStr.replace(/^<|>$/g, "").trim();
+
+        // 1. Check if suppressed by recent explicit user action
+        if (
+          isEventSuppressed(cleanMsgId) ||
+          isEventSuppressed(msgDbId) ||
+          isEventSuppressed(msgIdStr)
+        ) {
+          return;
+        }
+
+        // 2. Find message in local frontend state
+        const rawMsgs = this.store.getState().rawMessages || [];
+        const localMsg = rawMsgs.find(
+          (m) =>
+            (msgDbId != null && m.id === msgDbId) ||
+            (cleanMsgId && (m.message_id || "").replace(/^<|>$/g, "").trim() === cleanMsgId)
+        );
+
+        if (!localMsg) {
+          // If not in current folder, and read status changed, update folder counters
+          if (data.is_read !== undefined) {
+            this.debouncedSyncFolders();
+          }
+          return;
+        }
+
+        // 3. Check for actual state differences and patch in-place
+        let hasChanges = false;
+        if (data.is_read !== undefined) {
+          const targetRead = Boolean(data.is_read);
+          const currentRead = Boolean(localMsg.is_read);
+          if (targetRead !== currentRead) {
+            hasChanges = true;
+            this.store.updateMessageRead(localMsg.id, targetRead);
+          }
+        }
+
+        if (data.is_replied !== undefined) {
+          const targetReplied = Boolean(data.is_replied);
+          const currentReplied = Boolean(localMsg.is_replied);
+          if (targetReplied !== currentReplied) {
+            hasChanges = true;
+            this.store.updateMessageReplied(localMsg.id, targetReplied);
+          }
+        }
+
+        if (data.tag !== undefined) {
+          const targetTag = data.tag || null;
+          const currentTag = localMsg.tag_key || null;
+          if (targetTag !== currentTag) {
+            hasChanges = true;
+            this.store.updateMessageTag(
+              localMsg.id,
+              targetTag,
+              data.tag_name || null,
+              data.tag_color || null
+            );
+          }
+        }
+
+        if (!hasChanges) {
+          return; // No-op, UI already represents this state
+        }
+      } catch (err) {
+        console.warn("[UndineD SSE] Error handling message.updated event:", err);
       }
     });
 

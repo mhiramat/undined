@@ -28,9 +28,9 @@ for autonomous prompt-only (oneshot) reviews.
 
 Options:
   --link               Link skill directory (changes in repo apply immediately; default)
-  --copy, --install    Copy skill into agy configuration directory
+  --copy, --install    Copy skill into configuration directory
   --skill <name|all>   Target skill to install: "undine-review", "undine-mcp-review", or "all" (default: "all")
-  --scope <scope>      Installation scope: "user" (default) or "workspace"
+  --scope <scope>      Installation scope: "user" (default: ~/.gemini/config/skills) or "workspace"
   --skip-mcp           Only install/link the skill; do not configure Undine MCP server
   --no-trust           Do not add project directory to ~/.gemini/trustedFolders.json
   -q, --quiet          Suppress banner and informational messages
@@ -183,7 +183,8 @@ fi
 if [ "$SCOPE" = "workspace" ]; then
     TARGET_SKILLS_DIR="$PROJECT_ROOT/.agents/skills"
 else
-    TARGET_SKILLS_DIR="${AGY_SKILLS_DIR:-$HOME/.gemini/antigravity-cli/skills}"
+    # Install under ~/.gemini/config/skills for compatibility with Antigravity and Antigravity CLI
+    TARGET_SKILLS_DIR="${AGY_SKILLS_DIR:-$HOME/.gemini/config/skills}"
 fi
 mkdir -p "$TARGET_SKILLS_DIR"
 
@@ -199,20 +200,34 @@ for skill_dir in "${SKILLS_TO_INSTALL[@]}"; do
         if [ "$QUIET" = false ]; then
             echo "Skill '$skill_name' is already present in $TARGET_SKILLS_DIR (scope: $SCOPE)."
         fi
-        continue
+    else
+        if [ "$MODE" = "copy" ]; then
+            if [ "$QUIET" = false ]; then
+                echo "Installing skill '$skill_name' via copy (scope: $SCOPE)..."
+            fi
+            rm -rf "$dest_path"
+            cp -r "$skill_dir" "$dest_path"
+        else
+            if [ "$QUIET" = false ]; then
+                echo "Linking skill '$skill_name' (scope: $SCOPE)..."
+            fi
+            ln -sfn "$skill_dir" "$dest_path"
+        fi
     fi
 
-    if [ "$MODE" = "copy" ]; then
-        if [ "$QUIET" = false ]; then
-            echo "Installing skill '$skill_name' via copy (scope: $SCOPE)..."
+    # Also maintain compatibility with Antigravity CLI directory if present
+    if [ "$SCOPE" = "user" ] && [ -z "${AGY_SKILLS_DIR:-}" ] && [ -d "$HOME/.gemini/antigravity-cli" ]; then
+        cli_skills_dir="$HOME/.gemini/antigravity-cli/skills"
+        if [ "$cli_skills_dir" != "$TARGET_SKILLS_DIR" ]; then
+            mkdir -p "$cli_skills_dir"
+            cli_dest="$cli_skills_dir/$skill_name"
+            if [ "$MODE" = "copy" ]; then
+                rm -rf "$cli_dest"
+                cp -r "$skill_dir" "$cli_dest"
+            else
+                ln -sfn "$skill_dir" "$cli_dest"
+            fi
         fi
-        rm -rf "$dest_path"
-        cp -r "$skill_dir" "$dest_path"
-    else
-        if [ "$QUIET" = false ]; then
-            echo "Linking skill '$skill_name' (scope: $SCOPE)..."
-        fi
-        ln -sfn "$skill_dir" "$dest_path"
     fi
 done
 

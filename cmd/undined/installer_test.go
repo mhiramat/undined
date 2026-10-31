@@ -198,3 +198,56 @@ func TestInstallerCopyMode(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallerDefaultConfigSkillsDir(t *testing.T) {
+	root, err := findProjectRoot()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	tmpDir := t.TempDir()
+	mockBin := filepath.Join(tmpDir, "bin")
+	_ = os.MkdirAll(mockBin, 0755)
+
+	mockAgy := filepath.Join(mockBin, "agy")
+	mockAgyScript := "#!/bin/sh\nexit 0\n"
+	_ = os.WriteFile(mockAgy, []byte(mockAgyScript), 0755)
+
+	fakeHome := filepath.Join(tmpDir, "fakehome")
+	_ = os.MkdirAll(fakeHome, 0755)
+
+	scriptPath := filepath.Join(root, "scripts", "install_gemini_skill.sh")
+
+	cmd := exec.Command(scriptPath, "--link", "--skip-mcp", "--no-trust", "--quiet")
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("PATH=%s:%s", mockBin, os.Getenv("PATH")),
+		fmt.Sprintf("HOME=%s", fakeHome),
+	)
+	// Clear AGY_SKILLS_DIR to test default
+	for i, e := range cmd.Env {
+		if strings.HasPrefix(e, "AGY_SKILLS_DIR=") {
+			cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+			break
+		}
+	}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("installer execution failed: %v, output: %s", err, string(out))
+	}
+
+	expectedSkillsDir := filepath.Join(fakeHome, ".gemini", "config", "skills")
+	for _, skill := range []string{"undine-review", "undine-mcp-review"} {
+		skillDir := filepath.Join(expectedSkillsDir, skill)
+		info, err := os.Lstat(skillDir)
+		if err != nil {
+			t.Fatalf("expected skill link in %s: %v", expectedSkillsDir, err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("expected %s to be symlink", skillDir)
+		}
+		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+			t.Errorf("expected SKILL.md in %s: %v", skillDir, err)
+		}
+	}
+}

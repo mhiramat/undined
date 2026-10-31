@@ -4,10 +4,47 @@
 
 const BASE_URL = "";
 
+// Track recently acted-upon message IDs to suppress self-echo SSE events
+const suppressedActionMessageIds = new Map();
+
+export function suppressEventForMessage(idOrMsgId, durationMs = 1000) {
+  if (idOrMsgId == null) return;
+  const key = String(idOrMsgId).replace(/^<|>$/g, "").trim();
+  if (!key) return;
+  const expiry = Date.now() + durationMs;
+  suppressedActionMessageIds.set(key, expiry);
+}
+
+export function isEventSuppressed(idOrMsgId) {
+  if (idOrMsgId == null) return false;
+  const key = String(idOrMsgId).replace(/^<|>$/g, "").trim();
+  if (!key) return false;
+  const expiry = suppressedActionMessageIds.get(key);
+  if (!expiry) return false;
+  if (Date.now() > expiry) {
+    suppressedActionMessageIds.delete(key);
+    return false;
+  }
+  return true;
+}
+
+// Single-flight guard for fetchFolders
+let inFlightFetchFoldersPromise = null;
+
 export async function fetchFolders() {
-  const res = await fetch(`${BASE_URL}/api/folders`);
-  if (!res.ok) throw new Error("Failed to fetch folders");
-  return res.json();
+  if (inFlightFetchFoldersPromise) {
+    return inFlightFetchFoldersPromise;
+  }
+  inFlightFetchFoldersPromise = (async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/api/folders`);
+      if (!res.ok) throw new Error("Failed to fetch folders");
+      return await res.json();
+    } finally {
+      inFlightFetchFoldersPromise = null;
+    }
+  })();
+  return inFlightFetchFoldersPromise;
 }
 
 export async function syncFullFolderSummaries(folderId) {
@@ -37,15 +74,30 @@ export async function cancelFolderSync(folderId) {
   return res.json();
 }
 
+// Single-flight guard for fetchMessages
+const inFlightFetchMessagesMap = new Map();
+
 export async function fetchMessages(folderId, limit = null, offset = 0) {
-  const params = new URLSearchParams();
-  if (folderId != null) params.append("folder_id", folderId);
-  if (limit != null && limit > 0) params.append("limit", limit);
-  if (offset > 0) params.append("offset", offset);
-  const query = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`${BASE_URL}/api/messages${query}`);
-  if (!res.ok) throw new Error("Failed to fetch messages");
-  return res.json();
+  const flightKey = `${folderId}_${limit}_${offset}`;
+  if (inFlightFetchMessagesMap.has(flightKey)) {
+    return inFlightFetchMessagesMap.get(flightKey);
+  }
+  const flightPromise = (async () => {
+    try {
+      const params = new URLSearchParams();
+      if (folderId != null) params.append("folder_id", folderId);
+      if (limit != null && limit > 0) params.append("limit", limit);
+      if (offset > 0) params.append("offset", offset);
+      const query = params.toString() ? `?${params.toString()}` : "";
+      const res = await fetch(`${BASE_URL}/api/messages${query}`);
+      if (!res.ok) throw new Error("Failed to fetch messages");
+      return await res.json();
+    } finally {
+      inFlightFetchMessagesMap.delete(flightKey);
+    }
+  })();
+  inFlightFetchMessagesMap.set(flightKey, flightPromise);
+  return flightPromise;
 }
 
 // In-memory cache for downloaded message details
@@ -89,6 +141,7 @@ export function clearMessageDetailCache() {
 }
 
 export async function fetchMessageDetail(idOrMsgId, { bypassCache = false } = {}) {
+  suppressEventForMessage(idOrMsgId, 1000);
   const key = String(idOrMsgId);
   if (!bypassCache && messageDetailCache.has(key)) {
     return messageDetailCache.get(key);
@@ -97,11 +150,14 @@ export async function fetchMessageDetail(idOrMsgId, { bypassCache = false } = {}
   const res = await fetch(`${BASE_URL}/api/messages/${encodeURIComponent(idOrMsgId)}`);
   if (!res.ok) throw new Error("Failed to fetch message detail");
   const data = await res.json();
+  if (data?.message?.id != null) suppressEventForMessage(data.message.id, 1000);
+  if (data?.message?.message_id) suppressEventForMessage(data.message.message_id, 1000);
   setCachedMessageDetail(idOrMsgId, data);
   return data;
 }
 
 export async function markMessageRead(dbId, isRead = true) {
+  suppressEventForMessage(dbId, 1000);
   const res = await fetch(`${BASE_URL}/api/messages/${dbId}/read`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -140,6 +196,7 @@ export async function deleteMessage(messageIdOrDbId) {
 }
 
 export async function importB4Thread(messageId) {
+  suppressEventForMessage(messageId, 1500);
   const res = await fetch(`${BASE_URL}/api/threads/import-b4`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -256,6 +313,7 @@ export async function sendEmail({
 }
 
 export async function setMessageReplied(messageId, isReplied = true) {
+  suppressEventForMessage(messageId, 1000);
   const res = await fetch(`${BASE_URL}/api/messages/${messageId}/replied`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -403,6 +461,7 @@ export async function fetchTags() {
 }
 
 export async function setMessageTag(messageDbId, tagKey = null) {
+  suppressEventForMessage(messageDbId, 1000);
   const res = await fetch(`${BASE_URL}/api/messages/${messageDbId}/tag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -420,6 +479,7 @@ export async function fetchMessageComments(idOrMsgId, state = null) {
 }
 
 export async function saveMessageComment(idOrMsgId, commentData) {
+  suppressEventForMessage(idOrMsgId, 1000);
   const res = await fetch(`${BASE_URL}/api/messages/${encodeURIComponent(idOrMsgId)}/comments`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

@@ -23,7 +23,7 @@ UndineD provides two specialized agent skills located in `.agents/skills/`:
 
 ### A. `undine-mcp-review` (Protocol & Tool Contracts)
 The technical protocol specification, parameter schemas, return definitions, transport configuration, and diagnostic access logging instructions.
-* **Skill File**: `~/.gemini/skills/undine-mcp-review/SKILL.md` (or `.agents/skills/undine-mcp-review/SKILL.md`)
+* **Skill File**: `~/.gemini/config/skills/undine-mcp-review/SKILL.md` (or `.agents/skills/undine-mcp-review/SKILL.md`)
 
 ### B. `undine-review` (Review Specialist Heuristics)
 Guides AI agents in evaluating Linux kernel patch submissions, verifying coding style, concurrency/locking invariants, error handling, memory safety, and executing a 4-step review lifecycle:

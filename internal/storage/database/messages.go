@@ -138,6 +138,7 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert/update message in db: %w", err)
 	}
+	d.MarkInProcessWrite()
 
 	if parsed.ToAddr != "" || parsed.CcAddr != "" {
 		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
@@ -338,6 +339,9 @@ func (d *Database) SetMessageRead(id int64, read bool) error {
 		val = 1
 	}
 	_, err := d.DB.Exec("UPDATE messages SET is_read = ? WHERE id = ?;", val, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -348,12 +352,18 @@ func (d *Database) SetMessageReplied(id int64, replied bool) error {
 		val = 1
 	}
 	_, err := d.DB.Exec("UPDATE messages SET is_replied = ? WHERE id = ?;", val, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
 // SetMessageFlags updates flags string for a message.
 func (d *Database) SetMessageFlags(id int64, flags string) error {
 	_, err := d.DB.Exec("UPDATE messages SET flags = ? WHERE id = ?;", flags, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -364,6 +374,9 @@ func (d *Database) SetMessageIsPatch(id int64, isPatch bool) error {
 		val = 1
 	}
 	_, err := d.DB.Exec("UPDATE messages SET is_patch = ? WHERE id = ?;", val, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -374,18 +387,27 @@ func (d *Database) SetMessageNotes(id int64, hasNotes bool) error {
 		val = 1
 	}
 	_, err := d.DB.Exec("UPDATE messages SET has_notes = ? WHERE id = ?;", val, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
 // SetMessageFilePath updates the file path (e.g. after Maildir rename or move).
 func (d *Database) SetMessageFilePath(id int64, path string) error {
 	_, err := d.DB.Exec("UPDATE messages SET file_path = ? WHERE id = ?;", path, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
 // UpdateMessageSubjectAndBody updates subject and body_plain for a message (used by review updates).
 func (d *Database) UpdateMessageSubjectAndBody(id int64, subject, body string) error {
 	_, err := d.DB.Exec("UPDATE messages SET subject = ?, body_plain = ? WHERE id = ?;", subject, body, id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -400,6 +422,9 @@ func (d *Database) SetMessageReviewCommit(msgID, commitID string) error {
 		return err
 	}
 	_, err = d.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE message_id = ?;", commitID, cleaned)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -417,6 +442,9 @@ func (d *Database) GetReviewCommit(msgID string) (string, error) {
 // DeleteMessage deletes a message from the database.
 func (d *Database) DeleteMessage(id int64) error {
 	_, err := d.DB.Exec("DELETE FROM messages WHERE id = ?;", id)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -537,6 +565,7 @@ func (d *Database) InsertHeaderSummary(
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert header summary: %w", err)
 	}
+	d.MarkInProcessWrite()
 
 	if parsed.ToAddr != "" || parsed.CcAddr != "" {
 		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
@@ -561,6 +590,9 @@ func (d *Database) HydrateMessageBody(id int64, filePath, bodyPlain string, isPa
 		"UPDATE messages SET file_path = ?, body_plain = ?, is_patch = ? WHERE id = ?;",
 		filePath, bodyPlain, patchVal, id,
 	)
+	if err == nil {
+		d.MarkInProcessWrite()
+	}
 	return err
 }
 
@@ -610,6 +642,7 @@ func (d *Database) DeleteMessagesByIMAPUIDs(folderID int64, uids []uint32) ([]*M
 			m.HasNotes = toBool(hasNotes)
 			if _, delErr := d.DB.Exec("DELETE FROM messages WHERE id = ?;", m.ID); delErr == nil {
 				deleted = append(deleted, &m)
+				d.MarkInProcessWrite()
 			}
 		}
 	}
