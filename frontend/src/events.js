@@ -205,6 +205,7 @@ export class NotificationChannel {
     });
 
     this.es.addEventListener("patch.applied", () => {
+      clearMessageDetailCache();
       this.debouncedSyncFolders();
     });
 

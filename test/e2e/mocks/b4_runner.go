@@ -41,6 +41,54 @@ done
 case "$1" in
   am|mbox)
     if [ "$out_target" = "-" ] || [ -z "$out_target" ]; then
+      case "$*" in
+        *series-multi*)
+          cat <<'EOF'
+From dev@example.com Sat Oct 24 12:00:00 2026
+From: Kernel Developer <dev@example.com>
+Date: Sat, 24 Oct 2026 12:00:00 +0000
+Subject: [PATCH 1/2] trace/kprobes: Add support for custom event probes
+Message-ID: <series-multi-1@kernel.org>
+
+---
+ kernel/trace/trace_kprobe.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c
+--- a/kernel/trace/trace_kprobe.c
++++ b/kernel/trace/trace_kprobe.c
+@@ -1,3 +1,4 @@
+ int trace_kprobe_init(void) {
++    /* E2E test probe initialization */
+     return 0;
+ }
+-- 
+2.34.1
+
+From dev@example.com Sat Oct 24 12:00:01 2026
+From: Kernel Developer <dev@example.com>
+Date: Sat, 24 Oct 2026 12:00:01 +0000
+Subject: [PATCH 2/2] trace/kprobes: Add self-test for custom event probes
+Message-ID: <series-multi-2@kernel.org>
+
+---
+ kernel/trace/trace_kprobe.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/kernel/trace/trace_kprobe.c b/kernel/trace/trace_kprobe.c
+--- a/kernel/trace/trace_kprobe.c
++++ b/kernel/trace/trace_kprobe.c
+@@ -2,3 +2,4 @@
+     /* E2E test probe initialization */
++    /* E2E test self-test probe */
+     return 0;
+ }
+-- 
+2.34.1
+EOF
+          exit 0
+          ;;
+      esac
       cat <<'EOF'
 From dev@example.com Sat Oct 24 12:00:00 2026
 From: Kernel Developer <dev@example.com>

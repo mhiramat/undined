@@ -465,7 +465,20 @@ func TestE2E_DraftOverwriteAndSendPurge(t *testing.T) {
 func TestE2E_B4SeriesApply(t *testing.T) {
 	env := setupE2EEnv(t)
 
-	applyPayload := fmt.Sprintf(`{"message_id": "patch-e2e-1@kernel.org", "target_git_repo": %q}`, env.Config.General.KernelGitDir)
+	// Seed multi-patch series emails in database
+	inbox, _ := env.DB.GetOrCreateFolder("INBOX", true)
+	patch1Header := []byte("Message-ID: <series-multi-1@kernel.org>\nSubject: [PATCH 1/2] trace/kprobes: Add support for custom event probes\nFrom: Kernel Developer <dev@example.com>\nDate: Sat, 24 Oct 2026 12:00:00 +0000\n\n")
+	patch2Header := []byte("Message-ID: <series-multi-2@kernel.org>\nSubject: [PATCH 2/2] trace/kprobes: Add self-test for custom event probes\nFrom: Kernel Developer <dev@example.com>\nDate: Sat, 24 Oct 2026 12:00:01 +0000\nIn-Reply-To: <series-multi-1@kernel.org>\nReferences: <series-multi-1@kernel.org>\n\n")
+	_, err := env.DB.InsertHeaderSummary(inbox.ID, 101, patch1Header, false, "")
+	if err != nil {
+		t.Fatalf("failed to insert patch 1: %v", err)
+	}
+	id2, err := env.DB.InsertHeaderSummary(inbox.ID, 102, patch2Header, false, "")
+	if err != nil {
+		t.Fatalf("failed to insert patch 2: %v", err)
+	}
+
+	applyPayload := fmt.Sprintf(`{"message_id": "series-multi-1@kernel.org", "target_git_repo": %q}`, env.Config.General.KernelGitDir)
 	resp, err := env.Request("POST", "/api/patch/apply", applyPayload)
 	if err != nil {
 		t.Fatalf("b4 apply request failed: %v", err)
@@ -482,6 +495,42 @@ func TestE2E_B4SeriesApply(t *testing.T) {
 		t.Fatalf("expected apply success=true, got %+v", res)
 	}
 
+	appliedCommits, ok := res["applied_commits"].([]any)
+	if !ok || len(appliedCommits) != 2 {
+		t.Fatalf("expected 2 applied commits in result, got: %+v", res["applied_commits"])
+	}
+
+	c1 := appliedCommits[0].(string)
+	c2 := appliedCommits[1].(string)
+
+	// Verify that commit 1 is recorded on patch 1
+	rec1, err := env.DB.GetReviewCommit("series-multi-1@kernel.org")
+	if err != nil || rec1 != c1 {
+		t.Errorf("expected review commit for patch 1 to be %s, got %s (err: %v)", c1, rec1, err)
+	}
+
+	// Verify that commit 2 is recorded on patch 2 (sibling mail in the series)
+	rec2, err := env.DB.GetReviewCommit("series-multi-2@kernel.org")
+	if err != nil || rec2 != c2 {
+		t.Errorf("expected review commit for patch 2 to be %s, got %s (err: %v)", c2, rec2, err)
+	}
+
+	// Verify that GET /api/messages/{id2} returns the commit in its response
+	resp2, err := env.Request("GET", fmt.Sprintf("/api/messages/%d", id2), "")
+	if err != nil {
+		t.Fatalf("failed to fetch message 2: %v", err)
+	}
+	defer resp2.Body.Close()
+	var detail2 map[string]any
+	_ = json.NewDecoder(resp2.Body).Decode(&detail2)
+	msgObj, ok := detail2["message"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected message object in response, got %+v", detail2)
+	}
+	if msgObj["review_commit_id"] != c2 {
+		t.Errorf("expected message 2 review_commit_id to be %s, got %v", c2, msgObj["review_commit_id"])
+	}
+
 	invocations := env.B4Runner.GetInvocations()
 	if len(invocations) == 0 {
 		t.Fatalf("expected mock b4 to be invoked, got 0 invocations")
@@ -489,13 +538,13 @@ func TestE2E_B4SeriesApply(t *testing.T) {
 
 	foundAm := false
 	for _, inv := range invocations {
-		if strings.Contains(inv, "am") && strings.Contains(inv, "patch-e2e-1@kernel.org") {
+		if strings.Contains(inv, "am") && strings.Contains(inv, "series-multi-1@kernel.org") {
 			foundAm = true
 			break
 		}
 	}
 	if !foundAm {
-		t.Errorf("expected b4 am invocation for patch-e2e-1@kernel.org, got: %+v", invocations)
+		t.Errorf("expected b4 am invocation for series-multi-1@kernel.org, got: %+v", invocations)
 	}
 }
 

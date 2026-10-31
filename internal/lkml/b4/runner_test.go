@@ -1,7 +1,14 @@
 package b4
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"undined-go/internal/config"
+	"undined-go/internal/storage/database"
 )
 
 func TestExtractSeriesVersion(t *testing.T) {
@@ -109,5 +116,146 @@ func TestIsValidGitRef(t *testing.T) {
 		if IsValidGitRef(ref) {
 			t.Errorf("expected %q to be invalid git ref, got true", ref)
 		}
+	}
+}
+
+func TestRecordSeriesCommits(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	msg1Header := []byte("Message-ID: <patch-1@example.com>\nSubject: [PATCH 1/2] ftrace: update kprobes\nFrom: dev@example.com\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n\n")
+	msg2Header := []byte("Message-ID: <patch-2@example.com>\nSubject: [PATCH 2/2] ftrace: add self test\nFrom: dev@example.com\nDate: Mon, 1 Jan 2026 00:00:01 +0000\nIn-Reply-To: <patch-1@example.com>\nReferences: <patch-1@example.com>\n\n")
+
+	if _, err := db.InsertHeaderSummary(folder.ID, 1, msg1Header, false, ""); err != nil {
+		t.Fatalf("failed to insert msg1: %v", err)
+	}
+	if _, err := db.InsertHeaderSummary(folder.ID, 2, msg2Header, false, ""); err != nil {
+		t.Fatalf("failed to insert msg2: %v", err)
+	}
+
+	gitDir := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("failed to create git dir: %v", err)
+	}
+
+	runGit := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", gitDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v, out: %s", args, err, string(out))
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	runGit("init")
+	runGit("config", "user.name", "Kernel Developer")
+	runGit("config", "user.email", "dev@example.com")
+
+	runGit("commit", "--allow-empty", "-m", "ftrace: update kprobes\n\nMessage-ID: <patch-1@example.com>")
+	hash1 := runGit("rev-parse", "HEAD")
+
+	runGit("commit", "--allow-empty", "-m", "ftrace: add self test\n\nMessage-ID: <patch-2@example.com>")
+	hash2 := runGit("rev-parse", "HEAD")
+
+	runner := NewB4Runner(&config.Config{}, nil, db)
+	appliedCommits := []string{hash1, hash2}
+
+	matched := runner.RecordSeriesCommits("patch-1@example.com", gitDir, appliedCommits)
+	if matched != hash1 {
+		t.Errorf("expected matched commit for patch-1 to be %s, got %s", hash1, matched)
+	}
+
+	commit1, err := db.GetReviewCommit("patch-1@example.com")
+	if err != nil || commit1 != hash1 {
+		t.Errorf("expected review commit for patch-1 to be %s, got %s (err: %v)", hash1, commit1, err)
+	}
+
+	commit2, err := db.GetReviewCommit("patch-2@example.com")
+	if err != nil || commit2 != hash2 {
+		t.Errorf("expected review commit for patch-2 to be %s, got %s (err: %v)", hash2, commit2, err)
+	}
+
+	m1, err := db.GetMessageByMsgID("patch-1@example.com")
+	if err != nil || m1.ReviewCommitID != hash1 {
+		t.Errorf("expected m1.ReviewCommitID to be %s, got %s (err: %v)", hash1, m1.ReviewCommitID, err)
+	}
+	m2, err := db.GetMessageByMsgID("patch-2@example.com")
+	if err != nil || m2.ReviewCommitID != hash2 {
+		t.Errorf("expected m2.ReviewCommitID to be %s, got %s (err: %v)", hash2, m2.ReviewCommitID, err)
+	}
+}
+
+func TestRecordSeriesCommits_SubjectAndIndexMatching(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to create folder: %v", err)
+	}
+
+	msg1Header := []byte("Message-ID: <patch-a@example.com>\nSubject: [PATCH 1/2] tracing: fix bug A\nFrom: dev@example.com\nDate: Mon, 1 Jan 2026 00:00:00 +0000\n\n")
+	msg2Header := []byte("Message-ID: <patch-b@example.com>\nSubject: [PATCH 2/2] tracing: fix bug B\nFrom: dev@example.com\nDate: Mon, 1 Jan 2026 00:00:01 +0000\nIn-Reply-To: <patch-a@example.com>\nReferences: <patch-a@example.com>\n\n")
+
+	if _, err := db.InsertHeaderSummary(folder.ID, 1, msg1Header, false, ""); err != nil {
+		t.Fatalf("failed to insert msg1: %v", err)
+	}
+	if _, err := db.InsertHeaderSummary(folder.ID, 2, msg2Header, false, ""); err != nil {
+		t.Fatalf("failed to insert msg2: %v", err)
+	}
+
+	gitDir := filepath.Join(tmpDir, "repo")
+	if err := os.MkdirAll(gitDir, 0755); err != nil {
+		t.Fatalf("failed to create git dir: %v", err)
+	}
+
+	runGit := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", gitDir}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v, out: %s", args, err, string(out))
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	runGit("init")
+	runGit("config", "user.name", "Kernel Developer")
+	runGit("config", "user.email", "dev@example.com")
+
+	runGit("commit", "--allow-empty", "-m", "tracing: fix bug A")
+	hash1 := runGit("rev-parse", "HEAD")
+
+	runGit("commit", "--allow-empty", "-m", "tracing: fix bug B")
+	hash2 := runGit("rev-parse", "HEAD")
+
+	runner := NewB4Runner(&config.Config{}, nil, db)
+	appliedCommits := []string{hash1, hash2}
+
+	matched := runner.RecordSeriesCommits("patch-a@example.com", gitDir, appliedCommits)
+	if matched != hash1 {
+		t.Errorf("expected matched commit for patch-a to be %s, got %s", hash1, matched)
+	}
+
+	c1, err := db.GetReviewCommit("patch-a@example.com")
+	if err != nil || c1 != hash1 {
+		t.Errorf("expected review commit for patch-a to be %s, got %s", hash1, c1)
+	}
+
+	c2, err := db.GetReviewCommit("patch-b@example.com")
+	if err != nil || c2 != hash2 {
+		t.Errorf("expected review commit for patch-b to be %s, got %s", hash2, c2)
 	}
 }

@@ -222,7 +222,11 @@ export async function applyPatchSeries(messageId, targetGitRepo = null, branchNa
       base_commit: baseCommit,
     }),
   });
-  return res.json();
+  const data = await res.json();
+  if (data?.success) {
+    clearMessageDetailCache();
+  }
+  return data;
 }
 
 export async function abortApplyPatchSeries({ target_git_repo = null, branch_name = null, base_commit = null, original_branch = null, head_before = null } = {}) {

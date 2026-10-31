@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"undined-go/internal/config"
@@ -21,6 +22,9 @@ var (
 	seriesVersionRegex = regexp.MustCompile(`(?i)\[[^\]]*\bv(\d+)\b[^\]]*\]`)
 	slugCleanRegex     = regexp.MustCompile(`[^a-z0-9]+`)
 	stripPatchRegex    = regexp.MustCompile(`(?i)^(?:\s*\[[^\]]*\]\s*|\s*(?:re|fwd):\s*)+`)
+	msgIDTrailerRegex  = regexp.MustCompile(`(?im)^Message-ID:\s*<([^>]+)>`)
+	loreLinkRegex      = regexp.MustCompile(`(?im)^Link:\s*https?://lore\.kernel\.org/(?:r/|all/|[a-zA-Z0-9_-]+/)([^/\s>]+)`)
+	seriesIndexRegex   = regexp.MustCompile(`(?i)\[PATCH[^\]]*\b(\d+)\s*/\s*(\d+)[^\]]*\]`)
 )
 
 // ExtractSeriesVersion extracts version string (e.g. "v2") from subject.
@@ -361,7 +365,11 @@ func (b *B4Runner) ApplyPatch(
 		appliedCommits = append(appliedCommits, headAfter)
 	}
 
+	matchedCommit := b.RecordSeriesCommits(cleanedID, repoPath, appliedCommits)
 	primaryCommit := headAfter
+	if matchedCommit != "" {
+		primaryCommit = matchedCommit
+	}
 	_ = b.DB.SetMessageReviewCommit(cleanedID, primaryCommit)
 
 	return &ApplyResult{
@@ -378,6 +386,151 @@ func (b *B4Runner) ApplyPatch(
 		ReviewCommitID: primaryCommit,
 		AppliedCommits: appliedCommits,
 	}, nil
+}
+
+// RecordSeriesCommits inspects applied git commits, matches them to messages in the series,
+// and records review commit hashes for all identified patch emails in the database.
+// Returns the commit ID matching cleanedID if specifically identified.
+func (b *B4Runner) RecordSeriesCommits(cleanedID, repoPath string, appliedCommits []string) string {
+	if b.DB == nil || len(appliedCommits) == 0 || repoPath == "" {
+		return ""
+	}
+
+	// 1. Gather all candidate messages (from thread hierarchy, same folder, and b4-imports)
+	candidateMap := make(map[string]*database.Message)
+	addCandidate := func(m *database.Message) {
+		if m == nil {
+			return
+		}
+		clean := parser.CleanMsgID(m.MessageID)
+		if clean != "" {
+			if _, exists := candidateMap[clean]; !exists {
+				candidateMap[clean] = m
+			}
+		}
+	}
+
+	var origMsg *database.Message
+	if cleanedID != "" {
+		origMsg, _ = b.DB.GetMessageByMsgID(cleanedID)
+		addCandidate(origMsg)
+
+		if threadMsgs, err := b.DB.GetThreadHierarchy(cleanedID); err == nil {
+			for _, m := range threadMsgs {
+				addCandidate(m)
+			}
+		}
+	}
+
+	if origMsg != nil && origMsg.FolderID > 0 {
+		if folderMsgs, err := b.DB.ListMessages(&origMsg.FolderID, 200, 0); err == nil {
+			for _, m := range folderMsgs {
+				addCandidate(m)
+			}
+		}
+	}
+
+	// Also check b4-imports folder if present
+	if b4Folder, err := b.DB.GetFolderByName(constants.FolderB4Imports); err == nil && b4Folder != nil {
+		if b4Msgs, err := b.DB.ListMessages(&b4Folder.ID, 200, 0); err == nil {
+			for _, m := range b4Msgs {
+				addCandidate(m)
+			}
+		}
+	}
+
+	// 2. Extract commit info (subject and body) from git
+	type commitInfo struct {
+		hash    string
+		subject string
+		body    string
+	}
+	commits := make([]commitInfo, 0, len(appliedCommits))
+	for _, hash := range appliedCommits {
+		info := commitInfo{hash: hash}
+		if out, err := exec.Command("git", "-C", repoPath, "log", "-1", "--format=%s", hash).Output(); err == nil {
+			info.subject = strings.TrimSpace(string(out))
+		}
+		if out, err := exec.Command("git", "-C", repoPath, "log", "-1", "--format=%B", hash).Output(); err == nil {
+			info.body = string(out)
+		}
+		commits = append(commits, info)
+	}
+
+	assignedCommits := make(map[string]bool)
+	assignedMsgs := make(map[string]string) // cleanMsgID -> commitHash
+
+	// Priority 1: Match via Message-ID / Link trailers in commit body
+	for _, c := range commits {
+		var extractedID string
+		if m := msgIDTrailerRegex.FindStringSubmatch(c.body); len(m) > 1 {
+			extractedID = parser.CleanMsgID(m[1])
+		} else if m := loreLinkRegex.FindStringSubmatch(c.body); len(m) > 1 {
+			extractedID = parser.CleanMsgID(m[1])
+		}
+
+		if extractedID != "" {
+			_ = b.DB.SetMessageReviewCommit(extractedID, c.hash)
+			assignedCommits[c.hash] = true
+			assignedMsgs[extractedID] = c.hash
+		}
+	}
+
+	// Priority 2: Match via CleanSeriesTitle(Subject)
+	for _, c := range commits {
+		if assignedCommits[c.hash] || c.subject == "" {
+			continue
+		}
+		for msgID, msg := range candidateMap {
+			if assignedMsgs[msgID] != "" {
+				continue
+			}
+			msgTitle := CleanSeriesTitle(msg.Subject)
+			if msgTitle != "" && (strings.EqualFold(msgTitle, c.subject) || strings.EqualFold(strings.TrimSpace(msg.Subject), c.subject)) {
+				_ = b.DB.SetMessageReviewCommit(msgID, c.hash)
+				assignedCommits[c.hash] = true
+				assignedMsgs[msgID] = c.hash
+				break
+			}
+		}
+	}
+
+	// Priority 3: Match via series index [i/N]
+	for msgID, msg := range candidateMap {
+		if assignedMsgs[msgID] != "" {
+			continue
+		}
+		if m := seriesIndexRegex.FindStringSubmatch(msg.Subject); len(m) > 2 {
+			idx, err1 := strconv.Atoi(m[1])
+			if err1 == nil && idx >= 1 && idx <= len(commits) {
+				c := commits[idx-1]
+				if !assignedCommits[c.hash] {
+					_ = b.DB.SetMessageReviewCommit(msgID, c.hash)
+					assignedCommits[c.hash] = true
+					assignedMsgs[msgID] = c.hash
+				}
+			}
+		}
+	}
+
+	// Priority 4: Single commit match
+	if len(commits) == 1 && len(assignedCommits) == 0 {
+		c := commits[0]
+		targetID := cleanedID
+		if targetID == "" && len(candidateMap) > 0 {
+			for id := range candidateMap {
+				targetID = id
+				break
+			}
+		}
+		if targetID != "" {
+			_ = b.DB.SetMessageReviewCommit(targetID, c.hash)
+			assignedCommits[c.hash] = true
+			assignedMsgs[targetID] = c.hash
+		}
+	}
+
+	return assignedMsgs[cleanedID]
 }
 
 // AbortResult contains the output of git am --abort.
