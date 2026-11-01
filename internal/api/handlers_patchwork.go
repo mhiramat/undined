@@ -121,6 +121,37 @@ func (s *Server) handlePatchworkSyncTodo(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	if len(states) == 0 && r.Body != nil {
+		var reqBody struct {
+			States any `json:"states"`
+		}
+		// Attempt to parse JSON request body if present; ignore empty or non-JSON payloads
+		// to allow fallback to configured patchwork.todo_states.
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err == nil && reqBody.States != nil {
+			switch v := reqBody.States.(type) {
+			case string:
+				for _, st := range strings.Split(v, ",") {
+					if clean := strings.TrimSpace(st); clean != "" {
+						states = append(states, clean)
+					}
+				}
+			case []any:
+				for _, item := range v {
+					if str, ok := item.(string); ok {
+						if clean := strings.TrimSpace(str); clean != "" {
+							states = append(states, clean)
+						}
+					}
+				}
+			case []string:
+				for _, st := range v {
+					if clean := strings.TrimSpace(st); clean != "" {
+						states = append(states, clean)
+					}
+				}
+			}
+		}
+	}
 
 	if s.Patchwork == nil {
 		http.Error(w, "Patchwork client not configured", http.StatusInternalServerError)

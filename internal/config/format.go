@@ -114,6 +114,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "token_cmd", getValue: func(c *Config) any { return c.Patchwork.TokenCmd }},
 				{key: "preferred_archives", getValue: func(c *Config) any { return c.Patchwork.PreferredArchives }},
 				{key: "default_project", getValue: func(c *Config) any { return c.Patchwork.DefaultProject }},
+				{key: "todo_states", getValue: func(c *Config) any { return c.Patchwork.GetTodoStates() }},
 				{key: "delegate-users", getValue: func(c *Config) any { return c.Patchwork.GetDelegateUsers() }},
 				{key: "timeout_seconds", getValue: func(c *Config) any { return c.Patchwork.TimeoutSeconds }},
 			},

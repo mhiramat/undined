@@ -179,6 +179,73 @@ func TestSyncTodoFromPatchwork(t *testing.T) {
 	}
 }
 
+func TestSyncTodoFromPatchwork_DefaultAndConfiguredStates(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "undined-todo-states-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to init database: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	queriedStates := make(map[string]int)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/users/") {
+			w.Write([]byte(`[{"id": 99, "username": "dev", "email": "dev@example.com"}]`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/888/mbox/") {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("From: dev@kernel.org\nSubject: [PATCH] queued patch\nMessage-ID: <patch-888@kernel.org>\nDate: Sat, 17 Oct 2026 12:00:00 +0000\n\nQueued\n"))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/") {
+			st := r.URL.Query().Get("state")
+			queriedStates[st]++
+			if st == "queued" {
+				w.Write([]byte(`[{"id": 888, "name": "[PATCH] queued patch", "msgid": "patch-888@kernel.org", "state": "queued"}]`))
+				return
+			}
+			w.Write([]byte(`[]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = server.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
+	cfg.Patchwork.Token = "test-token"
+	cfg.Patchwork.TodoStates = []string{"queued"}
+
+	client := NewClient(cfg, db, store)
+
+	// Call with nil states, so it falls back to cfg.Patchwork.GetTodoStates()
+	res, err := client.SyncTodoFromPatchwork(nil)
+	if err != nil {
+		t.Fatalf("SyncTodoFromPatchwork with configured states failed: %v", err)
+	}
+
+	if res.SyncedCount != 1 {
+		t.Errorf("SyncedCount = %d, want 1", res.SyncedCount)
+	}
+	if queriedStates["queued"] == 0 {
+		t.Errorf("queriedStates[\"queued\"] = %d, want > 0", queriedStates["queued"])
+	}
+}
+
 func TestGetPatchInfoEnrichmentAndCache(t *testing.T) {
 	callCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

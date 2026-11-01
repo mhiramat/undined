@@ -100,6 +100,7 @@ junk = true
 	hasCommentedHost := false
 	hasCommentedDebug := false
 	hasCommentedURL := false
+	hasCommentedTodoStates := false
 
 	for _, l := range lines {
 		trimmed := strings.TrimSpace(l)
@@ -112,6 +113,9 @@ junk = true
 		if trimmed == `# url = "https://patchwork.kernel.org"` {
 			hasCommentedURL = true
 		}
+		if trimmed == `# todo_states = ["new", "under-review"]` {
+			hasCommentedTodoStates = true
+		}
 	}
 
 	if !hasCommentedHost {
@@ -122,6 +126,9 @@ junk = true
 	}
 	if !hasCommentedURL {
 		t.Errorf("expected '# url = \"https://patchwork.kernel.org\"' in output:\n%s", out)
+	}
+	if !hasCommentedTodoStates {
+		t.Errorf("expected '# todo_states = [\"new\", \"under-review\"]' in output:\n%s", out)
 	}
 
 	// 3. Obsolete settings and unknown sections must be omitted

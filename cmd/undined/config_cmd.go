@@ -194,6 +194,7 @@ port = 8080
 enabled = true
 url = "https://patchwork.kernel.org"
 api_version = "1.4"
+# todo-states = ["new", "under-review"]
 # delegate-users = ["dev", "reviewer"]
 `
 		if err := os.WriteFile(targetPath, []byte(initialContent), 0600); err != nil {

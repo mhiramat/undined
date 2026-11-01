@@ -219,3 +219,68 @@ delegate_users = ["alice", "bob"]
 	}
 }
 
+func TestPatchworkTodoStatesParsing(t *testing.T) {
+	// 1. Default config
+	cfgDef := NewDefaultConfig()
+	defStates := cfgDef.Patchwork.GetTodoStates()
+	if len(defStates) != 2 || defStates[0] != "new" || defStates[1] != "under-review" {
+		t.Fatalf("GetTodoStates() = %#v, want ['new', 'under-review']", defStates)
+	}
+
+	tmpDir := t.TempDir()
+
+	// 2. Array with todo_states
+	confPath1 := filepath.Join(tmpDir, "config1.toml")
+	content1 := `
+[patchwork]
+todo_states = ["new", "queued"]
+`
+	if err := os.WriteFile(confPath1, []byte(content1), 0644); err != nil {
+		t.Fatalf("failed to write test config 1: %v", err)
+	}
+	cfg1, err := Load(confPath1)
+	if err != nil {
+		t.Fatalf("failed to load config 1: %v", err)
+	}
+	states1 := cfg1.Patchwork.GetTodoStates()
+	if len(states1) != 2 || states1[0] != "new" || states1[1] != "queued" {
+		t.Fatalf("GetTodoStates() = %#v, want ['new', 'queued']", states1)
+	}
+
+	// 3. Kebab-case todo-states with mixed case and spaces to normalize
+	confPath2 := filepath.Join(tmpDir, "config2.toml")
+	content2 := `
+[patchwork]
+todo-states = ["New", "Queued", "Under Review", "new"]
+`
+	if err := os.WriteFile(confPath2, []byte(content2), 0644); err != nil {
+		t.Fatalf("failed to write test config 2: %v", err)
+	}
+	cfg2, err := Load(confPath2)
+	if err != nil {
+		t.Fatalf("failed to load config 2: %v", err)
+	}
+	states2 := cfg2.Patchwork.GetTodoStates()
+	if len(states2) != 3 || states2[0] != "new" || states2[1] != "queued" || states2[2] != "under-review" {
+		t.Fatalf("GetTodoStates() = %#v, want ['new', 'queued', 'under-review']", states2)
+	}
+
+	// 4. Comma-separated string with todo-states
+	confPath3 := filepath.Join(tmpDir, "config3.toml")
+	content3 := `
+[patchwork]
+todo-states = "New, queued, under_review"
+`
+	if err := os.WriteFile(confPath3, []byte(content3), 0644); err != nil {
+		t.Fatalf("failed to write test config 3: %v", err)
+	}
+	cfg3, err := Load(confPath3)
+	if err != nil {
+		t.Fatalf("failed to load config 3: %v", err)
+	}
+	states3 := cfg3.Patchwork.GetTodoStates()
+	if len(states3) != 3 || states3[0] != "new" || states3[1] != "queued" || states3[2] != "under-review" {
+		t.Fatalf("GetTodoStates() = %#v, want ['new', 'queued', 'under-review']", states3)
+	}
+}
+

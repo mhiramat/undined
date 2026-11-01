@@ -42,6 +42,7 @@ func TestFormatTOMLValue(t *testing.T) {
 		{"patchwork.delegate-users", `["dev", "reviewer"]`, `["dev", "reviewer"]`},
 		{"patchwork.delegate-users", `[dev, reviewer]`, `["dev", "reviewer"]`},
 		{"patchwork.delegate-users", `dev, reviewer`, `["dev", "reviewer"]`},
+		{"patchwork.todo_states", `new, queued`, `["new", "queued"]`},
 		{"patchwork.preferred_archives", `linux-trace`, `"linux-trace"`},
 	}
 
@@ -58,6 +59,7 @@ func TestGetConfigValue(t *testing.T) {
 	cfg.General.Port = 9090
 	cfg.Patchwork.Username = "dev"
 	cfg.Patchwork.DelegateUsers = []string{"dev", "maintainer2"}
+	cfg.Patchwork.TodoStates = []string{"new", "queued"}
 
 	val, err := GetConfigValue(cfg, "general.port")
 	if err != nil || val != "9090" {
@@ -77,6 +79,16 @@ func TestGetConfigValue(t *testing.T) {
 	val, err = GetConfigValue(cfg, "patchwork.delegate_users")
 	if err != nil || val != `["dev", "maintainer2"]` {
 		t.Fatalf(`expected ["dev", "maintainer2"], got %q (err: %v)`, val, err)
+	}
+
+	val, err = GetConfigValue(cfg, "patchwork.todo_states")
+	if err != nil || val != `["new", "queued"]` {
+		t.Fatalf(`expected ["new", "queued"], got %q (err: %v)`, val, err)
+	}
+
+	val, err = GetConfigValue(cfg, "patchwork.todo-states")
+	if err != nil || val != `["new", "queued"]` {
+		t.Fatalf(`expected ["new", "queued"], got %q (err: %v)`, val, err)
 	}
 
 	_, err = GetConfigValue(cfg, "unknown.key")
@@ -135,6 +147,18 @@ tag = "Critical"
 	content = string(contentBytes)
 	if !strings.Contains(content, `default_project = "linux-trace"`) {
 		t.Errorf("expected inserted default_project in file, got:\n%s", content)
+	}
+
+	// 2b. Insert todo_states array: patchwork.todo_states
+	err = SetTOMLValue(confPath, "patchwork.todo_states", `["new", "queued"]`)
+	if err != nil {
+		t.Fatalf("SetTOMLValue todo_states failed: %v", err)
+	}
+
+	contentBytes, _ = os.ReadFile(confPath)
+	content = string(contentBytes)
+	if !strings.Contains(content, `todo_states = ["new", "queued"]`) {
+		t.Errorf("expected inserted todo_states in file, got:\n%s", content)
 	}
 
 	// 3. Add key to brand new section: lkml.b4_cmd

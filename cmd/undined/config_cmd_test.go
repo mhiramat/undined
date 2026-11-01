@@ -85,6 +85,37 @@ delegate-users = ["dev", "maintainer2"]
 		t.Errorf("expected updated delegate users, got %q", out)
 	}
 
+	// 3b. Test todo_states get and set
+	out = captureOutput(func() {
+		code := runConfigCommand([]string{"-C", confPath, "get", "patchwork.todo_states"})
+		if code != 0 {
+			t.Errorf("runConfigCommand() exit code = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, `["new", "under-review"]`) {
+		t.Errorf("output = %q, want default todo states", out)
+	}
+
+	out = captureOutput(func() {
+		code := runConfigCommand([]string{"-C", confPath, "set", "patchwork.todo_states", `["new", "queued"]`})
+		if code != 0 {
+			t.Errorf("runConfigCommand() exit code = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "Updated patchwork.todo_states") {
+		t.Errorf("output = %q, want update confirmation", out)
+	}
+
+	out = captureOutput(func() {
+		code := runConfigCommand([]string{"-C", confPath, "get", "patchwork.todo_states"})
+		if code != 0 {
+			t.Errorf("runConfigCommand() exit code = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, `["new", "queued"]`) {
+		t.Errorf("output = %q, want updated todo states", out)
+	}
+
 	// 4. undined config show
 	out = captureOutput(func() {
 		code := runConfigCommand([]string{"-C", confPath, "show"})

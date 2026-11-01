@@ -189,6 +189,8 @@ type PatchworkConfig struct {
 	Token             string   `toml:"token" json:"token"`
 	PreferredArchives []string `toml:"preferred_archives" json:"preferred_archives"`
 	DefaultProject     string   `toml:"default_project" json:"default_project"`
+	TodoStates         []string `toml:"todo_states,omitempty" json:"todo_states,omitempty"`
+	TodoStatesKebab    any      `toml:"todo-states,omitempty" json:"-"`
 	DelegateUsers      []string `toml:"delegate_users" json:"delegate_users"`
 	DelegateUsersKebab any      `toml:"delegate-users,omitempty" json:"-"`
 	TimeoutSeconds     float64  `toml:"timeout_seconds" json:"timeout_seconds"`
@@ -274,9 +276,43 @@ func (p *PatchworkConfig) GetPreferredArchives() []string {
 	return nil
 }
 
-// GetTodoStates returns default patchwork states synced to TODO mailbox.
+// GetTodoStates returns configured patchwork states synced to TODO mailbox.
+// Defaults to ["new", "under-review"] if not configured.
 func (p *PatchworkConfig) GetTodoStates() []string {
-	return []string{"new", "under-review"}
+	var raw []string
+	if p.TodoStatesKebab != nil {
+		switch v := p.TodoStatesKebab.(type) {
+		case string:
+			raw = append(raw, strings.Split(v, ",")...)
+		case []any:
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					raw = append(raw, s)
+				}
+			}
+		case []string:
+			raw = append(raw, v...)
+		}
+	} else {
+		raw = append(raw, p.TodoStates...)
+	}
+
+	var cleaned []string
+	seen := make(map[string]bool)
+	for _, st := range raw {
+		s := strings.ToLower(strings.TrimSpace(st))
+		s = strings.ReplaceAll(s, " ", "-")
+		s = strings.ReplaceAll(s, "_", "-")
+		if s != "" && !seen[s] {
+			seen[s] = true
+			cleaned = append(cleaned, s)
+		}
+	}
+
+	if len(cleaned) == 0 {
+		return []string{"new", "under-review"}
+	}
+	return cleaned
 }
 
 // GetDelegateUsers returns cleaned list of configured delegate usernames.

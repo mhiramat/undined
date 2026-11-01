@@ -731,8 +731,8 @@ Lists patches delegated to the configured maintainer account.
 ### `POST /api/patchwork/sync-todo`
 Synchronizes delegated patches from Patchwork into the local `TODO` mailbox.
 
-- **Query Parameters**:
-  - `states` (optional, repeated string): Statuses to synchronize (defaults to `new`, `under-review`, `queued`).
+- **Query Parameters / Request Body**:
+  - `states` (optional, array of string or comma-separated string): Statuses to synchronize (defaults to configured `patchwork.todo_states` or `["new", "under-review"]`).
 - **Response `200 OK`**:
   ```json
   {

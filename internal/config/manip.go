@@ -79,7 +79,7 @@ func FormatTOMLValue(key, val string) string {
 
 	// Array field where user passed comma-separated items (e.g. delegate-users = dev, reviewer)
 	normKey := NormalizeKey(key)
-	if strings.Contains(normKey, "delegate") || strings.Contains(normKey, "archives") || strings.Contains(normKey, "sync_folders") {
+	if strings.Contains(normKey, "delegate") || strings.Contains(normKey, "archives") || strings.Contains(normKey, "sync_folders") || strings.Contains(normKey, "todo") || strings.Contains(normKey, "states") {
 		if strings.Contains(val, ",") {
 			parts := strings.Split(val, ",")
 			var quoted []string
@@ -311,6 +311,7 @@ func GetConfigValue(cfg *Config, keyPath string) (string, error) {
 				"token_cmd":          cfg.Patchwork.TokenCmd,
 				"preferred_archives": cfg.Patchwork.PreferredArchives,
 				"default_project":    cfg.Patchwork.DefaultProject,
+				"todo_states":        cfg.Patchwork.GetTodoStates(),
 				"delegate_users":     cfg.Patchwork.GetDelegateUsers(),
 				"timeout_seconds":    cfg.Patchwork.TimeoutSeconds,
 			}), nil
@@ -334,6 +335,8 @@ func GetConfigValue(cfg *Config, keyPath string) (string, error) {
 			return formatStringSlice(cfg.Patchwork.PreferredArchives), nil
 		case "default_project":
 			return cfg.Patchwork.DefaultProject, nil
+		case "todo_states", "todo-states":
+			return formatStringSlice(cfg.Patchwork.GetTodoStates()), nil
 		case "delegate_users", "delegate-users":
 			return formatStringSlice(cfg.Patchwork.GetDelegateUsers()), nil
 		case "timeout_seconds":
