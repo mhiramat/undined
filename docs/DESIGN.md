@@ -21,7 +21,7 @@ UndineD decouples the traditional MUA into:
 * **Selective IMAP Sync & Lightweight Header Fetching**: Never poll bloated LKML archival folders from IMAP. Synchronize only designated personal/direct labels. Fetch fast header summaries to render mail lists instantly, downloading full RFC822 bodies on-demand.
 * **On-Demand Hydration via b4**: Dynamically fetch missing parent threads and patch series from `lore.kernel.org` using `b4 mbox` whenever a solitary reply or patch arrives.
 * **Patchwork Management**: Full integration with `patchwork.kernel.org` (REST API v1.4) to view patch review status, assign delegates, check CI test results, and download delegated patches directly into the local `TODO` mailbox.
-* **Dual Editor Architecture**: Inline review notes taken in the browser are automatically merged into clean, RFC-compliant plain-text quotes. Reviewers can compose replies directly in the built-in browser editor (preserving native browser undo/redo history) or hand off to an external desktop terminal editor (`foot`, `nvim`, `vim`).
+* **Dual Editor Architecture**: Inline review notes taken in the browser are automatically merged into clean, RFC-compliant plain-text quotes. Reviewers can compose replies directly in the built-in browser editor (featuring a dedicated Undo/Redo stack with Ctrl+Z/Ctrl+Y, toolbar controls, and tab preservation) or hand off to an external desktop terminal editor (`foot`, `nvim`, `vim`).
 * **AI-Agent Native (MCP)**: First-class MCP tool endpoints allowing Antigravity or other agents to search archives, retrieve threads, inspect Patchwork metadata, review patches, and post targeted line-specific review comments.
 
 ---

@@ -1913,10 +1913,25 @@ body.composer-standalone-body {
   transition: all 0.15s ease;
 }
 
-.composer-tag-btn:hover {
+.composer-tag-btn:hover:not(:disabled) {
   background-color: var(--bg-active);
   border-color: var(--accent-blue);
   color: #fff;
+}
+
+.composer-tag-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: var(--border-color);
+  background-color: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.composer-toolbar-separator {
+  width: 1px;
+  height: 16px;
+  background-color: var(--border-color);
+  margin: 0 4px;
 }
 
 .composer-body-container {

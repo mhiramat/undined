@@ -5,6 +5,7 @@
  */
 
 import { fetchConfig, fetchFolders, fetchKnownAddresses, fetchMessages, openEditor, previewQuote, saveDraft, sendEmail } from "../api.js";
+import { EditorHistory } from "../editorHistory.js";
 import { store } from "../store.js";
 
 let activeModal = null;
@@ -122,7 +123,7 @@ export function openInternalEditor({
         </div>
       </div>
 
-      <!-- Quick Action Toolbar for Review Tags -->
+      <!-- Quick Action Toolbar for Review Tags & Undo/Redo -->
       <div class="composer-toolbar">
         <span class="composer-toolbar-label">Insert Tag:</span>
         <button type="button" class="composer-tag-btn" id="btn-insert-acked" title="Insert Acked-by: tag at cursor (Alt+A)">
@@ -133,6 +134,13 @@ export function openInternalEditor({
         </button>
         <button type="button" class="composer-tag-btn" id="btn-erase-after-cursor" title="Erase text lines after cursor, keeping signature (Ctrl+K)">
           ✂️ Erase after cursor
+        </button>
+        <span class="composer-toolbar-separator"></span>
+        <button type="button" class="composer-tag-btn" id="btn-comp-undo" title="Undo (Ctrl+Z)" disabled>
+          ↩️ Undo
+        </button>
+        <button type="button" class="composer-tag-btn" id="btn-comp-redo" title="Redo (Ctrl+Y)" disabled>
+          ↪️ Redo
         </button>
       </div>
 
@@ -153,7 +161,7 @@ export function openInternalEditor({
           <span class="composer-sep">·</span>
           <span class="composer-tab-indicator">Tab Size: 8</span>
           <span class="composer-sep">·</span>
-          <span class="composer-hint">Alt+A: Acked-by · Alt+R: Reviewed-by · Ctrl+K: Erase after cursor · Ctrl+Enter: Send</span>
+          <span class="composer-hint">Ctrl+Z: Undo · Ctrl+Y: Redo · Alt+A: Acked-by · Alt+R: Reviewed-by · Ctrl+K: Erase after cursor · Ctrl+Enter: Send</span>
         </div>
         <div class="composer-footer-right">
           <button type="button" class="composer-btn secondary" id="btn-comp-save-draft">
@@ -184,6 +192,8 @@ export function openInternalEditor({
   const insertAckedBtn = modalEl.querySelector("#btn-insert-acked");
   const insertReviewedBtn = modalEl.querySelector("#btn-insert-reviewed");
   const eraseAfterCursorBtn = modalEl.querySelector("#btn-erase-after-cursor");
+  const undoBtn = modalEl.querySelector("#btn-comp-undo");
+  const redoBtn = modalEl.querySelector("#btn-comp-redo");
 
   if (popoutBtn) {
     popoutBtn.addEventListener("click", () => {
@@ -221,6 +231,40 @@ export function openInternalEditor({
     bodyTextarea.setSelectionRange(0, 0);
     updateCursorPos();
   }, 50);
+
+  const history = new EditorHistory(body, 0, 0);
+
+  function updateUndoRedoUI() {
+    if (undoBtn) undoBtn.disabled = !history.canUndo();
+    if (redoBtn) redoBtn.disabled = !history.canRedo();
+  }
+
+  function performUndo() {
+    const state = history.undo();
+    if (!state) return;
+    bodyTextarea.value = state.value;
+    bodyTextarea.setSelectionRange(state.selectionStart, state.selectionEnd);
+    updateCursorPos();
+    updateUndoRedoUI();
+  }
+
+  function performRedo() {
+    const state = history.redo();
+    if (!state) return;
+    bodyTextarea.value = state.value;
+    bodyTextarea.setSelectionRange(state.selectionStart, state.selectionEnd);
+    updateCursorPos();
+    updateUndoRedoUI();
+  }
+
+  undoBtn?.addEventListener("click", () => {
+    bodyTextarea.focus();
+    performUndo();
+  });
+  redoBtn?.addEventListener("click", () => {
+    bodyTextarea.focus();
+    performRedo();
+  });
 
   function getUserTagIdentity() {
     const cfg = store.getState().config;
@@ -265,20 +309,13 @@ export function openInternalEditor({
 
     const textToInsert = (needLeadingNewline ? "\n" : "") + tagText + (needTrailingNewline ? "\n" : "");
 
-    let inserted = false;
-    try {
-      inserted = document.execCommand("insertText", false, textToInsert);
-    } catch {
-      inserted = false;
-    }
+    bodyTextarea.value = before + textToInsert + after;
+    const newPos = start + textToInsert.length;
+    bodyTextarea.selectionStart = bodyTextarea.selectionEnd = newPos;
 
-    if (!inserted) {
-      bodyTextarea.value = before + textToInsert + after;
-      const newPos = start + textToInsert.length;
-      bodyTextarea.selectionStart = bodyTextarea.selectionEnd = newPos;
-    }
-
+    history.record(bodyTextarea.value, newPos, newPos, "tag", true);
     updateCursorPos();
+    updateUndoRedoUI();
     showToast(`Inserted ${tagType}:`, "info");
   }
 
@@ -301,23 +338,13 @@ export function openInternalEditor({
     const removedText = val.substring(start, end);
     const removedLines = removedText.split("\n").length;
 
-    // Use selection + execCommand to preserve browser undo history (Ctrl+Z) per Rule 3
-    bodyTextarea.selectionStart = start;
-    bodyTextarea.selectionEnd = end;
+    bodyTextarea.value = val.substring(0, start) + val.substring(end);
+    bodyTextarea.selectionStart = bodyTextarea.selectionEnd = start;
 
-    let success = false;
-    try {
-      success = document.execCommand("delete", false, null);
-    } catch {
-      success = false;
-    }
-
-    if (!success) {
-      bodyTextarea.value = val.substring(0, start) + val.substring(end);
-      bodyTextarea.selectionStart = bodyTextarea.selectionEnd = start;
-    }
-
+    history.record(bodyTextarea.value, start, start, "erase", true);
     updateCursorPos();
+    updateUndoRedoUI();
+
     if (range.sigFound) {
       showToast(`Erased ${removedLines} line${removedLines > 1 ? "s" : ""} before signature`, "info");
     } else {
@@ -329,9 +356,33 @@ export function openInternalEditor({
   insertReviewedBtn?.addEventListener("click", () => insertTag("Reviewed-by"));
   eraseAfterCursorBtn?.addEventListener("click", eraseLinesAfterCursor);
 
-  // Key listener on modal for Alt+A, Alt+R, and Ctrl+K / Alt+K
+  // Key listener on modal for Alt+A, Alt+R, Ctrl+K, and Ctrl+Z / Ctrl+Y
   modalEl.addEventListener("keydown", (e) => {
     if (e.repeat) return;
+
+    const isEditingMetaInput = e.target === toInput || e.target === ccInput || e.target === subjectInput;
+    if (!isEditingMetaInput) {
+      // Undo: Ctrl+Z / Cmd+Z
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        e.stopPropagation();
+        bodyTextarea.focus();
+        performUndo();
+        return;
+      }
+      // Redo: Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z
+      if (
+        ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "y" || e.key === "Y")) ||
+        ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "z" || e.key === "Z"))
+      ) {
+        e.preventDefault();
+        e.stopPropagation();
+        bodyTextarea.focus();
+        performRedo();
+        return;
+      }
+    }
+
     if ((e.ctrlKey || e.metaKey || e.altKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       e.stopPropagation();
@@ -351,18 +402,61 @@ export function openInternalEditor({
     }
   });
 
-  // Tab key preservation in textarea (insert literal \t without losing focus)
+  let isComposing = false;
+  bodyTextarea.addEventListener("compositionstart", () => {
+    isComposing = true;
+  });
+  bodyTextarea.addEventListener("compositionend", () => {
+    isComposing = false;
+    history.record(bodyTextarea.value, bodyTextarea.selectionStart, bodyTextarea.selectionEnd, "input", true);
+    updateUndoRedoUI();
+  });
+
+  bodyTextarea.addEventListener("paste", () => {
+    history.breakGroup();
+  });
+  bodyTextarea.addEventListener("cut", () => {
+    history.breakGroup();
+  });
+
+  // Keyboard shortcut listener on bodyTextarea
   bodyTextarea.addEventListener("keydown", (e) => {
+    // Undo: Ctrl+Z / Cmd+Z (without Shift)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z")) {
+      e.preventDefault();
+      e.stopPropagation();
+      performUndo();
+      return;
+    }
+    // Redo: Ctrl+Y / Cmd+Y, or Ctrl+Shift+Z / Cmd+Shift+Z
+    if (
+      ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "y" || e.key === "Y")) ||
+      ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "z" || e.key === "Z"))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      performRedo();
+      return;
+    }
+
     if (e.key === "Tab") {
       e.preventDefault();
       const start = bodyTextarea.selectionStart;
       const end = bodyTextarea.selectionEnd;
-      bodyTextarea.value = bodyTextarea.value.substring(0, start) + "\t" + bodyTextarea.value.substring(end);
-      bodyTextarea.selectionStart = bodyTextarea.selectionEnd = start + 1;
+      const val = bodyTextarea.value;
+      bodyTextarea.value = val.substring(0, start) + "\t" + val.substring(end);
+      const newPos = start + 1;
+      bodyTextarea.selectionStart = bodyTextarea.selectionEnd = newPos;
+      history.record(bodyTextarea.value, newPos, newPos, "tab", true);
       updateCursorPos();
-    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      triggerSend();
+      updateUndoRedoUI();
+    } else if (e.key === "Enter") {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        triggerSend();
+      } else if (!e.altKey) {
+        history.breakGroup();
+      }
     } else if ((e.ctrlKey || e.metaKey || e.altKey) && (e.key === "k" || e.key === "K")) {
       e.preventDefault();
       e.stopPropagation();
@@ -381,7 +475,20 @@ export function openInternalEditor({
 
   bodyTextarea.addEventListener("keyup", updateCursorPos);
   bodyTextarea.addEventListener("click", updateCursorPos);
-  bodyTextarea.addEventListener("input", updateCursorPos);
+  bodyTextarea.addEventListener("input", (e) => {
+    updateCursorPos();
+    if (isComposing) return;
+    const isDelete = e.inputType ? e.inputType.startsWith("delete") : false;
+    const isPaste = e.inputType === "insertFromPaste";
+    history.record(
+      bodyTextarea.value,
+      bodyTextarea.selectionStart,
+      bodyTextarea.selectionEnd,
+      isDelete ? "delete" : "input",
+      isPaste
+    );
+    updateUndoRedoUI();
+  });
 
   // Event: Send Email
   async function triggerSend() {
