@@ -1171,16 +1171,176 @@ body.undine-app {
 
 .plaintext-email {
   font-family: var(--font-mono);
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
   tab-size: 8;
   -moz-tab-size: 8;
-  line-height: 1.45;
+  line-height: 1.5;
   color: var(--text-main);
   font-size: 12.5px;
-  min-width: max-content;
   font-variant-ligatures: none;
   font-feature-settings: "liga" 0, "clig" 0, "dlig" 0, "hlig" 0, "calt" 0;
   -webkit-font-feature-settings: "liga" 0, "clig" 0, "dlig" 0, "hlig" 0, "calt" 0;
+}
+
+/* Markdown Rich Text Rendering */
+.markdown-body {
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-main, #e2e8f0);
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  padding: 4px 8px;
+}
+
+.markdown-body .md-h {
+  margin-top: 20px;
+  margin-bottom: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: #fff;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 4px;
+}
+
+.markdown-body .md-h1 { font-size: 18px; }
+.markdown-body .md-h2 { font-size: 16px; }
+.markdown-body .md-h3 { font-size: 14.5px; border-bottom: none; }
+.markdown-body .md-h4 { font-size: 13.5px; border-bottom: none; }
+.markdown-body .md-h5 { font-size: 12.5px; border-bottom: none; }
+.markdown-body .md-h6 { font-size: 12px; border-bottom: none; color: var(--text-muted); }
+
+.markdown-body .md-p {
+  margin-top: 0;
+  margin-bottom: 12px;
+}
+
+.markdown-body .md-hr {
+  height: 1px;
+  background-color: var(--border-color);
+  border: none;
+  margin: 18px 0;
+}
+
+.markdown-body .md-inline-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background-color: var(--bg-tertiary, #1e2230);
+  border: 1px solid var(--border-color);
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #93c5fd;
+}
+
+.markdown-body .md-code-card {
+  margin: 12px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--bg-primary, #090d16);
+  overflow: hidden;
+}
+
+.markdown-body .md-code-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.markdown-body .md-code-block {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: #e2e8f0;
+  tab-size: 8;
+  -moz-tab-size: 8;
+}
+
+.markdown-body .md-blockquote {
+  margin: 12px 0;
+  padding: 4px 14px;
+  border-left: 3px solid var(--accent-blue, #3b82f6);
+  background-color: rgba(59, 130, 246, 0.05);
+  color: #cbd5e1;
+}
+
+.markdown-body .md-blockquote .md-p {
+  margin-bottom: 6px;
+}
+.markdown-body .md-blockquote .md-p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body .md-list {
+  margin-top: 0;
+  margin-bottom: 12px;
+  padding-left: 24px;
+}
+
+.markdown-body .md-list li {
+  margin-bottom: 4px;
+}
+
+.markdown-body .md-task-item {
+  list-style-type: none;
+  margin-left: -18px;
+}
+
+.markdown-body .md-task-checkbox {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.markdown-body .md-table-wrapper {
+  margin: 14px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+}
+
+.markdown-body .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.markdown-body .md-table th,
+.markdown-body .md-table td {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+}
+
+.markdown-body .md-table th {
+  background-color: var(--bg-secondary);
+  font-weight: 600;
+  color: #fff;
+}
+
+.markdown-body .md-table tr:nth-child(even) {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.markdown-body .md-link {
+  color: var(--accent-blue, #3b82f6);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-body .md-link:hover {
+  color: var(--accent-blue-focus, #60a5fa);
 }
 
 .plaintext-email a,

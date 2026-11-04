@@ -11,6 +11,7 @@ import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNew
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
 import { openReviewResultDialog } from "./ReviewResultDialog.js";
 import { linkifyUrls, linkifyUrlsWithUnicode } from "../linkify.js";
+import { isMarkdown, renderMarkdown, cleanBodyText } from "../markdown.js";
 import {
   FOLDER_B4_IMPORTS,
   FOLDER_AI_REVIEWS,
@@ -352,11 +353,24 @@ export function renderViewerPane(container) {
     }
 
     const hasDiff = detail.parsed_diff && detail.parsed_diff.files && detail.parsed_diff.files.length > 0 && !isPatchCorrupted;
+    const isPatch = !!(m.is_patch || hasDiff || isPatchCorrupted);
+    const rawBodyPlain = m.body_plain || "";
+    const bodyPlain = isPatch ? rawBodyPlain : cleanBodyText(rawBodyPlain);
+    const hasMarkdown = isAiReview || isMarkdown(bodyPlain);
+
+    let viewMode = "text";
+    if (hasDiff && detail.parsed_diff.is_patch) {
+      viewMode = "diff";
+    } else if (hasMarkdown) {
+      viewMode = "markdown";
+    }
+
     let diffToggleBtn = "";
     if (hasDiff) {
-      const isDiffDefault = !!detail.parsed_diff.is_patch;
-      diffToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-diff-view" title="${isDiffDefault ? "Show full message body as plain text" : "Show side-by-side patch diff"}">${isDiffDefault ? "📄 Plain text" : "🔀 View diff"}</button>`;
+      diffToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-diff-view" title="${viewMode === "diff" ? "Show full message body as plain text" : "Show side-by-side patch diff"}">${viewMode === "diff" ? "📄 Plain text" : "🔀 View diff"}</button>`;
     }
+
+    const mdToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-markdown-view" style="${viewMode === "diff" ? "display: none;" : ""}" title="${viewMode === "markdown" ? "Switch to wrapped plain text mode" : "Render Markdown as rich text"}">${viewMode === "markdown" ? "📄 Plain text" : "📖 Rich text"}</button>`;
 
     const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft" || n.state === "submitted") : [];
     const draftCount = draftNotes.length;
@@ -440,6 +454,7 @@ export function renderViewerPane(container) {
       }
       toolbarHtml = `
         ${openReviewedBtn}
+        ${mdToggleBtn}
         ${cancelBtn}
         <button type="button" class="action-btn text-danger action-btn-trash" id="btn-trash-message" title="Move to Trash / Delete AI review">
           🗑️ Trash
@@ -455,6 +470,7 @@ export function renderViewerPane(container) {
         ` : ""}
         ${patchActionButton}
         ${diffToggleBtn}
+        ${mdToggleBtn}
         ${discardDraftsButton}
         ${!isDraft ? `
           <button type="button" class="action-btn" id="btn-toggle-patchwork" title="Toggle Patchwork line in header">
@@ -482,13 +498,44 @@ export function renderViewerPane(container) {
 
     // Mount Patch or Plain Text Body
     const bodyContainer = container.querySelector("#viewer-diff-body");
-    let isDiffView = !!(detail.parsed_diff && detail.parsed_diff.is_patch && !isPatchCorrupted);
 
     function updateBodyView() {
-      if (isDiffView) {
+      if (viewMode === "diff") {
         renderSideDiff(bodyContainer, detail.parsed_diff);
+      } else if (viewMode === "markdown") {
+        bodyContainer.innerHTML = `<div class="markdown-body">${renderMarkdown(bodyPlain)}</div>`;
       } else {
-        bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(m.body_plain || "")}</pre>`;
+        bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(bodyPlain)}</pre>`;
+      }
+      updateToggleButtons();
+    }
+
+    function updateToggleButtons() {
+      const diffToggleBtnEl = container.querySelector("#btn-toggle-diff-view");
+      if (diffToggleBtnEl) {
+        if (viewMode === "diff") {
+          diffToggleBtnEl.textContent = "📄 Plain text";
+          diffToggleBtnEl.title = "Show full message body as plain text";
+        } else {
+          diffToggleBtnEl.textContent = "🔀 View diff";
+          diffToggleBtnEl.title = "Show side-by-side patch diff";
+        }
+      }
+
+      const mdToggleBtnEl = container.querySelector("#btn-toggle-markdown-view");
+      if (mdToggleBtnEl) {
+        if (viewMode === "diff") {
+          mdToggleBtnEl.style.display = "none";
+        } else {
+          mdToggleBtnEl.style.display = "inline-flex";
+          if (viewMode === "markdown") {
+            mdToggleBtnEl.textContent = "📄 Plain text";
+            mdToggleBtnEl.title = "Switch to wrapped plain text mode";
+          } else {
+            mdToggleBtnEl.textContent = "📖 Rich text";
+            mdToggleBtnEl.title = "Render Markdown as rich text";
+          }
+        }
       }
     }
 
@@ -512,15 +559,25 @@ export function renderViewerPane(container) {
     const diffToggleBtnEl = container.querySelector("#btn-toggle-diff-view");
     if (diffToggleBtnEl) {
       diffToggleBtnEl.addEventListener("click", () => {
-        isDiffView = !isDiffView;
-        updateBodyView();
-        if (isDiffView) {
-          diffToggleBtnEl.textContent = "📄 Plain text";
-          diffToggleBtnEl.title = "Show full message body as plain text";
+        if (viewMode === "diff") {
+          viewMode = hasMarkdown ? "markdown" : "text";
         } else {
-          diffToggleBtnEl.textContent = "🔀 View diff";
-          diffToggleBtnEl.title = "Show side-by-side patch diff";
+          viewMode = "diff";
         }
+        updateBodyView();
+      });
+    }
+
+    // Event: Toggle Markdown Rich Text / Plain text view
+    const mdToggleBtnEl = container.querySelector("#btn-toggle-markdown-view");
+    if (mdToggleBtnEl) {
+      mdToggleBtnEl.addEventListener("click", () => {
+        if (viewMode === "markdown") {
+          viewMode = "text";
+        } else {
+          viewMode = "markdown";
+        }
+        updateBodyView();
       });
     }
 
