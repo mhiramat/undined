@@ -405,6 +405,7 @@ func (r *Runner) workerLoop() {
 	for {
 		r.mu.Lock()
 		if len(r.queue) == 0 {
+			wasRunning := r.isRunning
 			r.isRunning = false
 			r.activeJob = nil
 			r.cancelFunc = nil
@@ -413,7 +414,9 @@ func (r *Runner) workerLoop() {
 			}
 			st := r.getStatusLocked()
 			r.mu.Unlock()
-			r.publishStatus(st)
+			if wasRunning {
+				r.publishStatus(st)
+			}
 			return
 		}
 
@@ -469,6 +472,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 			job.Status = "error"
 			job.Error = fmt.Sprintf("invalid review command %q: %v", cmdStr, err)
 			r.lastError = job.Error
+			if len(r.queue) == 0 {
+				r.isRunning = false
+			}
 			r.saveOrUpdateReviewMessage(job, job.Error, " (failed)")
 			st := r.getStatusLocked()
 			r.mu.Unlock()
@@ -512,6 +518,9 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	r.mu.Lock()
 	r.lastOutput = output
 	job.Output = output
+	if len(r.queue) == 0 {
+		r.isRunning = false
+	}
 
 	if ctx.Err() == context.Canceled {
 		r.status = "cancelled"
@@ -545,6 +554,12 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	st := r.getStatusLocked()
 	r.mu.Unlock()
 	r.publishStatus(st)
+	if r.Events != nil && job.MessageID != "" {
+		r.Events.Publish("review.comment_added", map[string]any{
+			"message_id":    job.MessageID,
+			"message_db_id": job.OrigDBID,
+		})
+	}
 }
 
 func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string) {
@@ -610,6 +625,7 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 				_ = r.DB.UpdateMessageSubjectAndBody(*job.ReviewDBID, subject, cleanBody)
 				if job.CommitID != "" {
 					_, _ = r.DB.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", job.CommitID, *job.ReviewDBID)
+					r.DB.MarkInProcessWrite()
 				}
 			}
 			if r.Events != nil {
@@ -639,6 +655,7 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 		job.ReviewDBID = &dbID
 		if job.CommitID != "" {
 			_, _ = r.DB.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", job.CommitID, dbID)
+			r.DB.MarkInProcessWrite()
 		}
 		if r.Events != nil {
 			r.Events.Publish("mail.sync_completed", map[string]any{

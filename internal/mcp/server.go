@@ -159,8 +159,8 @@ func (s *Server) getToolsList() []map[string]interface{} {
 				"title": "list_recent_emailsArguments",
 				"properties": map[string]interface{}{
 					"folder": map[string]interface{}{
-						"title": "Folder",
-						"anyOf": []map[string]interface{}{{"type": "string"}, {"type": "null"}},
+						"title":   "Folder",
+						"anyOf":   []map[string]interface{}{{"type": "string"}, {"type": "null"}},
 						"default": nil,
 					},
 					"limit": map[string]interface{}{
@@ -1318,36 +1318,59 @@ func (s *Server) toolPostReviewComment(toolName string, args map[string]interfac
 				canonicalFile = patch.NormalizePath(matchedFile.OldPath)
 			}
 
-			for _, hunk := range matchedFile.Hunks {
-				if chosenSide == "old" || chosenSide == "left" {
+			if chosenSide == "old" || chosenSide == "left" {
+				for _, hunk := range matchedFile.Hunks {
 					for _, row := range hunk.PairedRows {
 						if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
 							lineMapped = true
 							chosenSide = "old"
-							break
-						}
-						if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
-							lineMapped = true
-							chosenSide = "new"
 							break
 						}
 					}
-				} else {
-					for _, row := range hunk.PairedRows {
-						if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
-							lineMapped = true
-							chosenSide = "new"
-							break
+					if lineMapped {
+						break
+					}
+				}
+				if !lineMapped {
+					for _, hunk := range matchedFile.Hunks {
+						for _, row := range hunk.PairedRows {
+							if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
+								lineMapped = true
+								chosenSide = "new"
+								break
+							}
 						}
-						if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
-							lineMapped = true
-							chosenSide = "old"
+						if lineMapped {
 							break
 						}
 					}
 				}
-				if lineMapped {
-					break
+			} else {
+				for _, hunk := range matchedFile.Hunks {
+					for _, row := range hunk.PairedRows {
+						if row.Right.LineNo != nil && *row.Right.LineNo == lineNo {
+							lineMapped = true
+							chosenSide = "new"
+							break
+						}
+					}
+					if lineMapped {
+						break
+					}
+				}
+				if !lineMapped {
+					for _, hunk := range matchedFile.Hunks {
+						for _, row := range hunk.PairedRows {
+							if row.Left.LineNo != nil && *row.Left.LineNo == lineNo {
+								lineMapped = true
+								chosenSide = "old"
+								break
+							}
+						}
+						if lineMapped {
+							break
+						}
+					}
 				}
 			}
 		}

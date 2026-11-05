@@ -698,23 +698,33 @@ class UndineDStore {
   setActiveMessageDetail(detail) {
     this.state.activeMessageDetail = detail;
     this.state.activeNotes = {};
-    if (detail && detail.comments && Array.isArray(detail.comments)) {
-      for (const c of detail.comments) {
-        const file = c.file_path || c.file;
-        const lineNo = c.line_no != null ? c.line_no : c.lineNo;
-        if (file != null && lineNo != null) {
-          const key = `${file}:${lineNo}`;
-          this.state.activeNotes[key] = {
-            id: c.id,
-            file: file,
-            line_no: Number(lineNo),
-            lineNo: Number(lineNo),
-            side: c.side || "new",
-            text: c.text,
-            state: c.state || "draft",
-            author: c.author || "user",
-          };
-        }
+    const rawComments = Array.isArray(detail?.comments)
+      ? detail.comments
+      : Array.isArray(detail?.comments?.comments)
+        ? detail.comments.comments
+        : [];
+    if (detail && detail.comments && !Array.isArray(detail.comments) && Array.isArray(detail.comments.comments)) {
+      detail.comments = rawComments;
+    }
+    for (const c of rawComments) {
+      const file = c.file_path || c.file;
+      const lineNo = c.line_no != null ? c.line_no : c.lineNo;
+      if (file != null && lineNo != null) {
+        const normSide = (c.side === "left" || c.side === "old") ? "old" : "new";
+        const baseKey = `${file}:${lineNo}`;
+        const existing = this.state.activeNotes[baseKey];
+        const key = (existing && existing.side !== normSide) ? `${file}:${lineNo}:${normSide}` : baseKey;
+        this.state.activeNotes[key] = {
+          id: c.id,
+          file: file,
+          file_path: file,
+          line_no: Number(lineNo),
+          lineNo: Number(lineNo),
+          side: normSide,
+          text: c.text,
+          state: c.state || "draft",
+          author: c.author || "user",
+        };
       }
     }
     this.notify(EVENT_NOTES_UPDATED, this.state.activeNotes);
@@ -722,14 +732,26 @@ class UndineDStore {
   }
 
   setNote(file, lineNo, text, side = "new") {
-    const key = `${file}:${lineNo}`;
+    const normSide = (side === "left" || side === "old") ? "old" : "new";
+    const baseKey = `${file}:${lineNo}`;
+    const sideKey = `${file}:${lineNo}:${normSide}`;
+    let key = baseKey;
+    if (this.state.activeNotes[sideKey]) {
+      key = sideKey;
+    } else if (this.state.activeNotes[baseKey] && this.state.activeNotes[baseKey].side && this.state.activeNotes[baseKey].side !== normSide) {
+      key = sideKey;
+    }
+
     const trimmed = text ? text.trim() : "";
     const activeMsg = this.state.activeMessageDetail?.message;
     const msgId = activeMsg?.id || this.state.selectedMessageId;
 
     if (!trimmed) {
-      const existing = this.state.activeNotes[key];
+      const existing = this.state.activeNotes[key] || this.state.activeNotes[baseKey];
       delete this.state.activeNotes[key];
+      if (key !== baseKey && this.state.activeNotes[baseKey]?.side === normSide) {
+        delete this.state.activeNotes[baseKey];
+      }
       if (existing && existing.id && msgId != null) {
         deleteMessageComment(msgId, existing.id).catch((err) => {
           console.error("Failed to delete comment:", err);
@@ -740,9 +762,10 @@ class UndineDStore {
       const noteObj = {
         ...existing,
         file,
+        file_path: file,
         line_no: Number(lineNo),
         lineNo: Number(lineNo),
-        side: side,
+        side: normSide,
         text: trimmed,
         state: existing.state || "draft",
         author: existing.author || "user",
@@ -752,7 +775,7 @@ class UndineDStore {
         saveMessageComment(msgId, {
           file,
           line_no: Number(lineNo),
-          side,
+          side: normSide,
           text: trimmed,
           state: noteObj.state,
           author: noteObj.author,
@@ -765,6 +788,9 @@ class UndineDStore {
           console.error("Failed to save comment:", err);
         });
       }
+    }
+    if (this.state.activeMessageDetail) {
+      this.state.activeMessageDetail.comments = this.getNotesList();
     }
     this.notify(EVENT_NOTES_UPDATED, this.state.activeNotes);
   }
@@ -782,6 +808,9 @@ class UndineDStore {
       if (!n.state || n.state === "draft" || n.state === "submitted") {
         delete this.state.activeNotes[k];
       }
+    }
+    if (this.state.activeMessageDetail) {
+      this.state.activeMessageDetail.comments = this.getNotesList();
     }
     this.notify(EVENT_NOTES_UPDATED, this.state.activeNotes);
   }

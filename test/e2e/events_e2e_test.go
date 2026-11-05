@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"undined-go/internal/mcp"
 	"undined-go/internal/storage/database"
 )
 
@@ -300,5 +302,142 @@ func TestE2E_ServerSentEvents(t *testing.T) {
 	}
 	if !receivedReviewCompleted {
 		t.Errorf("expected review.status_updated completed event over SSE")
+	}
+}
+
+// TestE2E_MCPCommentReflectedInAPIAndSSE verifies that when comments are added to a message
+// via an external MCP server process (undined --mcp-stdio) after multiple daemon in-process writes:
+// 1. DataVersionWatcher detects the external MCP write and emits system.resync_required over SSE.
+// 2. GET /api/messages/{id}/comments and GET /api/messages/{id} return the MCP-added draft comments.
+// 3. POST /api/messages/{id}/comments/discard discards the MCP draft comments.
+func TestE2E_MCPCommentReflectedInAPIAndSSE(t *testing.T) {
+	env := setupE2EEnv(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env.APIServer.StartDataVersionWatcher(ctx, 40*time.Millisecond)
+
+	// 1. Perform multiple in-process writes on the daemon DB (sync message, mark read, set tag)
+	inboxFolder, err := env.DB.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to get INBOX: %v", err)
+	}
+	uid := env.IMAPServer.AddMessage("INBOX", sampleKernelPatch1)
+	msg, err := env.Poller.FetchAndHydrateMessage("INBOX", inboxFolder.ID, uid, 0)
+	if err != nil {
+		t.Fatalf("failed to hydrate test message: %v", err)
+	}
+	readResp, err := env.Request("POST", fmt.Sprintf("/api/messages/%d/read", msg.ID), `{"is_read": true}`)
+	if err != nil {
+		t.Fatalf("mark read failed: %v", err)
+	}
+	readResp.Body.Close()
+
+	// Connect SSE client
+	sseReq, err := http.NewRequestWithContext(ctx, "GET", env.BaseURL+"/api/events", nil)
+	if err != nil {
+		t.Fatalf("failed to create SSE request: %v", err)
+	}
+	sseReq.Header.Set("Authorization", "Bearer "+env.AuthToken)
+	sseClient := &http.Client{}
+	sseResp, err := sseClient.Do(sseReq)
+	if err != nil {
+		t.Fatalf("failed to connect to /api/events: %v", err)
+	}
+	defer sseResp.Body.Close()
+	reader := bufio.NewReader(sseResp.Body)
+	// Drain initial ": connected" comment and blank separator line from SSE handshake.
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatalf("failed reading SSE handshake line 1: %v", err)
+	}
+	if _, err := reader.ReadString('\n'); err != nil {
+		t.Fatalf("failed reading SSE handshake line 2: %v", err)
+	}
+
+	// 2. Simulate external undined --mcp-stdio process adding an AI review comment
+	extDB, err := database.NewDatabase(env.Config.General.DBPath)
+	if err != nil {
+		t.Fatalf("failed to open external DB for MCP: %v", err)
+	}
+	defer extDB.Close()
+
+	extMCP := mcp.NewServer(env.Config, env.Maildir, extDB, env.B4Client, env.PWClient)
+	var inBuf, outBuf bytes.Buffer
+	inBuf.WriteString(`{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "post_review_comment", "arguments": {"message_id": "patch-e2e-1@kernel.org", "target": "kernel/trace/trace_kprobe.c:101", "side": "old", "comment": "AI review comment on old line"}}}` + "\n")
+	if err := extMCP.HandleSTDIO(ctx, &inBuf, &outBuf); err != nil {
+		t.Fatalf("MCP HandleSTDIO failed: %v", err)
+	}
+
+	// 3. Verify SSE stream emits system.resync_required
+	receivedResync := false
+	timeout := time.After(2 * time.Second)
+	for !receivedResync {
+		select {
+		case <-timeout:
+			t.Fatal("timed out waiting for system.resync_required after external MCP post_review_comment")
+		default:
+			l, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("failed reading SSE line: %v", err)
+			}
+			if strings.TrimSpace(l) == "event: system.resync_required" {
+				receivedResync = true
+			}
+		}
+	}
+
+	// 4. Verify GET /api/messages/{id}/comments returns the MCP comment
+	cmtResp, err := env.Request("GET", fmt.Sprintf("/api/messages/%d/comments", msg.ID), "")
+	if err != nil {
+		t.Fatalf("GET comments failed: %v", err)
+	}
+	defer cmtResp.Body.Close()
+	var cmtPayload map[string]any
+	if err := json.NewDecoder(cmtResp.Body).Decode(&cmtPayload); err != nil {
+		t.Fatalf("decode comments failed: %v", err)
+	}
+	commentsArr, ok := cmtPayload["comments"].([]any)
+	if !ok || len(commentsArr) != 1 {
+		t.Fatalf("GET /api/messages/%d/comments = %+v, want 1 comment", msg.ID, cmtPayload)
+	}
+	cmtObj := commentsArr[0].(map[string]any)
+	if cmtObj["text"] != "AI review comment on old line" || cmtObj["side"] != "old" || cmtObj["state"] != "draft" || cmtObj["author"] != "agent" {
+		t.Errorf("comment payload = %+v, want text='AI review comment on old line' side='old' state='draft' author='agent'", cmtObj)
+	}
+
+	// 5. Verify GET /api/messages/{id} also includes the MCP comment in detail.comments
+	detResp, err := env.Request("GET", fmt.Sprintf("/api/messages/%d", msg.ID), "")
+	if err != nil {
+		t.Fatalf("GET detail failed: %v", err)
+	}
+	defer detResp.Body.Close()
+	var detPayload map[string]any
+	if err := json.NewDecoder(detResp.Body).Decode(&detPayload); err != nil {
+		t.Fatalf("decode detail failed: %v", err)
+	}
+	detComments, ok := detPayload["comments"].([]any)
+	if !ok || len(detComments) != 1 {
+		t.Fatalf("detail.comments = %+v, want 1 comment", detPayload["comments"])
+	}
+
+	// 6. Verify POST /api/messages/{id}/comments/discard discards the MCP draft comments
+	discResp, err := env.Request("POST", fmt.Sprintf("/api/messages/%d/comments/discard", msg.ID), "{}")
+	if err != nil {
+		t.Fatalf("POST discard comments failed: %v", err)
+	}
+	discResp.Body.Close()
+
+	afterResp, err := env.Request("GET", fmt.Sprintf("/api/messages/%d/comments", msg.ID), "")
+	if err != nil {
+		t.Fatalf("GET comments after discard failed: %v", err)
+	}
+	defer afterResp.Body.Close()
+	var afterPayload map[string]any
+	if err := json.NewDecoder(afterResp.Body).Decode(&afterPayload); err != nil {
+		t.Fatalf("decode comments after discard failed: %v", err)
+	}
+	afterArr, ok := afterPayload["comments"].([]any)
+	if !ok || len(afterArr) != 0 {
+		t.Fatalf("GET /api/messages/%d/comments after discard = %+v, want 0 comments", msg.ID, afterPayload)
 	}
 }

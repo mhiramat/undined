@@ -131,8 +131,28 @@ export function setCachedMessageDetail(idOrMsgId, detail) {
 }
 
 export function invalidateMessageDetailCache(idOrMsgId) {
-  if (idOrMsgId != null) {
-    messageDetailCache.delete(String(idOrMsgId));
+  if (idOrMsgId == null) return;
+  const raw = String(idOrMsgId);
+  const clean = raw.replace(/^<|>$/g, "").trim();
+  messageDetailCache.delete(raw);
+  messageDetailCache.delete(clean);
+  for (const [k, v] of messageDetailCache.entries()) {
+    const m = v?.message;
+    const rev = v?.reviewed_message || m?.reviewed_message;
+    const aiRev = v?.ai_review_message || m?.ai_review_message;
+    const msgId = (m?.message_id || "").replace(/^<|>$/g, "").trim();
+    const revMsgId = (rev?.message_id || "").replace(/^<|>$/g, "").trim();
+    const aiRevMsgId = (aiRev?.message_id || "").replace(/^<|>$/g, "").trim();
+    if (
+      String(m?.id) === clean ||
+      (msgId && msgId === clean) ||
+      String(rev?.id) === clean ||
+      (revMsgId && revMsgId === clean) ||
+      String(aiRev?.id) === clean ||
+      (aiRevMsgId && aiRevMsgId === clean)
+    ) {
+      messageDetailCache.delete(k);
+    }
   }
 }
 
@@ -479,7 +499,8 @@ export async function fetchMessageComments(idOrMsgId, state = null) {
   const query = state ? `?state=${encodeURIComponent(state)}` : "";
   const res = await fetch(`${BASE_URL}/api/messages/${encodeURIComponent(idOrMsgId)}/comments${query}`);
   if (!res.ok) throw new Error("Failed to fetch message comments");
-  return res.json();
+  const data = await res.json();
+  return Array.isArray(data) ? data : (data?.comments || []);
 }
 
 export async function saveMessageComment(idOrMsgId, commentData) {

@@ -15,10 +15,12 @@ import (
 // Database manages the SQLite connection pool and queries.
 type Database struct {
 	DB                     *sql.DB
+	watcherDB              *sql.DB
 	DBPath                 string
 	watcherMu              sync.Mutex
 	baselineVersion        int64
-	inProcessWritesPending int64
+	mainBaselineVersion    int64
+	externalChangeDetected bool
 }
 
 // NewDatabase opens or creates the SQLite database at dbPath, running migrations.
@@ -44,24 +46,57 @@ func NewDatabase(dbPath string) (*Database, error) {
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
+	watcherDB, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to open sqlite watcher connection %s: %w", dbPath, err)
+	}
+	watcherDB.SetMaxOpenConns(1)
+	watcherDB.SetMaxIdleConns(1)
+
 	return &Database{
-		DB:     db,
-		DBPath: dbPath,
+		DB:        db,
+		watcherDB: watcherDB,
+		DBPath:    dbPath,
 	}, nil
+}
+
+func (d *Database) getWatcherVersionLocked() (int64, error) {
+	conn := d.watcherDB
+	if conn == nil {
+		conn = d.DB
+	}
+	var version int64
+	err := conn.QueryRow("PRAGMA data_version;").Scan(&version)
+	return version, err
+}
+
+func (d *Database) getMainVersionLocked() (int64, error) {
+	var version int64
+	err := d.DB.QueryRow("PRAGMA data_version;").Scan(&version)
+	return version, err
 }
 
 // GetDataVersion queries SQLite PRAGMA data_version to detect commits from external connections.
 func (d *Database) GetDataVersion() (int64, error) {
-	var version int64
-	err := d.DB.QueryRow("PRAGMA data_version;").Scan(&version)
-	return version, err
+	d.watcherMu.Lock()
+	defer d.watcherMu.Unlock()
+	return d.getWatcherVersionLocked()
 }
 
 // MarkInProcessWrite records that a mutation was made by this in-process Database instance.
 func (d *Database) MarkInProcessWrite() {
 	d.watcherMu.Lock()
 	defer d.watcherMu.Unlock()
-	d.inProcessWritesPending++
+	if mainVer, err := d.getMainVersionLocked(); err == nil {
+		if d.mainBaselineVersion > 0 && mainVer != d.mainBaselineVersion {
+			d.externalChangeDetected = true
+		}
+		d.mainBaselineVersion = mainVer
+	}
+	if watchVer, err := d.getWatcherVersionLocked(); err == nil {
+		d.baselineVersion = watchVer
+	}
 }
 
 // SetBaselineVersion sets the initial baseline data_version and resets in-process write tracking.
@@ -69,7 +104,10 @@ func (d *Database) SetBaselineVersion(ver int64) {
 	d.watcherMu.Lock()
 	defer d.watcherMu.Unlock()
 	d.baselineVersion = ver
-	d.inProcessWritesPending = 0
+	if mainVer, err := d.getMainVersionLocked(); err == nil {
+		d.mainBaselineVersion = mainVer
+	}
+	d.externalChangeDetected = false
 }
 
 // CheckAndResetExternalChange checks if currVer indicates a change made by an external process.
@@ -77,6 +115,16 @@ func (d *Database) SetBaselineVersion(ver int64) {
 func (d *Database) CheckAndResetExternalChange(currVer int64) bool {
 	d.watcherMu.Lock()
 	defer d.watcherMu.Unlock()
+
+	if mainVer, err := d.getMainVersionLocked(); err == nil {
+		d.mainBaselineVersion = mainVer
+	}
+
+	if d.externalChangeDetected {
+		d.externalChangeDetected = false
+		d.baselineVersion = currVer
+		return true
+	}
 
 	if d.baselineVersion == 0 {
 		d.baselineVersion = currVer
@@ -87,25 +135,15 @@ func (d *Database) CheckAndResetExternalChange(currVer int64) bool {
 		return false
 	}
 
-	diff := currVer - d.baselineVersion
-	if diff < 0 {
-		d.baselineVersion = currVer
-		d.inProcessWritesPending = 0
-		return true
-	}
-
-	if d.inProcessWritesPending >= diff {
-		d.inProcessWritesPending -= diff
-		d.baselineVersion = currVer
-		return false
-	}
-
-	d.inProcessWritesPending = 0
 	d.baselineVersion = currVer
 	return true
 }
 
 // Close closes the database connection.
 func (d *Database) Close() error {
+	if d.watcherDB != nil {
+		// Best-effort close of auxiliary read-only watcher connection before closing primary DB.
+		_ = d.watcherDB.Close()
+	}
 	return d.DB.Close()
 }

@@ -743,7 +743,99 @@ func TestDeleteMessagesWithoutIMAPUID(t *testing.T) {
 	}
 }
 
+func TestExternalMCPCommentAfterInProcessWrites(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "mcp_watcher.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
 
+	initVer, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion failed: %v", err)
+	}
+	db.SetBaselineVersion(initVer)
 
+	// 1. Perform several in-process writes and verify CheckAndResetExternalChange does not self-trigger
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder failed: %v", err)
+	}
+	rawHeader := []byte("Message-ID: <mcp-watch-1@kernel.org>\nSubject: [PATCH] test\nFrom: Kernel Developer <dev@example.com>\nDate: Sat, 24 Oct 2026 12:00:00 +0000\n\n")
+	msgID, err := db.InsertHeaderSummary(folder.ID, 1, rawHeader, false, "")
+	if err != nil {
+		t.Fatalf("InsertHeaderSummary failed: %v", err)
+	}
+	if err := db.SetMessageRead(msgID, true); err != nil {
+		t.Fatalf("SetMessageRead failed: %v", err)
+	}
+	if err := db.SetMessageReviewCommit("mcp-watch-1@kernel.org", "abc123456789"); err != nil {
+		t.Fatalf("SetMessageReviewCommit failed: %v", err)
+	}
 
+	verAfterInProc, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion after in-process writes failed: %v", err)
+	}
+	if got := db.CheckAndResetExternalChange(verAfterInProc); got {
+		t.Fatalf("CheckAndResetExternalChange() = %v, want false after in-process writes", got)
+	}
 
+	// 2. Open external DB connection (simulating undined --mcp-stdio) and save a review comment
+	extDB, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open extDB: %v", err)
+	}
+	defer extDB.Close()
+
+	_, err = extDB.SavePatchComment(&PatchComment{
+		MessageID: "mcp-watch-1@kernel.org",
+		FilePath:  "lib/bootconfig.c",
+		LineNo:    433,
+		Side:      "old",
+		State:     "draft",
+		Author:    "agent",
+		Text:      "External MCP review comment on old side.",
+	})
+	if err != nil {
+		t.Fatalf("extDB.SavePatchComment failed: %v", err)
+	}
+
+	// Verify daemon DB detects the external MCP write even after multiple prior in-process writes
+	verAfterExt, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion after external write failed: %v", err)
+	}
+	if got := db.CheckAndResetExternalChange(verAfterExt); !got {
+		t.Fatalf("CheckAndResetExternalChange() = %v, want true after external MCP comment write", got)
+	}
+
+	// 3. Test external write followed by an in-process write before watcher poll
+	_, err = extDB.SavePatchComment(&PatchComment{
+		MessageID: "mcp-watch-1@kernel.org",
+		FilePath:  "lib/bootconfig.c",
+		LineNo:    434,
+		Side:      "new",
+		State:     "draft",
+		Author:    "agent",
+		Text:      "Second external MCP review comment.",
+	})
+	if err != nil {
+		t.Fatalf("second extDB.SavePatchComment failed: %v", err)
+	}
+
+	// In-process write occurs before CheckAndResetExternalChange is called
+	if err := db.SetMessageRead(msgID, false); err != nil {
+		t.Fatalf("SetMessageRead(false) failed: %v", err)
+	}
+
+	verCombined, err := db.GetDataVersion()
+	if err != nil {
+		t.Fatalf("GetDataVersion after combined writes failed: %v", err)
+	}
+	if got := db.CheckAndResetExternalChange(verCombined); !got {
+		t.Fatalf("CheckAndResetExternalChange() = %v, want true when external write preceded in-process write", got)
+	}
+}

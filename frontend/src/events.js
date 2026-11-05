@@ -3,7 +3,7 @@
  * Receives real-time invalidation events and triggers debounced REST re-fetching.
  */
 
-import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
+import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
 
 function showToast(message, type = "info") {
   if (typeof document === "undefined") return;
@@ -76,19 +76,26 @@ export class NotificationChannel {
 
     this.debouncedSyncComments = debounce(async (msgId) => {
       try {
-        if (msgId && isEventSuppressed(msgId)) return;
+        if (msgId != null && msgId !== "") {
+          invalidateMessageDetailCache(msgId);
+        } else {
+          clearMessageDetailCache();
+        }
         const activeDetail = this.store.getState().activeMessageDetail;
         if (!activeDetail?.message) return;
         const curDbId = activeDetail.message.id;
         const curMsgId = (activeDetail.message.message_id || "").replace(/^<|>$/g, "").trim();
         const cleanMsgId = String(msgId || "").replace(/^<|>$/g, "").trim();
-        if (isEventSuppressed(curDbId) || (curMsgId && isEventSuppressed(curMsgId))) return;
         if (!cleanMsgId || curMsgId === cleanMsgId || String(curDbId) === cleanMsgId) {
-          const comments = await fetchMessageComments(curDbId);
-          this.store.setActiveMessageDetail({
+          invalidateMessageDetailCache(curDbId);
+          const res = await fetchMessageComments(curDbId);
+          const commentsList = Array.isArray(res) ? res : (res?.comments || []);
+          const updatedDetail = {
             ...activeDetail,
-            comments: comments || [],
-          });
+            comments: commentsList,
+          };
+          setCachedMessageDetail(curDbId, updatedDetail);
+          this.store.setActiveMessageDetail(updatedDetail);
         }
       } catch (err) {
         console.warn("[UndineD SSE] Error refreshing comments:", err);
@@ -201,7 +208,7 @@ export class NotificationChannel {
     this.es.addEventListener("review.comment_added", (e) => {
       try {
         const data = JSON.parse(e.data);
-        this.debouncedSyncComments(data?.message_id);
+        this.debouncedSyncComments(data?.message_id || data?.message_db_id);
       } catch (_) {
         this.debouncedSyncComments();
       }
@@ -247,6 +254,8 @@ export class NotificationChannel {
           curStatus === "cancelled" ||
           (wasRunning && !isNowRunning)
         ) {
+          clearMessageDetailCache();
+
           const activeDetail = this.store.getState().activeMessageDetail;
           if (activeDetail?.message) {
             const curDbId = activeDetail.message.id;
@@ -255,18 +264,18 @@ export class NotificationChannel {
             const reviewedDbId = reviewedMsg?.id;
             const reviewedMsgId = (reviewedMsg?.message_id || "").replace(/^<|>$/g, "").trim();
 
-            const targetMid = (data.active_message_id || "").replace(/^<|>$/g, "").trim();
+            const targetMid = (data.active_message_id || prevReview.messageId || "").replace(/^<|>$/g, "").trim();
             const targetCid = (data.active_commit_id || "").trim();
             const curCommitId = (activeDetail.message.review_commit_id || activeDetail.message["review-commit-id"] || "").trim();
-            const targetDbId = data.active_review_db_id;
+            const targetDbId = data.active_review_db_id ?? prevReview.activeReviewDbId;
 
             const isCurrentAffected =
+              !targetMid ||
               (targetMid && (curMsgId === targetMid || reviewedMsgId === targetMid)) ||
               (targetCid && curCommitId && curCommitId === targetCid) ||
               (targetDbId != null && (curDbId === targetDbId || reviewedDbId === targetDbId));
 
             if (isCurrentAffected) {
-              invalidateMessageDetailCache(curDbId);
               fetchMessageDetail(curDbId, { bypassCache: true })
                 .then((updated) => {
                   if (this.store.getState().activeMessageDetail?.message?.id === curDbId) {
@@ -298,6 +307,7 @@ export class NotificationChannel {
     });
 
     this.es.addEventListener("system.resync_required", () => {
+      clearMessageDetailCache();
       this.debouncedSyncFolders();
       const activeDetail = this.store.getState().activeMessageDetail;
       if (activeDetail?.message) {

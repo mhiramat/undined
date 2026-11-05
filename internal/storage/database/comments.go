@@ -93,6 +93,7 @@ func (d *Database) SavePatchComment(c *PatchComment) (*PatchComment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to save comment: %w", err)
 	}
+	d.MarkInProcessWrite()
 
 	id, err := res.LastInsertId()
 	if err != nil {
@@ -153,6 +154,7 @@ func (d *Database) DiscardDraftComments(msgID string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	d.MarkInProcessWrite()
 	count, _ := res.RowsAffected()
 
 	// Update has_notes flag if no comments remain.
@@ -179,6 +181,7 @@ func (d *Database) DeleteComment(commentID int64) error {
 	if err != nil {
 		return err
 	}
+	d.MarkInProcessWrite()
 
 	if msgID != "" {
 		// Discard scan error: if query fails, count defaults to 0 and has_notes is safely cleared.
@@ -189,7 +192,7 @@ func (d *Database) DeleteComment(commentID int64) error {
 			hasNotes = 1
 		}
 		_, _ = d.DB.Exec("UPDATE messages SET has_notes = ? WHERE message_id = ?;", hasNotes, msgID)
+		d.MarkInProcessWrite()
 	}
-	d.MarkInProcessWrite()
 	return nil
 }

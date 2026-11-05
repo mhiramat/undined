@@ -6,7 +6,7 @@
 import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment } from "../api.js";
 import { store } from "../store.js";
 import { getTags } from "../tags.js";
-import { renderSideDiff } from "./SideDiff.js";
+import { renderSideDiff, renderSavedNoteRowHtml } from "./SideDiff.js";
 import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNewMessage } from "./InternalEditor.js";
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
 import { openReviewResultDialog } from "./ReviewResultDialog.js";
@@ -499,13 +499,46 @@ export function renderViewerPane(container) {
     // Mount Patch or Plain Text Body
     const bodyContainer = container.querySelector("#viewer-diff-body");
 
+    function renderPlainViewNotesHtml() {
+      const activeNotesList = store.getNotesList ? store.getNotesList().filter((n) => n && n.text && n.text.trim() !== "") : [];
+      if (activeNotesList.length === 0) return "";
+      let notesHtml = `
+        <div class="diff-file-card" data-file="PLAIN_VIEW_NOTES" style="margin-top: 16px;">
+          <div class="diff-file-header">
+            <span>💬 Review Comments (${activeNotesList.length})</span>
+          </div>
+          <table class="diff-table unified">
+            <tbody>
+      `;
+      for (const note of activeNotesList) {
+        notesHtml += renderSavedNoteRowHtml(note, 1, note.file || note.file_path || "DESCRIPTION");
+      }
+      notesHtml += `</tbody></table></div>`;
+      return notesHtml;
+    }
+
+    function attachPlainViewNoteListeners() {
+      bodyContainer.querySelectorAll(".btn-saved-note-discard").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const file = btn.getAttribute("data-file");
+          const line = parseInt(btn.getAttribute("data-line"), 10);
+          const side = btn.getAttribute("data-side") || "new";
+          if (!file || !line || isNaN(line)) return;
+          store.setNote(file, line, "", side);
+        });
+      });
+    }
+
     function updateBodyView() {
       if (viewMode === "diff") {
         renderSideDiff(bodyContainer, detail.parsed_diff);
       } else if (viewMode === "markdown") {
-        bodyContainer.innerHTML = `<div class="markdown-body">${renderMarkdown(bodyPlain)}</div>`;
+        bodyContainer.innerHTML = `<div class="markdown-body">${renderMarkdown(bodyPlain)}</div>${renderPlainViewNotesHtml()}`;
+        attachPlainViewNoteListeners();
       } else {
-        bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(bodyPlain)}</pre>`;
+        bodyContainer.innerHTML = `<pre class="plaintext-email">${linkifyUrls(bodyPlain)}</pre>${renderPlainViewNotesHtml()}`;
+        attachPlainViewNoteListeners();
       }
       updateToggleButtons();
     }

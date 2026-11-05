@@ -14,26 +14,26 @@ import (
 
 // Message represents an indexed email row from the SQLite messages table.
 type Message struct {
-	ID               int64   `json:"id"`
-	MessageID        string  `json:"message_id"`
-	FolderID         int64   `json:"folder_id"`
-	FolderName       string  `json:"folder_name,omitempty"`
-	IMAPUID          *uint32 `json:"imap_uid,omitempty"`
-	FilePath         string  `json:"file_path"`
-	Subject          string  `json:"subject"`
-	FromName         string  `json:"from_name"`
-	FromAddr         string  `json:"from_addr"`
-	ToAddr           string  `json:"to_addr"`
-	CcAddr           string  `json:"cc_addr"`
-	Date             string  `json:"date"`
-	EpochTimestamp   int64   `json:"epoch_timestamp"`
-	InReplyTo        string  `json:"in_reply_to"`
-	ReferencesHeader string  `json:"references_header"`
-	BodyPlain        string  `json:"body_plain,omitempty"`
-	IsPatch          bool    `json:"is_patch"`
-	IsRead           bool    `json:"is_read"`
-	IsReplied        bool    `json:"is_replied"`
-	HasNotes         bool    `json:"has_notes"`
+	ID                   int64   `json:"id"`
+	MessageID            string  `json:"message_id"`
+	FolderID             int64   `json:"folder_id"`
+	FolderName           string  `json:"folder_name,omitempty"`
+	IMAPUID              *uint32 `json:"imap_uid,omitempty"`
+	FilePath             string  `json:"file_path"`
+	Subject              string  `json:"subject"`
+	FromName             string  `json:"from_name"`
+	FromAddr             string  `json:"from_addr"`
+	ToAddr               string  `json:"to_addr"`
+	CcAddr               string  `json:"cc_addr"`
+	Date                 string  `json:"date"`
+	EpochTimestamp       int64   `json:"epoch_timestamp"`
+	InReplyTo            string  `json:"in_reply_to"`
+	ReferencesHeader     string  `json:"references_header"`
+	BodyPlain            string  `json:"body_plain,omitempty"`
+	IsPatch              bool    `json:"is_patch"`
+	IsRead               bool    `json:"is_read"`
+	IsReplied            bool    `json:"is_replied"`
+	HasNotes             bool    `json:"has_notes"`
 	Flags                string  `json:"flags"`
 	ReviewCommitID       string  `json:"review_commit_id,omitempty"`
 	ReviewCommitIDHyphen string  `json:"review-commit-id,omitempty"`
@@ -43,13 +43,13 @@ type Message struct {
 	TagName  *string `json:"tag_name"`
 	TagColor *string `json:"tag_color"`
 
-	ThreadDepth  int    `json:"thread_depth"`
-	ThreadPrefix string `json:"thread_prefix,omitempty"`
-	HasChildren  bool   `json:"has_children"`
-	IsAIReview   bool   `json:"is_ai_review,omitempty"`
-	ReviewedMessage *ReviewedMessage `json:"reviewed_message,omitempty"`
-	AIReviewMessage *ReviewedMessage `json:"ai_review_message,omitempty"`
-	HasAIReview     bool             `json:"has_ai_review,omitempty"`
+	ThreadDepth     int                  `json:"thread_depth"`
+	ThreadPrefix    string               `json:"thread_prefix,omitempty"`
+	HasChildren     bool                 `json:"has_children"`
+	IsAIReview      bool                 `json:"is_ai_review,omitempty"`
+	ReviewedMessage *ReviewedMessage     `json:"reviewed_message,omitempty"`
+	AIReviewMessage *ReviewedMessage     `json:"ai_review_message,omitempty"`
+	HasAIReview     bool                 `json:"has_ai_review,omitempty"`
 	Attachments     []*parser.Attachment `json:"attachments,omitempty"`
 }
 
@@ -424,6 +424,7 @@ func (d *Database) SetMessageReviewCommit(msgID, commitID string) error {
 	if err != nil {
 		return err
 	}
+	d.MarkInProcessWrite()
 	_, err = d.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE message_id = ?;", commitID, cleaned)
 	if err == nil {
 		d.MarkInProcessWrite()
@@ -947,6 +948,7 @@ func (d *Database) FindAIReviewMessage(msg *Message) (*ReviewedMessage, error) {
 							aiMsg, _ = d.GetMessageByID(fid)
 							if commitID != "" && aiMsg != nil {
 								_, _ = d.DB.Exec("UPDATE messages SET review_commit_id = ? WHERE id = ?", commitID, fid)
+								d.MarkInProcessWrite()
 							}
 							break
 						}
@@ -969,5 +971,3 @@ func (d *Database) FindAIReviewMessage(msg *Message) (*ReviewedMessage, error) {
 		CommitID:   commitID,
 	}, nil
 }
-
-

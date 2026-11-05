@@ -9,8 +9,83 @@ import { linkifyUrls } from "../linkify.js";
 
 const BREAKPOINT_WIDTH = 1050;
 
+function normalizeFilePath(p) {
+  if (!p) return "";
+  return String(p).trim().replace(/^[ab]\//, "").replace(/^\/+/, "");
+}
+
+function filePathsMatch(noteFile, diffFile) {
+  const nf = normalizeFilePath(noteFile);
+  const df = normalizeFilePath(diffFile);
+  if (!nf || !df) return false;
+  if (nf === df) return true;
+  if (nf.toUpperCase() === "DESCRIPTION" && df.toUpperCase() === "DESCRIPTION") return true;
+  return df.endsWith("/" + nf) || nf.endsWith("/" + df);
+}
+
+export function findMatchingNote(notes, fileName, lineNo, side = "new") {
+  if (!notes || !fileName || !lineNo) return null;
+  const targetLine = Number(lineNo);
+  if (isNaN(targetLine) || targetLine <= 0) return null;
+  const normSide = (side === "left" || side === "old") ? "old" : "new";
+  const isDesc = String(fileName).toUpperCase() === "DESCRIPTION";
+
+  const sideKey = `${fileName}:${targetLine}:${normSide}`;
+  if (notes[sideKey]) return notes[sideKey];
+
+  const baseNote = notes[`${fileName}:${targetLine}`];
+  if (baseNote) {
+    if (isDesc) return baseNote;
+    const bSide = (baseNote.side === "left" || baseNote.side === "old") ? "old" : "new";
+    if (bSide === normSide) return baseNote;
+  }
+
+  for (const n of Object.values(notes)) {
+    if (!n) continue;
+    const nLine = Number(n.lineNo != null ? n.lineNo : n.line_no);
+    if (nLine !== targetLine) continue;
+    const nFile = n.file || n.file_path;
+    if (!filePathsMatch(nFile, fileName)) continue;
+    if (isDesc) return n;
+    const nSide = (n.side === "left" || n.side === "old") ? "old" : "new";
+    if (nSide === normSide) return n;
+  }
+
+  return null;
+}
+
+export function renderSavedNoteRowHtml(note, colSpan, fallbackFile = "") {
+  if (!note || !note.text) return "";
+  const file = note.file || note.file_path || fallbackFile;
+  const lineNo = note.lineNo != null ? note.lineNo : note.line_no;
+  const side = (note.side === "left" || note.side === "old") ? "old" : "new";
+  const isAgent = note.author === "agent";
+  const badgeLabel = isAgent ? "🤖 AI Review Comment" : "💬 Review Comment";
+  const sideSuffix = side === "old" && String(file).toUpperCase() !== "DESCRIPTION" ? " [old]" : "";
+
+  return `
+    <tr class="diff-saved-note-row" data-file="${escapeHtml(String(file))}" data-line="${escapeHtml(String(lineNo))}" data-side="${escapeHtml(side)}">
+      <td colspan="${colSpan}">
+        <div class="diff-saved-note-box ${isAgent ? "is-agent-note" : ""}">
+          <div class="diff-saved-note-header">
+            <span class="diff-saved-note-title">
+              <strong>${badgeLabel}</strong>
+              <span class="diff-saved-note-target">${escapeHtml(String(file))}:${escapeHtml(String(lineNo))}${sideSuffix}</span>
+            </span>
+            <span class="diff-saved-note-actions">
+              <button type="button" class="btn-saved-note-edit" data-file="${escapeHtml(String(file))}" data-line="${escapeHtml(String(lineNo))}" data-side="${escapeHtml(side)}">✏️ Edit</button>
+              <button type="button" class="btn-saved-note-discard" data-file="${escapeHtml(String(file))}" data-line="${escapeHtml(String(lineNo))}" data-side="${escapeHtml(side)}">🗑️ Discard</button>
+            </span>
+          </div>
+          <pre class="diff-saved-note-text">${escapeHtml(note.text)}</pre>
+        </div>
+      </td>
+    </tr>
+  `;
+}
+
 export function renderSideDiff(container, parsedDiff) {
-  if (!parsedDiff || !parsedDiff.files || parsedDiff.files.length === 0) {
+  if (!parsedDiff || ((!parsedDiff.files || parsedDiff.files.length === 0) && !parsedDiff.preamble)) {
     container.innerHTML = `<div style="padding: 16px; color: var(--text-muted);">No patch diff found.</div>`;
     return;
   }
@@ -20,7 +95,8 @@ export function renderSideDiff(container, parsedDiff) {
   function render() {
     const width = container.clientWidth || store.getState().containerWidth || 1200;
     const isSideBySide = width >= BREAKPOINT_WIDTH;
-    const notes = store.getState().activeNotes;
+    const notes = store.getState().activeNotes || {};
+    const renderedNotes = new Set();
 
     let html = "";
 
@@ -46,15 +122,18 @@ export function renderSideDiff(container, parsedDiff) {
       for (let i = 0; i < preambleLines.length; i++) {
         const lineNo = i + 1;
         const lineContent = linkifyUrls((preambleLines[i] || "").replace(/[\r\n]/g, ""));
-        const noteKey = `DESCRIPTION:${lineNo}`;
-        const hasNote = notes && notes[noteKey];
+        const descNote = findMatchingNote(notes, "DESCRIPTION", lineNo, "new");
+        if (descNote) renderedNotes.add(descNote);
 
         html += `
           <tr class="diff-row">
-            <td class="diff-gutter ${hasNote ? "has-note" : ""}" data-side="new" data-file="DESCRIPTION" data-line="${lineNo}">${lineNo}</td>
+            <td class="diff-gutter ${descNote ? "has-note" : ""}" data-side="new" data-file="DESCRIPTION" data-line="${lineNo}">${lineNo}</td>
             <td class="diff-code ctx" style="padding-left: 8px;">${lineContent}</td>
           </tr>
         `;
+        if (descNote) {
+          html += renderSavedNoteRowHtml(descNote, 2, "DESCRIPTION");
+        }
       }
 
       html += `</tbody></table></div>`;
@@ -62,7 +141,7 @@ export function renderSideDiff(container, parsedDiff) {
 
     // Render each changed file
     for (const file of (parsedDiff.files || [])) {
-      const fileName = file.new_path || file.old_path;
+      const fileName = (file.new_path && file.new_path !== "/dev/null") ? file.new_path : (file.old_path || file.new_path);
       html += `
         <div class="diff-file-card" data-file="${escapeHtml(fileName)}">
           <div class="diff-file-header">
@@ -90,21 +169,28 @@ export function renderSideDiff(container, parsedDiff) {
           `;
 
           for (const row of (hunk.paired_rows || [])) {
-            const leftNoteKey = `${fileName}:${row.left.line_no}`;
-            const rightNoteKey = `${fileName}:${row.right.line_no}`;
-            const leftHasNote = row.left.line_no && notes[leftNoteKey];
-            const rightHasNote = row.right.line_no && notes[rightNoteKey];
+            const leftNote = row.left.line_no ? findMatchingNote(notes, fileName, row.left.line_no, "old") : null;
+            const rightNote = row.right.line_no ? findMatchingNote(notes, fileName, row.right.line_no, "new") : null;
+            if (leftNote) renderedNotes.add(leftNote);
+            if (rightNote) renderedNotes.add(rightNote);
+
             const leftContent = row.left.type === "empty" ? "" : linkifyUrls((row.left.content || "").replace(/[\r\n]/g, ""));
             const rightContent = row.right.type === "empty" ? "" : linkifyUrls((row.right.content || "").replace(/[\r\n]/g, ""));
 
             html += `
               <tr class="diff-row" data-row-idx="${row.row_idx}">
-                <td class="diff-gutter ${leftHasNote ? "has-note" : ""}" data-side="left" data-file="${escapeHtml(fileName)}" data-line="${row.left.line_no || ""}">${row.left.line_no || ""}</td>
+                <td class="diff-gutter ${leftNote ? "has-note" : ""}" data-side="left" data-file="${escapeHtml(fileName)}" data-line="${row.left.line_no || ""}">${row.left.line_no || ""}</td>
                 <td class="diff-code ${row.left.type}">${leftContent}</td>
-                <td class="diff-gutter right-side ${rightHasNote ? "has-note" : ""}" data-side="right" data-file="${escapeHtml(fileName)}" data-line="${row.right.line_no || ""}">${row.right.line_no || ""}</td>
+                <td class="diff-gutter right-side ${rightNote ? "has-note" : ""}" data-side="right" data-file="${escapeHtml(fileName)}" data-line="${row.right.line_no || ""}">${row.right.line_no || ""}</td>
                 <td class="diff-code ${row.right.type}">${rightContent}</td>
               </tr>
             `;
+            if (leftNote) {
+              html += renderSavedNoteRowHtml(leftNote, 4, fileName);
+            }
+            if (rightNote && rightNote !== leftNote) {
+              html += renderSavedNoteRowHtml(rightNote, 4, fileName);
+            }
           }
 
           html += `</tbody></table>`;
@@ -121,19 +207,27 @@ export function renderSideDiff(container, parsedDiff) {
           `;
 
           for (const u of (hunk.unified_lines || [])) {
-            const targetLine = u.new_no || u.old_no;
-            const noteKey = `${fileName}:${targetLine}`;
-            const hasNote = targetLine && notes[noteKey];
+            const oldNote = u.old_no ? findMatchingNote(notes, fileName, u.old_no, "old") : null;
+            const newNote = u.new_no ? findMatchingNote(notes, fileName, u.new_no, "new") : null;
+            if (oldNote) renderedNotes.add(oldNote);
+            if (newNote) renderedNotes.add(newNote);
+
             const prefix = u.type === "add" ? "+" : u.type === "del" ? "-" : " ";
             const uContent = linkifyUrls((u.content || "").replace(/[\r\n]/g, ""));
 
             html += `
               <tr class="diff-row ${u.type}">
-                <td class="diff-gutter" data-side="old" data-file="${escapeHtml(fileName)}" data-line="${u.old_no || ""}">${u.old_no || ""}</td>
-                <td class="diff-gutter ${hasNote ? "has-note" : ""}" data-side="new" data-file="${escapeHtml(fileName)}" data-line="${u.new_no || ""}">${u.new_no || ""}</td>
+                <td class="diff-gutter ${oldNote ? "has-note" : ""}" data-side="old" data-file="${escapeHtml(fileName)}" data-line="${u.old_no || ""}">${u.old_no || ""}</td>
+                <td class="diff-gutter ${newNote ? "has-note" : ""}" data-side="new" data-file="${escapeHtml(fileName)}" data-line="${u.new_no || ""}">${u.new_no || ""}</td>
                 <td class="diff-code ${u.type}">${prefix}${uContent}</td>
               </tr>
             `;
+            if (oldNote) {
+              html += renderSavedNoteRowHtml(oldNote, 3, fileName);
+            }
+            if (newNote && newNote !== oldNote) {
+              html += renderSavedNoteRowHtml(newNote, 3, fileName);
+            }
           }
 
           html += `</tbody></table>`;
@@ -141,6 +235,23 @@ export function renderSideDiff(container, parsedDiff) {
       }
 
       html += `</div>`;
+    }
+
+    // Render any remaining notes whose file/line did not match a specific rendered hunk row
+    const unmappedNotes = Object.values(notes).filter((n) => n && n.text && !renderedNotes.has(n));
+    if (unmappedNotes.length > 0) {
+      html += `
+        <div class="diff-file-card" data-file="UNMAPPED_NOTES" style="margin-top: 16px;">
+          <div class="diff-file-header">
+            <span>💬 Review Comments (${unmappedNotes.length})</span>
+          </div>
+          <table class="diff-table unified">
+            <tbody>
+      `;
+      for (const note of unmappedNotes) {
+        html += renderSavedNoteRowHtml(note, 1, note.file || note.file_path || "PATCH");
+      }
+      html += `</tbody></table></div>`;
     }
 
     // Postscript / Signature / Continued message body
@@ -171,14 +282,46 @@ export function renderSideDiff(container, parsedDiff) {
         const rawSide = gutter.getAttribute("data-side");
         const side = (rawSide === "left" || rawSide === "old") ? "old" : "new";
         const row = gutter.closest("tr");
-        const existingNote = notes[`${file}:${line}`]?.text || "";
-        mountNoteBubble(row, file, line, side, existingNote, (saved) => {
+        const matchedNote = findMatchingNote(store.getState().activeNotes, file, line, side);
+        const existingNote = matchedNote?.text || "";
+        const targetFile = matchedNote?.file || matchedNote?.file_path || file;
+        const targetSide = matchedNote?.side || side;
+        mountNoteBubble(row, targetFile, line, targetSide, existingNote, (saved) => {
           if (saved) {
             gutter.classList.add("has-note");
-          } else if (!store.getState().activeNotes[`${file}:${line}`]) {
+          } else if (!findMatchingNote(store.getState().activeNotes, targetFile, line, targetSide)) {
             gutter.classList.remove("has-note");
           }
         });
+      });
+    });
+
+    // Attach Edit and Discard button listeners on inline saved notes
+    container.querySelectorAll(".btn-saved-note-edit").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const file = btn.getAttribute("data-file");
+        const line = parseInt(btn.getAttribute("data-line"), 10);
+        const side = btn.getAttribute("data-side") || "new";
+        if (!file || !line || isNaN(line)) return;
+        const noteRow = btn.closest("tr");
+        const targetRow = (noteRow?.previousElementSibling && noteRow.previousElementSibling.classList.contains("diff-row"))
+          ? noteRow.previousElementSibling
+          : noteRow;
+        if (!targetRow) return;
+        const matchedNote = findMatchingNote(store.getState().activeNotes, file, line, side);
+        mountNoteBubble(targetRow, file, line, side, matchedNote?.text || "");
+      });
+    });
+
+    container.querySelectorAll(".btn-saved-note-discard").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const file = btn.getAttribute("data-file");
+        const line = parseInt(btn.getAttribute("data-line"), 10);
+        const side = btn.getAttribute("data-side") || "new";
+        if (!file || !line || isNaN(line)) return;
+        store.setNote(file, line, "", side);
       });
     });
   }
