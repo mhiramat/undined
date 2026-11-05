@@ -232,3 +232,96 @@ func TestMergePatchReviewQuoteNonPatchEmailDescription(t *testing.T) {
 	}
 }
 
+func TestWrapCommentText(t *testing.T) {
+	t.Run("long_prose", func(t *testing.T) {
+		longComment := "This is a dummy long review comment on the patch diff that exceeds seventy-five columns and should be automatically wrapped around column 75 when composing a reply mail."
+		wrapped := WrapCommentText(longComment, 75)
+		lines := strings.Split(wrapped, "\n")
+		if len(lines) < 3 {
+			t.Fatalf("WrapCommentText line count = %d, want >= 3:\n%s", len(lines), wrapped)
+		}
+		for i, line := range lines {
+			if len(line) > 75 {
+				t.Errorf("line %d len = %d, want <= 75: %q", i+1, len(line), line)
+			}
+		}
+		if got := strings.Join(strings.Fields(wrapped), " "); got != longComment {
+			t.Errorf("wrapped words = %q, want %q", got, longComment)
+		}
+	})
+
+	t.Run("spaceless_token", func(t *testing.T) {
+		dummy := strings.Repeat("a", 160)
+		wrapped := WrapCommentText(dummy, 75)
+		lines := strings.Split(wrapped, "\n")
+		if len(lines) != 3 {
+			t.Fatalf("WrapCommentText line count = %d, want 3:\n%s", len(lines), wrapped)
+		}
+		if len(lines[0]) != 75 || len(lines[1]) != 75 || len(lines[2]) != 10 {
+			t.Errorf("line lengths = (%d, %d, %d), want (75, 75, 10)", len(lines[0]), len(lines[1]), len(lines[2]))
+		}
+	})
+
+	t.Run("long_url", func(t *testing.T) {
+		url := "https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u"
+		comment := "Please refer to the previous thread at " + url + " for full details on this regression."
+		wrapped := WrapCommentText(comment, 75)
+		if !strings.Contains(wrapped, "\n"+url+"\n") {
+			t.Errorf("WrapCommentText() = %q, want URL on its own line %q", wrapped, url)
+		}
+	})
+
+	t.Run("fenced_code_and_quotes", func(t *testing.T) {
+		codeLine := "	if (unlikely(kprobe_running() && !arch_kprobe_allow_reentry(p, regs))) return 0;"
+		fenced := "Here is an example:\n```\n" + codeLine + "\n```"
+		wrapped := WrapCommentText(fenced, 75)
+		if !strings.Contains(wrapped, codeLine) {
+			t.Errorf("WrapCommentText() = %q, want unwrapped fenced code line %q", wrapped, codeLine)
+		}
+	})
+}
+
+func TestMergePatchReviewQuoteWrapsLongComments(t *testing.T) {
+	diffText := `diff --git a/kernel/kprobes.c b/kernel/kprobes.c
+--- a/kernel/kprobes.c
++++ b/kernel/kprobes.c
+@@ -10,5 +10,6 @@ static int register_kprobe_test(void)
+ 	int ret = 0;
+ 
++	ret = check_kprobe_address_safe();
+ 	return ret;
+ }
+`
+	parsed := patch.ParsePatch(diffText)
+	longComment := "This is a dummy long comment on the diff line to verify that when composing the reply mail, MergePatchReviewQuote automatically wraps inline diff comments around 75 columns instead of emitting a single long unwrapped line."
+	longGeneral := "Thank you for working on these KUnit test cases for kprobes regressions, please find my detailed comments inline below."
+
+	notes := []InlineNote{
+		{
+			File:   "kernel/kprobes.c",
+			LineNo: 12,
+			Side:   "new",
+			Text:   longComment,
+		},
+	}
+
+	result := MergePatchReviewQuote(
+		"Thu, 05 Nov 2026 21:00:00 +0900",
+		"Kernel Developer",
+		"dev@kernel.org",
+		diffText,
+		parsed,
+		notes,
+		longGeneral,
+		"Kernel Developer",
+	)
+
+	for i, line := range strings.Split(result, "\n") {
+		if strings.HasPrefix(line, ">") || strings.HasPrefix(line, "On ") {
+			continue
+		}
+		if len(line) > 75 {
+			t.Errorf("non-quoted line %d len = %d, want <= 75: %q", i+1, len(line), line)
+		}
+	}
+}

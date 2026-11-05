@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EditorHistory } from "../frontend/src/editorHistory.js";
+import {
+  wrapCommentText,
+  wrapReplyBodyComments,
+  autoWrapEditorLine,
+} from "../frontend/src/components/InternalEditor.js";
 
 test("EditorHistory: initial state has no undo or redo", () => {
   const h = new EditorHistory("hello", 0, 0);
@@ -135,3 +140,51 @@ test("EditorHistory: caps at maxSize", () => {
   assert.equal(h.undo().value, "2");
   assert.equal(h.canUndo(), false); // '0' and '1' dropped
 });
+
+test("wrapCommentText: wraps long prose and spaceless dummy lines around 75 columns", () => {
+  const longProse =
+    "This is a dummy long comment on the diff line that exceeds seventy-five columns and should be wrapped automatically when composing the reply mail.";
+  const wrapped = wrapCommentText(longProse, 75);
+  const lines = wrapped.split("\n");
+  assert.ok(lines.length >= 2);
+  for (const l of lines) {
+    assert.ok(l.length <= 75, `Line exceeded 75 cols: ${l}`);
+  }
+
+  const spaceless = "a".repeat(160);
+  const wrappedSpaceless = wrapCommentText(spaceless, 75).split("\n");
+  assert.equal(wrappedSpaceless.length, 3);
+  assert.equal(wrappedSpaceless[0].length, 75);
+  assert.equal(wrappedSpaceless[1].length, 75);
+  assert.equal(wrappedSpaceless[2].length, 10);
+});
+
+test("wrapReplyBodyComments: wraps unquoted comment lines while preserving quotes and signature", () => {
+  const longQuote = "> +	if (unlikely(kprobe_running() && !arch_kprobe_allow_reentry(p, regs))) return 0;";
+  const longComment =
+    "This is a dummy long comment on the diff that should wrap at 75 columns while keeping the quoted diff line above untouched.";
+  const body = `On Thu, 05 Nov 2026, Kernel Developer <dev@kernel.org> wrote:\n${longQuote}\n\n${longComment}\n\n-- \nKernel Developer`;
+  const wrapped = wrapReplyBodyComments(body, 75);
+
+  assert.ok(wrapped.includes(longQuote), "Quoted line must remain untouched");
+  assert.ok(wrapped.includes("-- \nKernel Developer"), "Signature must remain untouched");
+  for (const line of wrapped.split("\n")) {
+    if (line.startsWith(">") || line.startsWith("On ")) continue;
+    assert.ok(line.length <= 75, `Unquoted line exceeded 75 cols: ${line}`);
+  }
+});
+
+test("autoWrapEditorLine: wraps unquoted line when typing past column 75", () => {
+  const prefix72 = "This is a comment line that reaches right up to seventy-two columns here";
+  assert.equal(prefix72.length, 72);
+  const typed = `${prefix72} and`; // 76 chars
+  const res = autoWrapEditorLine(typed, typed.length, 75);
+  assert.ok(res !== null);
+  assert.equal(res.value, `${prefix72}\nand`);
+  assert.equal(res.cursor, typed.length);
+
+  // Quoted lines should never be auto-wrapped
+  const quotedLong = `> ${typed}`;
+  assert.equal(autoWrapEditorLine(quotedLong, quotedLong.length, 75), null);
+});
+

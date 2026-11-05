@@ -476,8 +476,10 @@ export function openInternalEditor({
   bodyTextarea.addEventListener("keyup", updateCursorPos);
   bodyTextarea.addEventListener("click", updateCursorPos);
   bodyTextarea.addEventListener("input", (e) => {
-    updateCursorPos();
-    if (isComposing) return;
+    if (isComposing) {
+      updateCursorPos();
+      return;
+    }
     const isDelete = e.inputType ? e.inputType.startsWith("delete") : false;
     const isPaste = e.inputType === "insertFromPaste";
     history.record(
@@ -487,6 +489,32 @@ export function openInternalEditor({
       isDelete ? "delete" : "input",
       isPaste
     );
+
+    if (
+      !isDelete &&
+      !isPaste &&
+      (!e.inputType || e.inputType === "insertText") &&
+      bodyTextarea.selectionStart === bodyTextarea.selectionEnd
+    ) {
+      const wrapped = autoWrapEditorLine(
+        bodyTextarea.value,
+        bodyTextarea.selectionStart,
+        DEFAULT_WRAP_COLUMNS
+      );
+      if (wrapped) {
+        bodyTextarea.value = wrapped.value;
+        bodyTextarea.setSelectionRange(wrapped.cursor, wrapped.cursor);
+        history.record(
+          bodyTextarea.value,
+          wrapped.cursor,
+          wrapped.cursor,
+          "wrap",
+          true
+        );
+      }
+    }
+
+    updateCursorPos();
     updateUndoRedoUI();
   });
 
@@ -797,13 +825,280 @@ export function buildReplyRecipients(msg, userEmail = "") {
   };
 }
 
+export const DEFAULT_WRAP_COLUMNS = 75;
+
+function isWideCodePoint(cp) {
+  return (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f9ff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  );
+}
+
+function charWidth(ch, col) {
+  if (ch === "\t") {
+    return 8 - (col % 8);
+  }
+  const cp = ch.codePointAt(0);
+  return isWideCodePoint(cp) ? 2 : 1;
+}
+
+export function visualWidth(str) {
+  let col = 0;
+  for (const ch of str) {
+    col += charWidth(ch, col);
+  }
+  return col;
+}
+
+function isUrlToken(w) {
+  return (
+    w.startsWith("http://") ||
+    w.startsWith("https://") ||
+    w.startsWith("<http://") ||
+    w.startsWith("<https://")
+  );
+}
+
+/**
+ * Wrap lines in a review comment around maxCols columns (default 75).
+ * Quoted lines (">"), fenced code blocks ("```"), and tab-indented lines are preserved.
+ */
+export function wrapCommentText(text, maxCols = DEFAULT_WRAP_COLUMNS) {
+  if (!text || typeof text !== "string") return text || "";
+  const limit = maxCols > 0 ? maxCols : DEFAULT_WRAP_COLUMNS;
+  const rawLines = text.replace(/\r\n/g, "\n").split("\n");
+  const outLines = [];
+  let inCodeFence = false;
+
+  for (const line of rawLines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inCodeFence = !inCodeFence;
+      outLines.push(line);
+      continue;
+    }
+    if (inCodeFence || trimmed === "" || visualWidth(line) <= limit) {
+      outLines.push(line);
+      continue;
+    }
+    if (trimmed.startsWith(">") || line.startsWith("\t")) {
+      outLines.push(line);
+      continue;
+    }
+
+    let indentLen = 0;
+    while (indentLen < line.length && line[indentLen] === " ") {
+      indentLen++;
+    }
+    const indent = indentLen <= 8 ? line.slice(0, indentLen) : "";
+    const indentWidth = visualWidth(indent);
+
+    const words = line.slice(indentLen).trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      outLines.push(line);
+      continue;
+    }
+
+    let curLine = "";
+    let curWidth = 0;
+
+    for (const word of words) {
+      const wordWidth = visualWidth(word);
+      if (indentWidth + wordWidth <= limit) {
+        if (curLine === "") {
+          curLine = indent + word;
+          curWidth = indentWidth + wordWidth;
+        } else if (curWidth + 1 + wordWidth <= limit) {
+          curLine += " " + word;
+          curWidth += 1 + wordWidth;
+        } else {
+          outLines.push(curLine);
+          curLine = indent + word;
+          curWidth = indentWidth + wordWidth;
+        }
+      } else if (isUrlToken(word)) {
+        if (curLine !== "") {
+          outLines.push(curLine);
+          curLine = "";
+          curWidth = 0;
+        }
+        outLines.push(indent + word);
+      } else {
+        if (curLine !== "") {
+          outLines.push(curLine);
+          curLine = "";
+          curWidth = 0;
+        }
+        let chunk = indent;
+        let chunkWidth = indentWidth;
+        for (const ch of word) {
+          let cw = charWidth(ch, chunkWidth);
+          if (chunkWidth + cw > limit && chunk !== indent) {
+            outLines.push(chunk);
+            chunk = indent;
+            chunkWidth = indentWidth;
+            cw = charWidth(ch, chunkWidth);
+          }
+          chunk += ch;
+          chunkWidth += cw;
+        }
+        if (chunk !== indent) {
+          curLine = chunk;
+          curWidth = chunkWidth;
+        }
+      }
+    }
+
+    if (curLine !== "") {
+      outLines.push(curLine);
+    }
+  }
+
+  return outLines.join("\n");
+}
+
+/**
+ * Wrap unquoted comment blocks inside a composed reply body around maxCols columns,
+ * while preserving the attribution line, quoted lines (">"), and signature ("-- ").
+ */
+export function wrapReplyBodyComments(body, maxCols = DEFAULT_WRAP_COLUMNS) {
+  if (!body || typeof body !== "string") return body || "";
+  const sigMatch = /(?:^|\n)--[ \t]*(?:\r?\n|$)/g;
+  let match;
+  let sigStart = -1;
+  while ((match = sigMatch.exec(body)) !== null) {
+    sigStart = match.index + (match[0].startsWith("\n") ? 1 : 0);
+  }
+
+  const mainPart = sigStart !== -1 ? body.slice(0, sigStart) : body;
+  const sigPart = sigStart !== -1 ? body.slice(sigStart) : "";
+
+  const lines = mainPart.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let inCodeFence = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inCodeFence = !inCodeFence;
+      out.push(line);
+      continue;
+    }
+    if (
+      inCodeFence ||
+      (i === 0 && /^On .+ wrote:$/.test(trimmed)) ||
+      trimmed === "" ||
+      trimmed.startsWith(">")
+    ) {
+      out.push(line);
+      continue;
+    }
+    out.push(wrapCommentText(line, maxCols));
+  }
+
+  return out.join("\n") + sigPart;
+}
+
+/**
+ * Automatically wrap the current line around maxCols columns while typing in the editor.
+ * Returns { value, cursor } if the line was wrapped, or null if no wrap was needed.
+ */
+export function autoWrapEditorLine(value, cursorOffset, maxCols = DEFAULT_WRAP_COLUMNS) {
+  if (!value || typeof value !== "string" || cursorOffset == null) return null;
+  const limit = maxCols > 0 ? maxCols : DEFAULT_WRAP_COLUMNS;
+
+  const lineStart = cursorOffset <= 0 ? 0 : value.lastIndexOf("\n", cursorOffset - 1) + 1;
+  const nextNl = value.indexOf("\n", cursorOffset);
+  const lineEnd = nextNl === -1 ? value.length : nextNl;
+  const line = value.slice(lineStart, lineEnd);
+
+  const trimmed = line.trim();
+  if (
+    trimmed === "" ||
+    trimmed.startsWith(">") ||
+    trimmed.startsWith("```") ||
+    line.startsWith("\t") ||
+    line.startsWith("-- ") ||
+    line === "--" ||
+    /^On .+ wrote:$/.test(trimmed) ||
+    visualWidth(line) <= limit
+  ) {
+    return null;
+  }
+
+  let indentLen = 0;
+  while (indentLen < line.length && line[indentLen] === " ") {
+    indentLen++;
+  }
+  const indent = indentLen <= 8 ? line.slice(0, indentLen) : "";
+
+  let col = 0;
+  let idx = 0;
+  let lastSpaceIdx = -1;
+  for (const ch of line) {
+    const cw = charWidth(ch, col);
+    if (idx >= indentLen && ch === " " && col <= limit) {
+      lastSpaceIdx = idx;
+    }
+    col += cw;
+    idx += ch.length;
+  }
+
+  const relCursor = cursorOffset - lineStart;
+
+  if (lastSpaceIdx !== -1) {
+    const newLine = line.slice(0, lastSpaceIdx) + "\n" + indent + line.slice(lastSpaceIdx + 1);
+    const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+    const newCursor = relCursor > lastSpaceIdx ? cursorOffset + indent.length : cursorOffset;
+    return { value: newValue, cursor: newCursor };
+  }
+
+  if (isUrlToken(trimmed)) {
+    return null;
+  }
+
+  col = 0;
+  idx = 0;
+  let splitIdx = -1;
+  for (const ch of line) {
+    const cw = charWidth(ch, col);
+    if (col + cw > limit && idx > indentLen) {
+      splitIdx = idx;
+      break;
+    }
+    col += cw;
+    idx += ch.length;
+  }
+
+  if (splitIdx === -1) {
+    return null;
+  }
+
+  const newLine = line.slice(0, splitIdx) + "\n" + indent + line.slice(splitIdx);
+  const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+  const newCursor = relCursor >= splitIdx ? cursorOffset + 1 + indent.length : cursorOffset;
+  return { value: newValue, cursor: newCursor };
+}
+
 /**
  * Open the internal editor pre-populated with quote from the active message.
  */
 export async function openReplyForMessage(msg, notes = []) {
   if (!msg) return;
 
-  const notesList = notes && notes.length > 0 ? notes : store.getNotesList();
+  const rawNotesList = notes && notes.length > 0 ? notes : store.getNotesList();
+  const notesList = rawNotesList.map((n) => ({
+    ...n,
+    text: wrapCommentText(n.text, DEFAULT_WRAP_COLUMNS),
+  }));
 
   // Determine recipients from mail headers
   const cfg = store.getState().config;
@@ -826,7 +1121,7 @@ export async function openReplyForMessage(msg, notes = []) {
     const targetId = msg.id != null ? String(msg.id) : msg.message_id;
     const quoteRes = await previewQuote(targetId, notesList, "");
     if (quoteRes && quoteRes.quote_text) {
-      quoteBody = quoteRes.quote_text;
+      quoteBody = wrapReplyBodyComments(quoteRes.quote_text, DEFAULT_WRAP_COLUMNS);
     }
   } catch (e) {
     console.warn("Could not preview quote:", e);
