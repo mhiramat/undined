@@ -17,6 +17,7 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 ## 3. Git Commit Hygiene
 - **Run E2E Tests Before Committing**: Run `make test-e2e` and ensure all tests pass prior to committing any changes.
 - **Pre-Commit Go Review Subagent**: Before committing changes that affect Go source files (`*.go`), invoke a subagent with the `go-review-agent` skill to review the uncommitted changes (`git diff`). Address all identified findings before proceeding with the commit.
+- **Update `AGENTS.md` on User-Requested Changes**: Whenever modifications or updates are made in response to user requests, update `AGENTS.md` to document the new invariants, behaviors, or architectural rules as you commit them to the repository.
 - **Separate Commits**: When addressing multiple distinct bugs, vulnerabilities, or enhancements, commit each logical change separately with an explanatory commit message. Avoid bundling unrelated changes into a single commit.
 - **Message Wrapping**: Commit messages must be wrapped before the 80-character mark (recommend 72 characters for body text and 50–72 characters for subjects). Never exceed 80 characters per line.
 
@@ -30,8 +31,10 @@ Guidelines and invariants for agentic development on the Undine Linux kernel mai
 - **Reject SideDiff**: Do not render corrupted patches in the SideDiff dual-column view. Display them as plain text with non-ASCII characters visually escaped (e.g. `<U+00A0>`) and warn the user.
 - **Reference**: See `docs/POLICY_PATCH_INTEGRITY.md` for full background, security rationale, and presentation rules.
 
-## 6. Reply Quoting & Body Retention Invariant
+## 6. Reply Quoting, Body Retention & Editor Invariants
 - **Full Quoting on Zero Comments**: When composing a reply or generating review quotes without inline comments, always quote the entire body of the original email with standard RFC `> ` quoting prefixes. Never emit an empty or truncated quote.
+- **75-Column Auto-Wrapping for Review Comments**: Inline diff comments and general reply comments must automatically line-wrap around 75 columns both when generating reply quotes (`MergePatchReviewQuote` / `WrapCommentText`) and when editing unquoted lines in the internal reply editor (`InternalEditor.js`), while preserving RFC `> ` quoted lines, fenced code blocks, `--- ` signatures, and long URLs.
+- **Internal Editor Undo/Redo**: The internal email editor (`InternalEditor.js` + `EditorHistory` in `editorHistory.js`) must maintain an undo/redo stack supporting `Ctrl+Z`, `Ctrl+Y`, and `Ctrl+Shift+Z` across typing, line-wrapping, Tab insertion, and quick-tag insertion.
 
 ## 7. API Serialization & Nil-Slice Safety
 - **No Null Arrays in JSON**: Slices representing collections (such as `paired_rows`, `unified_lines`, `hunks`, `attachments`, `comments`) must always be initialized to empty slices (`make(..., 0)` or `[]*T{}`) instead of `nil`. This guarantees they serialize as `[]` rather than `null`, preventing frontend iteration exceptions (`TypeError: ... is not iterable`).
@@ -85,16 +88,23 @@ Always verify changes using one of the following methods, in order of priority:
 
 ## 14. Real-Time Notifications (SSE) & Database Watcher Invariants
 - **No Broadcast on Read-Path Hydration**: Lazy fetching or hydration of message bodies from IMAP (e.g., during `GET /api/messages/{id}`) must never emit SSE broadcast events that trigger message list or folder reloads.
-- **Prevent SQLite Watcher Self-Triggering**: When monitoring `PRAGMA data_version;` to detect external out-of-process changes (such as `--mcp-stdio` or CLI mutations), all in-process daemon writes must call `d.MarkInProcessWrite()`. The watcher must reconcile daemon writes and only emit `system.resync_required` for actual external modifications.
+- **Prevent SQLite Watcher Self-Triggering & Pool Masking**: When monitoring `PRAGMA data_version;` to detect external out-of-process changes (such as `--mcp-stdio` or CLI mutations), `GetDataVersion()` must query a dedicated single-connection watcher handle (`watcherDB` with `SetMaxOpenConns(1)`), and all in-process daemon writes must call `d.MarkInProcessWrite()` (which also tracks `mainBaselineVersion` on `d.DB` to detect external writes that occurred immediately prior to an in-process write).
 - **Actual-Change Publishing**: `mail.sync_completed` must only be published when new messages are added (`new_count > 0`) or messages are expunged (`removed_count > 0`). Never publish sync completion on no-op polling cycles.
 - **Detailed `message.updated` Payloads**: Payloads for `message.updated` must include the specific modified fields (e.g. `message_id`, `message_db_id`, `folder`, `is_read`, `is_replied`, `tag`, and `flags`).
 
 ## 15. Frontend Granular State Patching & Deduplication Invariants
 - **In-Place Row Patching on Updates**: The frontend SSE listener for `message.updated` must never trigger a full message list fetch (`fetchMessages()`). It must compare the payload against local state, treat identical state as a no-op, and patch row DOM elements (classes, read dots, tags) in-place.
 - **Self-Echo Suppression**: Client-initiated REST calls that modify or inspect messages must register a temporary suppression window (via `suppressEventForMessage`) to prevent incoming self-echo SSE events from redundantly re-fetching message details or threads.
+- **Detail Cache Invalidation on Comment/Review Events**: `messageDetailCache` must be invalidated by both numeric DB ID and string `message_id` whenever `review.comment_added`, `review.status_updated`, or `system.resync_required` arrives, and `fetchMessageComments()` must unwrap `{ message_id, comments }` to return the `comments` array so `activeNotes` and the `🗑️ Discard Drafts` button update immediately.
 - **Single-Flight Fetch Guards**: High-frequency fetch functions (such as `fetchFolders()` and `fetchMessages()`) must use in-flight promise guards to prevent concurrent or overlapping executions from causing duplicate DOM renders.
 
 ## 16. Pre-Commit Go Code Review Subagent Invariant
 - **Mandatory Subagent Review**: Whenever changes to Go code (`*.go`) are prepared for commit, launch a subagent using `invoke_subagent` (TypeName: `"self"`, Role: `"Go Code Reviewer"`) instructed to evaluate the uncommitted diff against the `go-review-agent` skill and Google Go Style Decisions.
 - **Pre-Commit Remediation**: The parent agent must review the subagent's findings, remediate any non-idiomatic patterns, naming stuttering, unhandled/discarded errors, or test hygiene defects, and re-run `make test` and `make test-e2e` before committing.
+
+## 17. Message Viewer, Diff Comments & Patchwork TODO Invariants
+- **Inline Diff Comment & Discard Drafts UI**: `SideDiff` must render saved draft and AI review comments inline (`.diff-saved-note-row`) directly below their target diff line in both Side-by-Side and Unified views (distinguishing `old` vs `new` sides without key collisions), `ViewerPane` must render fallback comment cards when in plain-text mode or when comments target lines outside parsed diff hunks, and the `🗑️ Discard Drafts` button must be shown whenever `activeNotes` is non-empty.
+- **MCP Target Side Priority**: In `post_review_comment`, always search all diff hunks for the caller's requested `side` (`"old"` vs `"new"`) first before falling back to the opposite side.
+- **Markdown Rich-Text & Plain-Text Soft Wrapping**: Non-patch emails detected as Markdown (`isMarkdown`) render as sanitized rich HTML with a `📝 Rich Text` / `📄 Plain Text` toggle; plain-text mode must soft-wrap at the window edge (`white-space: pre-wrap; overflow-wrap: anywhere`) and collapse invisible email preheader padding characters (`\u2007`, `\u00a0`, `\u200b`, `\u034f`).
+- **Configurable Patchwork TODO States**: Patchwork TODO synchronization (`patchwork.todo_states`) filters delegated patches using the configured state list (defaulting to `Under Review, New` when unspecified).
 
