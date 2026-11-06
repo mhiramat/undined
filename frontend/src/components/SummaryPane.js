@@ -4,7 +4,8 @@
  */
 
 import { store } from "../store.js";
-import { cancelFolderSync, markMessageRead } from "../api.js";
+import { cancelFolderSync, deleteMessagesBatch, fetchFolders, markMessageRead, setMessagesTagBatch } from "../api.js";
+import { getTags } from "../tags.js";
 import { openFilterDialog } from "./FilterDialog.js";
 import { isDraftFolder, triggerNewMessage } from "./ViewerPane.js";
 import {
@@ -18,6 +19,7 @@ import {
   EVENT_FOLDER_SYNC_STARTED,
   EVENT_FOLDER_SYNC_FINISHED,
   EVENT_FOLDER_SYNC_PROGRESS,
+  EVENT_SELECTION_CHANGED,
 } from "../constants.js";
 
 function showToast(message, type = "info") {
@@ -33,14 +35,172 @@ function showToast(message, type = "info") {
 export function renderSummaryPane(container) {
   // Set up container layout slots once
   container.innerHTML = `
+    <div id="summary-selection-slot"></div>
     <div id="summary-banner-slot"></div>
     <div id="summary-filter-slot"></div>
     <div class="summary-table-container"></div>
   `;
 
+  const selectionSlot = container.querySelector("#summary-selection-slot");
   const bannerSlot = container.querySelector("#summary-banner-slot");
   const filterSlot = container.querySelector("#summary-filter-slot");
   const tableContainer = container.querySelector(".summary-table-container");
+
+  function renderSelectionBar() {
+    const { isMultiSelectMode, selectedMessageIds, messages } = store.getState();
+    if (!isMultiSelectMode) {
+      selectionSlot.innerHTML = "";
+      return;
+    }
+
+    const selectedCount = selectedMessageIds ? selectedMessageIds.size : 0;
+    const visibleCount = Array.isArray(messages) ? messages.length : 0;
+    const allVisibleSelected =
+      visibleCount > 0 &&
+      messages.every((m) => m && m.id != null && selectedMessageIds.has(Number(m.id)));
+
+    selectionSlot.innerHTML = `
+      <div class="summary-selection-bar" id="summary-selection-bar">
+        <div class="selection-bar-left">
+          <label class="selection-all-label" title="Select or deselect all visible messages">
+            <input type="checkbox" class="summary-select-all-checkbox" id="chk-select-all-messages" ${allVisibleSelected ? "checked" : ""} />
+            <span>Select all</span>
+          </label>
+          <span class="selection-count-badge" id="selection-count-badge">${selectedCount} selected</span>
+        </div>
+        <div class="selection-bar-actions">
+          <div class="bulk-tag-menu-wrapper" style="position: relative; display: inline-block;">
+            <button type="button" class="filter-action-btn bulk-action-btn" id="btn-bulk-tag" ${selectedCount === 0 ? "disabled" : ""} title="Set or clear color tag for selected messages">
+              🏷️ Tag them ▾
+            </button>
+            <div class="header-tag-dropdown bulk-tag-dropdown" id="bulk-tag-dropdown" style="display: none;"></div>
+          </div>
+          <button type="button" class="filter-action-btn text-danger bulk-action-btn" id="btn-bulk-trash" ${selectedCount === 0 ? "disabled" : ""} title="Move selected messages to Trash / Delete them">
+            🗑️ Trash them
+          </button>
+          <button type="button" class="filter-action-btn bulk-cancel-btn" id="btn-bulk-cancel" title="Exit selection mode (Esc)">
+            ✕ Cancel
+          </button>
+        </div>
+      </div>
+    `;
+
+    const chkAll = selectionSlot.querySelector("#chk-select-all-messages");
+    if (chkAll) {
+      chkAll.addEventListener("change", (e) => {
+        e.stopPropagation();
+        if (chkAll.checked) {
+          store.selectAllMessages(true);
+        } else {
+          store.selectAllMessages(false);
+        }
+      });
+    }
+
+    const cancelBtn = selectionSlot.querySelector("#btn-bulk-cancel");
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        store.clearMultiSelection();
+      });
+    }
+
+    const trashBtn = selectionSlot.querySelector("#btn-bulk-trash");
+    if (trashBtn) {
+      trashBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const ids = Array.from(store.getState().selectedMessageIds || []);
+        if (ids.length === 0) return;
+        const label = ids.length === 1 ? "1 selected message" : `${ids.length} selected messages`;
+        if (typeof confirm === "function" && !confirm(`Are you sure you want to delete ${label}?`)) {
+          return;
+        }
+        trashBtn.disabled = true;
+        try {
+          await deleteMessagesBatch(ids);
+          store.removeMessages(ids);
+          store.clearMultiSelection();
+          try {
+            const folders = await fetchFolders();
+            store.setFolders(folders);
+          } catch (folderErr) {
+            console.warn("Could not refresh folders after bulk delete:", folderErr);
+          }
+          showToast(`Deleted ${label}.`, "info");
+        } catch (err) {
+          showToast(`Failed to delete messages: ${err.message}`, "error");
+          trashBtn.disabled = false;
+        }
+      });
+    }
+
+    const tagBtn = selectionSlot.querySelector("#btn-bulk-tag");
+    const tagDropdown = selectionSlot.querySelector("#bulk-tag-dropdown");
+    if (tagBtn && tagDropdown) {
+      tagBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const isOpen = tagDropdown.style.display !== "none";
+        if (isOpen) {
+          tagDropdown.style.display = "none";
+          return;
+        }
+        tagDropdown.style.display = "block";
+        tagDropdown.innerHTML = `<div style="padding: 6px 10px; color: var(--text-muted); font-size: 11px;">Loading tags...</div>`;
+        try {
+          const availableTags = await getTags();
+          let itemsHtml = `
+            <button type="button" class="header-tag-item bulk-tag-item" data-tag-key="">
+              <span class="tag-color-dot" style="background-color: transparent; border: 1px dashed #64748b;"></span>
+              <span>None (Clear)</span>
+              <span style="margin-left: auto; color: var(--text-muted); font-size: 10px;">0</span>
+            </button>
+            <div style="height: 1px; background-color: var(--border-color); margin: 3px 0;"></div>
+          `;
+          let idx = 1;
+          for (const [key, val] of Object.entries(availableTags)) {
+            const isCl = key.startsWith("$cl_");
+            const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
+            const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";
+            itemsHtml += `
+              <button type="button" class="header-tag-item bulk-tag-item" data-tag-key="${escapeHtml(key)}">
+                <span class="tag-color-dot" style="background-color: ${escapeHtml(val.color || "")};"></span>
+                <span>${escapeHtml(val.tag || key)}</span>
+                ${shortcutHint ? `<span style="margin-left: auto; color: var(--text-muted); font-size: 10px;">${shortcutHint}</span>` : ""}
+              </button>
+            `;
+          }
+          tagDropdown.innerHTML = itemsHtml;
+          tagDropdown.querySelectorAll(".bulk-tag-item").forEach((itemBtn) => {
+            itemBtn.addEventListener("click", async (ev) => {
+              ev.stopPropagation();
+              tagDropdown.style.display = "none";
+              const selectedKey = itemBtn.getAttribute("data-tag-key") || null;
+              const ids = Array.from(store.getState().selectedMessageIds || []);
+              if (ids.length === 0) return;
+              try {
+                const res = await setMessagesTagBatch(ids, selectedKey);
+                const tagDef = selectedKey && availableTags[selectedKey] ? availableTags[selectedKey] : null;
+                const tagKey = res?.tag_key !== undefined ? res.tag_key : (selectedKey || "");
+                const tagName = res?.tag_name !== undefined ? res.tag_name : (tagDef ? tagDef.tag : "");
+                const tagColor = res?.tag_color !== undefined ? res.tag_color : (tagDef ? tagDef.color : "");
+                store.updateMessagesTag(ids, tagKey, tagName, tagColor);
+                showToast(
+                  selectedKey
+                    ? `Tagged ${ids.length} message(s) as ${tagName || selectedKey}.`
+                    : `Cleared tag on ${ids.length} message(s).`,
+                  "info"
+                );
+              } catch (err) {
+                showToast(`Failed to tag messages: ${err.message}`, "error");
+              }
+            });
+          });
+        } catch (err) {
+          tagDropdown.innerHTML = `<div style="padding: 6px 10px; color: var(--accent-red); font-size: 11px;">Error loading tags</div>`;
+        }
+      });
+    }
+  }
 
   function renderSyncBanner() {
     const { selectedFolderId } = store.getState();
@@ -134,6 +294,8 @@ export function renderSummaryPane(container) {
       messages,
       rawMessages,
       selectedMessageId,
+      isMultiSelectMode,
+      selectedMessageIds,
       sortKey,
       sortOrder,
       threaded,
@@ -142,6 +304,9 @@ export function renderSummaryPane(container) {
 
     const isDraft = isDraftFolder(selectedFolderId);
     const hasFilter = Boolean(filterQuery && filterQuery.trim());
+    const firstColWidth = isMultiSelectMode
+      ? (isDraft ? "84px" : "64px")
+      : (isDraft ? "68px" : "44px");
 
     function sortIndicator(col) {
       if (sortKey !== col) return "";
@@ -149,10 +314,10 @@ export function renderSummaryPane(container) {
     }
 
     let html = `
-      <table class="summary-table">
+      <table class="summary-table ${isMultiSelectMode ? "multi-select-active" : ""}">
         <thead>
           <tr>
-            <th class="summary-menu-th" style="width: ${isDraft ? "68px" : "44px"}; text-align: center;">
+            <th class="summary-menu-th" style="width: ${firstColWidth}; text-align: center;">
               <div class="summary-menu-wrapper" style="display: flex; align-items: center; justify-content: center; gap: 4px;">
                 <button type="button" class="summary-hamburger-btn ${hasFilter ? "has-filter" : ""}" id="btn-summary-hamburger" title="Message list options & filter">
                   ☰${hasFilter ? `<span class="filter-badge-dot">●</span>` : ""}
@@ -171,6 +336,12 @@ export function renderSummaryPane(container) {
                     </button>
                     <div class="summary-dropdown-divider"></div>
                   ` : ""}
+                  <div class="summary-dropdown-section">Selection</div>
+                  <button type="button" class="summary-dropdown-item" id="menu-toggle-select-mode">
+                    <span class="dropdown-icon">☑️</span>
+                    <span>${isMultiSelectMode ? "Exit selection mode" : "Select messages (Ctrl+Click)"}</span>
+                  </button>
+                  <div class="summary-dropdown-divider"></div>
                   <div class="summary-dropdown-section">Filter</div>
                   <button type="button" class="summary-dropdown-item" id="menu-open-filter">
                     <span class="dropdown-icon">🔍</span>
@@ -290,9 +461,15 @@ export function renderSummaryPane(container) {
           unreadTitle = `Thread has unread replies. Click to mark thread as read${repliedTitle}`;
         }
 
+        const isSelectedMulti = Boolean(isMultiSelectMode && selectedMessageIds && selectedMessageIds.has(Number(m.id)));
+        const multiClass = isSelectedMulti ? "selected-multi" : "";
+        const checkboxHtml = isMultiSelectMode
+          ? `<input type="checkbox" class="summary-select-checkbox" data-select-id="${m.id}" ${isSelectedMulti ? "checked" : ""} title="Select message" />`
+          : "";
+
         html += `
-          <tr class="summary-row ${isActive} ${isUnread}" data-index="${idx}" data-id="${m.id}" data-has-tag="${Boolean(tagColor)}" style="${rowColorStyle}">
-            <td class="summary-unread-cell" data-unread-toggle="${m.id}" title="${unreadTitle}">${unreadDot}${repliedMark}</td>
+          <tr class="summary-row ${isActive} ${isUnread} ${multiClass}" data-index="${idx}" data-id="${m.id}" data-has-tag="${Boolean(tagColor)}" style="${rowColorStyle}">
+            <td class="summary-unread-cell" data-unread-toggle="${m.id}" title="${unreadTitle}">${checkboxHtml}<span class="summary-unread-indicators">${unreadDot}${repliedMark}</span></td>
             <td class="summary-subject-cell">${treeGuide}${threadToggleHtml}${escapeHtml(m.subject)}</td>
             <td class="summary-from-cell">${escapeHtml(m.from_name || m.from_addr)}</td>
             <td class="summary-tag-cell">${tagBadgeHtml}</td>
@@ -402,6 +579,17 @@ export function renderSummaryPane(container) {
         dropdownMenu.style.display = "none";
         store.clearFilter();
       });
+
+      tableContainer.querySelector("#menu-toggle-select-mode")?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdownMenu.style.display = "none";
+        const curr = store.getState().isMultiSelectMode;
+        if (curr) {
+          store.clearMultiSelection();
+        } else {
+          store.setMultiSelectMode(true);
+        }
+      });
     }
 
     // Attach new message button inside empty list
@@ -418,6 +606,17 @@ export function renderSummaryPane(container) {
     const tbody = tableContainer.querySelector(".summary-tbody");
     if (tbody) {
       tbody.addEventListener("click", (e) => {
+        const selectCheckbox = e.target.closest(".summary-select-checkbox");
+        if (selectCheckbox) {
+          e.stopPropagation();
+          const row = selectCheckbox.closest(".summary-row");
+          if (!row) return;
+          const msgId = parseInt(row.getAttribute("data-id"), 10);
+          const idx = parseInt(row.getAttribute("data-index"), 10);
+          store.toggleMultiSelectMessage(msgId, idx, { range: Boolean(e.shiftKey) });
+          return;
+        }
+
         const toggleBtn = e.target.closest("[data-thread-toggle]");
         if (toggleBtn) {
           e.stopPropagation();
@@ -426,12 +625,21 @@ export function renderSummaryPane(container) {
           return;
         }
 
+        const row = e.target.closest(".summary-row");
+        if (!row) return;
+        const msgId = parseInt(row.getAttribute("data-id"), 10);
+        const idx = parseInt(row.getAttribute("data-index"), 10);
+
+        if (e.ctrlKey || e.metaKey || (store.getState().isMultiSelectMode && e.shiftKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          store.toggleMultiSelectMessage(msgId, idx, { range: Boolean(e.shiftKey) });
+          return;
+        }
+
         const unreadCell = e.target.closest(".summary-unread-cell, [data-unread-toggle]");
         if (unreadCell) {
           e.stopPropagation();
-          const row = unreadCell.closest(".summary-row");
-          if (!row) return;
-          const msgId = parseInt(row.getAttribute("data-id"), 10);
           const computedMsg = store.getState().messages.find((m) => m.id === msgId);
           const rawMsg = store.getState().rawMessages.find((m) => m.id === msgId);
           if (!rawMsg) return;
@@ -456,9 +664,6 @@ export function renderSummaryPane(container) {
           return;
         }
 
-        const row = e.target.closest(".summary-row");
-        if (!row) return;
-        const idx = parseInt(row.getAttribute("data-index"), 10);
         store.selectMessageIndex(idx);
       });
     }
@@ -470,12 +675,17 @@ export function renderSummaryPane(container) {
     }
   }
 
-  // Close hamburger dropdown on outside click, window resize, or tableContainer scroll
+  // Close hamburger or bulk tag dropdown on outside click, window resize, or tableContainer scroll
   document.addEventListener("click", (e) => {
     const dropdown = tableContainer.querySelector("#summary-dropdown-menu");
     const btn = tableContainer.querySelector("#btn-summary-hamburger");
     if (dropdown && dropdown.style.display !== "none" && !dropdown.contains(e.target) && !btn?.contains(e.target)) {
       dropdown.style.display = "none";
+    }
+    const bulkTagDropdown = selectionSlot.querySelector("#bulk-tag-dropdown");
+    const bulkTagBtn = selectionSlot.querySelector("#btn-bulk-tag");
+    if (bulkTagDropdown && bulkTagDropdown.style.display !== "none" && !bulkTagDropdown.contains(e.target) && !bulkTagBtn?.contains(e.target)) {
+      bulkTagDropdown.style.display = "none";
     }
   });
 
@@ -483,6 +693,10 @@ export function renderSummaryPane(container) {
     const dropdown = tableContainer.querySelector("#summary-dropdown-menu");
     if (dropdown && dropdown.style.display !== "none") {
       dropdown.style.display = "none";
+    }
+    const bulkTagDropdown = selectionSlot.querySelector("#bulk-tag-dropdown");
+    if (bulkTagDropdown && bulkTagDropdown.style.display !== "none") {
+      bulkTagDropdown.style.display = "none";
     }
   });
 
@@ -528,19 +742,23 @@ export function renderSummaryPane(container) {
     const effectiveRead = computedMsg ? Boolean(computedMsg.is_read) : Boolean(isRead);
     const repliedHtml = (rawMsg && rawMsg.is_replied) ? `<span class="replied-dot" title="Replied">↩</span>` : "";
     const repliedTitle = (rawMsg && rawMsg.is_replied) ? " (Replied)" : "";
+    const dotCell = row.cells ? row.cells[0] : row.querySelector(".summary-unread-cell");
+    const indicatorsEl = dotCell ? (dotCell.querySelector(".summary-unread-indicators") || dotCell) : null;
 
     if (effectiveRead) {
       row.classList.remove("unread");
-      const dotCell = row.cells ? row.cells[0] : row.querySelector(".summary-unread-cell");
+      if (indicatorsEl) {
+        indicatorsEl.innerHTML = repliedHtml;
+      }
       if (dotCell) {
-        dotCell.innerHTML = repliedHtml;
         dotCell.setAttribute("title", `Click to mark as unread${repliedTitle}`);
       }
     } else {
       row.classList.add("unread");
-      const dotCell = row.cells ? row.cells[0] : row.querySelector(".summary-unread-cell");
+      if (indicatorsEl) {
+        indicatorsEl.innerHTML = `<span class="unread-dot">●</span>${repliedHtml}`;
+      }
       if (dotCell) {
-        dotCell.innerHTML = `<span class="unread-dot">●</span>${repliedHtml}`;
         dotCell.setAttribute("title", `Click to mark as read${repliedTitle}`);
       }
     }
@@ -586,9 +804,13 @@ export function renderSummaryPane(container) {
       event === EVENT_FOLDER_SELECTED ||
       event === EVENT_FILTER_UPDATED
     ) {
+      renderSelectionBar();
       renderTable();
       renderSyncBanner();
       renderFilterBanner();
+    } else if (event === EVENT_SELECTION_CHANGED) {
+      renderSelectionBar();
+      renderTable();
     } else if (event === EVENT_MESSAGE_SELECTED) {
       updateSelection(payload?.id, true);
     } else if (event === EVENT_MESSAGE_READ_UPDATED) {
@@ -608,6 +830,7 @@ export function renderSummaryPane(container) {
     }
   });
 
+  renderSelectionBar();
   renderSyncBanner();
   renderFilterBanner();
   renderTable();

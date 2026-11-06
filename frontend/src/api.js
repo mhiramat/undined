@@ -204,6 +204,7 @@ export async function fetchMessageMboxPath(idOrMsgId) {
 }
 
 export async function deleteMessage(messageIdOrDbId) {
+  suppressEventForMessage(messageIdOrDbId, 1000);
   const res = await fetch(`${BASE_URL}/api/messages/${encodeURIComponent(messageIdOrDbId)}`, {
     method: "DELETE",
   });
@@ -211,8 +212,21 @@ export async function deleteMessage(messageIdOrDbId) {
     const err = await res.json().catch(() => ({ detail: "Failed to delete message" }));
     throw new Error(err.detail || "Failed to delete message");
   }
-  messageDetailCache.delete(String(messageIdOrDbId));
+  invalidateMessageDetailCache(messageIdOrDbId);
   return res.json();
+}
+
+export async function deleteMessagesBatch(messageIds) {
+  const ids = Array.from(messageIds || []);
+  for (const id of ids) {
+    suppressEventForMessage(id, 1500);
+  }
+  const results = [];
+  for (const id of ids) {
+    const res = await deleteMessage(id);
+    results.push(res);
+  }
+  return results;
 }
 
 export async function importB4Thread(messageId) {
@@ -492,7 +506,26 @@ export async function setMessageTag(messageDbId, tagKey = null) {
     body: JSON.stringify({ tag: tagKey }),
   });
   if (!res.ok) throw new Error("Failed to update message tag");
-  return res.json();
+  const data = await res.json();
+  const cached = messageDetailCache.get(String(messageDbId));
+  if (cached && cached.message) {
+    cached.message.tag_key = data.tag_key;
+    cached.message.tag_name = data.tag_name;
+    cached.message.tag_color = data.tag_color;
+  }
+  return data;
+}
+
+export async function setMessagesTagBatch(messageIds, tagKey = null) {
+  const ids = Array.from(messageIds || []);
+  for (const id of ids) {
+    suppressEventForMessage(id, 1500);
+  }
+  let lastRes = null;
+  for (const id of ids) {
+    lastRes = await setMessageTag(id, tagKey);
+  }
+  return lastRes;
 }
 
 export async function fetchMessageComments(idOrMsgId, state = null) {

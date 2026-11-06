@@ -18,6 +18,7 @@ import {
   EVENT_MESSAGE_SELECTED,
   EVENT_MESSAGE_TAG_UPDATED,
   EVENT_NOTES_UPDATED,
+  EVENT_SELECTION_CHANGED,
   EVENT_WIDTH_RESIZED,
   FOLDER_B4_IMPORTS,
 } from "./constants.js";
@@ -31,6 +32,9 @@ class UndineDStore {
       messages: [],
       selectedMessageId: null,
       selectedMessageIndex: -1,
+      isMultiSelectMode: false,
+      selectedMessageIds: new Set(),
+      lastToggledMessageIndex: -1,
       sortKey: "date",
       sortOrder: "desc",
       threaded: true,
@@ -266,12 +270,27 @@ class UndineDStore {
     this.state.messages = [];
     this.state.selectedMessageId = null;
     this.state.selectedMessageIndex = -1;
+    this.state.isMultiSelectMode = false;
+    this.state.selectedMessageIds = new Set();
+    this.state.lastToggledMessageIndex = -1;
     this.state.activeMessageDetail = null;
     this.state.activeNotes = {};
     this.notify(EVENT_FOLDER_SELECTED, folderId);
   }
 
   recomputeMessages() {
+    if (this.state.selectedMessageIds && this.state.selectedMessageIds.size > 0) {
+      const validIds = new Set((this.state.rawMessages || []).map((m) => m.id));
+      for (const id of Array.from(this.state.selectedMessageIds)) {
+        if (!validIds.has(id)) {
+          this.state.selectedMessageIds.delete(id);
+        }
+      }
+      if (this.state.selectedMessageIds.size === 0) {
+        this.state.isMultiSelectMode = false;
+        this.state.lastToggledMessageIndex = -1;
+      }
+    }
     let filtered = this.state.rawMessages;
     if (this.state.parsedFilter) {
       filtered = filtered.filter((m) => matchMessageFilter(m, this.state.parsedFilter));
@@ -577,9 +596,29 @@ class UndineDStore {
   }
 
   removeMessage(messageId) {
-    this.state.rawMessages = this.state.rawMessages.filter((m) => m.id !== messageId);
+    this.removeMessages([messageId]);
+  }
+
+  removeMessages(messageIds) {
+    const idSet = new Set(Array.from(messageIds || []).map((id) => Number(id)));
+    if (idSet.size === 0) return;
+    this.state.rawMessages = this.state.rawMessages.filter((m) => !idSet.has(Number(m.id)));
+    let selectionChanged = false;
+    if (this.state.selectedMessageIds) {
+      for (const id of idSet) {
+        if (this.state.selectedMessageIds.delete(id)) {
+          selectionChanged = true;
+        }
+      }
+      if (this.state.selectedMessageIds.size === 0 && this.state.isMultiSelectMode) {
+        this.state.isMultiSelectMode = false;
+        this.state.lastToggledMessageIndex = -1;
+        selectionChanged = true;
+      }
+    }
+    this.syncSelectedFolderUnreadCount();
     this.recomputeMessages();
-    if (this.state.selectedMessageId === messageId) {
+    if (idSet.has(Number(this.state.selectedMessageId))) {
       if (this.state.messages.length > 0) {
         const nextIdx = Math.min(
           this.state.selectedMessageIndex >= 0 ? this.state.selectedMessageIndex : 0,
@@ -598,7 +637,99 @@ class UndineDStore {
         (m) => m.id === this.state.selectedMessageId
       );
     }
+    if (selectionChanged) {
+      this.notify(EVENT_SELECTION_CHANGED, {
+        isMultiSelectMode: this.state.isMultiSelectMode,
+        selectedMessageIds: this.state.selectedMessageIds,
+      });
+    }
     this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+  }
+
+  toggleMultiSelectMessage(messageId, index = null, { range = false } = {}) {
+    const numId = Number(messageId);
+    if (!Number.isFinite(numId)) return;
+
+    this.state.isMultiSelectMode = true;
+    const resolvedIdx = index != null && index >= 0
+      ? index
+      : this.state.messages.findIndex((m) => Number(m.id) === numId);
+
+    if (range && this.state.lastToggledMessageIndex >= 0 && resolvedIdx >= 0) {
+      const start = Math.min(this.state.lastToggledMessageIndex, resolvedIdx);
+      const end = Math.max(this.state.lastToggledMessageIndex, resolvedIdx);
+      for (let i = start; i <= end; i++) {
+        const m = this.state.messages[i];
+        if (m && m.id != null) {
+          this.state.selectedMessageIds.add(Number(m.id));
+        }
+      }
+    } else {
+      if (this.state.selectedMessageIds.has(numId)) {
+        this.state.selectedMessageIds.delete(numId);
+      } else {
+        this.state.selectedMessageIds.add(numId);
+      }
+    }
+
+    if (resolvedIdx >= 0) {
+      this.state.lastToggledMessageIndex = resolvedIdx;
+    }
+
+    if (this.state.selectedMessageIds.size === 0) {
+      this.state.isMultiSelectMode = false;
+      this.state.lastToggledMessageIndex = -1;
+    }
+
+    this.notify(EVENT_SELECTION_CHANGED, {
+      isMultiSelectMode: this.state.isMultiSelectMode,
+      selectedMessageIds: this.state.selectedMessageIds,
+    });
+  }
+
+  setMultiSelectMode(enabled) {
+    const next = Boolean(enabled);
+    if (!next) {
+      this.state.isMultiSelectMode = false;
+      this.state.selectedMessageIds.clear();
+      this.state.lastToggledMessageIndex = -1;
+    } else {
+      this.state.isMultiSelectMode = true;
+    }
+    this.notify(EVENT_SELECTION_CHANGED, {
+      isMultiSelectMode: this.state.isMultiSelectMode,
+      selectedMessageIds: this.state.selectedMessageIds,
+    });
+  }
+
+  selectAllMessages(selectAll = true) {
+    if (selectAll) {
+      this.state.isMultiSelectMode = true;
+      for (const m of this.state.messages) {
+        if (m && m.id != null) {
+          this.state.selectedMessageIds.add(Number(m.id));
+        }
+      }
+    } else {
+      this.state.selectedMessageIds.clear();
+      this.state.isMultiSelectMode = false;
+      this.state.lastToggledMessageIndex = -1;
+    }
+    this.notify(EVENT_SELECTION_CHANGED, {
+      isMultiSelectMode: this.state.isMultiSelectMode,
+      selectedMessageIds: this.state.selectedMessageIds,
+    });
+  }
+
+  clearMultiSelection() {
+    if (!this.state.isMultiSelectMode && this.state.selectedMessageIds.size === 0) return;
+    this.state.isMultiSelectMode = false;
+    this.state.selectedMessageIds.clear();
+    this.state.lastToggledMessageIndex = -1;
+    this.notify(EVENT_SELECTION_CHANGED, {
+      isMultiSelectMode: false,
+      selectedMessageIds: this.state.selectedMessageIds,
+    });
   }
 
   updateMessageRead(messageId, isRead) {
@@ -692,6 +823,41 @@ class UndineDStore {
       this.recomputeMessages();
     }
     this.notify(EVENT_MESSAGE_TAG_UPDATED, { messageId, tagKey, tagName, tagColor });
+    this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+  }
+
+  updateMessagesTag(messageIds, tagKey, tagName, tagColor) {
+    const idSet = new Set(Array.from(messageIds || []).map((id) => Number(id)));
+    if (idSet.size === 0) return;
+    for (const rawMsg of this.state.rawMessages) {
+      if (idSet.has(Number(rawMsg.id))) {
+        rawMsg.tag_key = tagKey;
+        rawMsg.tag_name = tagName;
+        rawMsg.tag_color = tagColor;
+      }
+    }
+    for (const computedMsg of this.state.messages) {
+      if (idSet.has(Number(computedMsg.id))) {
+        computedMsg.tag_key = tagKey;
+        computedMsg.tag_name = tagName;
+        computedMsg.tag_color = tagColor;
+      }
+    }
+    if (
+      this.state.activeMessageDetail &&
+      this.state.activeMessageDetail.message &&
+      idSet.has(Number(this.state.activeMessageDetail.message.id))
+    ) {
+      this.state.activeMessageDetail.message.tag_key = tagKey;
+      this.state.activeMessageDetail.message.tag_name = tagName;
+      this.state.activeMessageDetail.message.tag_color = tagColor;
+    }
+    if (this.state.parsedFilter) {
+      this.recomputeMessages();
+    }
+    for (const id of idSet) {
+      this.notify(EVENT_MESSAGE_TAG_UPDATED, { messageId: id, tagKey, tagName, tagColor });
+    }
     this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
   }
 

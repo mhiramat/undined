@@ -44,3 +44,4 @@ export const EVENT_FILTER_UPDATED = "filter_updated";
 export const EVENT_NOTES_UPDATED = "notes_updated";
 export const EVENT_AI_REVIEW_STATE_CHANGED = "ai_review_state_changed";
 export const EVENT_WIDTH_RESIZED = "width_resized";
+export const EVENT_SELECTION_CHANGED = "selection_changed";

@@ -2460,6 +2460,88 @@ body.composer-standalone-body {
 .filter-action-btn.text-danger:hover {
   background: rgba(239, 68, 68, 0.15);
 }
+.filter-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* =============================================================================
+   Multi-Message Selection Action Bar & Checkboxes
+   ============================================================================= */
+.summary-selection-bar {
+  background-color: rgba(59, 130, 246, 0.12);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.4);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  flex-shrink: 0;
+  gap: 10px;
+}
+
+.selection-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-main);
+}
+
+.selection-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 600;
+}
+
+.summary-select-all-checkbox,
+.summary-select-checkbox {
+  cursor: pointer;
+  accent-color: var(--accent-blue, #3b82f6);
+  margin: 0;
+  vertical-align: middle;
+}
+
+.summary-select-checkbox {
+  margin-right: 4px;
+}
+
+.selection-count-badge {
+  background-color: rgba(59, 130, 246, 0.22);
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+.selection-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bulk-tag-dropdown {
+  right: 0;
+  left: auto;
+  z-index: 10002;
+}
+
+.summary-row.selected-multi {
+  background-color: rgba(59, 130, 246, 0.16);
+}
+
+.summary-row.selected-multi.active {
+  background-color: rgba(59, 130, 246, 0.28);
+}
+
+.summary-table.multi-select-active .summary-unread-cell {
+  width: 64px;
+  white-space: nowrap;
+}
 
 /* =============================================================================
    Filter Modal Dialog

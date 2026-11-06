@@ -2,7 +2,8 @@
  * Main application bootstrap for Project Undine.
  */
 
-import { fetchConfig, fetchFolders, fetchMessages, setMessageTag } from "./api.js";
+import { fetchConfig, fetchFolders, fetchMessages, setMessageTag, setMessagesTagBatch } from "./api.js";
+import { getCachedTags } from "./tags.js";
 import { renderFolderPane } from "./components/FolderPane.js";
 import { renderSummaryPane } from "./components/SummaryPane.js";
 import { renderViewerPane, triggerReply, triggerForward, triggerEdit, triggerNewMessage, triggerOpenReviewed, triggerOpenAiReview, isDraftFolder, isDraftMessage, isAiReviewMessage } from "./components/ViewerPane.js";
@@ -122,7 +123,10 @@ async function init() {
       return;
     }
 
-    if (e.key === "j" || e.key === "ArrowDown") {
+    if (e.key === "Escape" && store.getState().isMultiSelectMode) {
+      e.preventDefault();
+      store.clearMultiSelection();
+    } else if (e.key === "j" || e.key === "ArrowDown") {
       e.preventDefault();
       store.selectNextMessage();
     } else if (e.key === "k" || e.key === "ArrowUp") {
@@ -179,9 +183,29 @@ async function init() {
       openFilterDialog();
     } else if (e.key >= "0" && e.key <= "9" && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
-      const current = store.getState().activeMessageDetail?.message;
+      const { isMultiSelectMode, selectedMessageIds, activeMessageDetail } = store.getState();
+      const num = parseInt(e.key, 10);
+      if (isMultiSelectMode && selectedMessageIds && selectedMessageIds.size > 0) {
+        const ids = Array.from(selectedMessageIds);
+        const tagTarget = num > 0 ? `$cl_${num}` : null;
+        const availableTags = getCachedTags();
+        const tagDef = tagTarget && availableTags[tagTarget] ? availableTags[tagTarget] : null;
+        setMessagesTagBatch(ids, tagTarget)
+          .then((res) => {
+            store.updateMessagesTag(
+              ids,
+              res?.tag_key !== undefined ? res.tag_key : (tagTarget || ""),
+              res?.tag_name !== undefined ? res.tag_name : (tagDef ? tagDef.tag : ""),
+              res?.tag_color !== undefined ? res.tag_color : (tagDef ? tagDef.color : "")
+            );
+          })
+          .catch((err) => {
+            console.error("Failed to update bulk message tags:", err);
+          });
+        return;
+      }
+      const current = activeMessageDetail?.message;
       if (current && !isAiReviewMessage(current)) {
-        const num = parseInt(e.key, 10);
         let tagTarget = null;
         if (num > 0) {
           const targetCl = `$cl_${num}`;
