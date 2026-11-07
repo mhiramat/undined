@@ -105,7 +105,7 @@
       },
       {
         "command": "undine.applyPatch",
-        "title": "Apply Patch to Repository (git am)",
+        "title": "Apply Patch to Current StGit Branch (stg import)",
         "category": "Undine",
         "icon": "$(git-pull-request)"
       },

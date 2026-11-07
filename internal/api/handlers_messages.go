@@ -417,6 +417,7 @@ func (s *Server) handleGetMessageMboxPath(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Message not found", http.StatusNotFound)
 		return
 	}
+	msg = s.ensureMessageHydrated(msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

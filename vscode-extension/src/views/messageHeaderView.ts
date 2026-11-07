@@ -83,7 +83,10 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
           case "applyPatch":
             vscode.commands.executeCommand(
               "undine.applyPatch",
-              message.msgId || this._currentDetail?.message.message_id
+              {
+                id: this._currentDetail?.message.id,
+                msgId: message.msgId || this._currentDetail?.message.message_id,
+              }
             );
             break;
           case "generateReply":
@@ -376,7 +379,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
         </button>
       </div>
       <div class="actions-row">
-        ${m.is_patch ? '<button class="btn btn-primary" data-command="applyPatch">📥 Apply (b4 am)</button>' : ""}
+        ${m.is_patch ? '<button class="btn btn-primary" data-command="applyPatch">📥 Apply (stg import)</button>' : ""}
         <button class="btn btn-secondary" data-command="generateReply">💬 Compose LKML Reply</button>
       </div>
     </div>

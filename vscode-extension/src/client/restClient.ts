@@ -124,6 +124,12 @@ export class UndineRestClient {
     );
   }
 
+  public async getMessageMboxPath(messageIdOrDbId: string | number): Promise<{ mbox_path: string; file_path: string }> {
+    return this.request<{ mbox_path: string; file_path: string }>(
+      `/api/messages/${encodeURIComponent(String(messageIdOrDbId))}/mbox-path`
+    );
+  }
+
   public async getMessageByMsgId(msgId: string): Promise<MessageSummary | null> {
     const cleanId = msgId.replace(/^<|>$/g, "");
     try {
