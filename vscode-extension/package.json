@@ -25,7 +25,8 @@
     "onCommand:undine.openCommitDescription",
     "onCommand:undine.generateReplyDraft",
     "onCommand:undine.importB4",
-    "onCommand:undine.applyPatch"
+    "onCommand:undine.applyPatch",
+    "onCommand:undine.importPatchStg"
   ],
   "contributes": {
     "viewsContainers": {
@@ -105,9 +106,15 @@
       },
       {
         "command": "undine.applyPatch",
-        "title": "Apply Patch to Current StGit Branch (stg import)",
+        "title": "Apply Patch to Repository (b4 am)",
         "category": "Undine",
         "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "undine.importPatchStg",
+        "title": "Apply Patch to Current StGit Branch (stg import)",
+        "category": "Undine",
+        "icon": "$(git-commit)"
       },
       {
         "command": "undine.abortApplyPatch",
@@ -177,6 +184,11 @@
         },
         {
           "command": "undine.applyPatch",
+          "when": "view == undine.threadsView && viewItem == patch",
+          "group": "1_b4"
+        },
+        {
+          "command": "undine.importPatchStg",
           "when": "view == undine.threadsView && viewItem == patch",
           "group": "1_b4"
         }

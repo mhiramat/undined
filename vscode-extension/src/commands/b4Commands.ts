@@ -297,6 +297,83 @@ export function registerB4Commands(
   context.subscriptions.push(
     vscode.commands.registerCommand("undine.applyPatch", async (messageIdOrItem?: any) => {
       try {
+        let msgId: string | undefined;
+        if (typeof messageIdOrItem === "string") {
+          msgId = messageIdOrItem;
+        } else if (messageIdOrItem?.msgId) {
+          msgId = messageIdOrItem.msgId;
+        } else if (messageIdOrItem?.patch?.msgid) {
+          msgId = messageIdOrItem.patch.msgid;
+        } else if (messageIdOrItem?.message?.message_id) {
+          msgId = messageIdOrItem.message.message_id;
+        } else if (messageIdOrItem?.msgid) {
+          msgId = messageIdOrItem.msgid;
+        } else if (messageIdOrItem?.message_id) {
+          msgId = messageIdOrItem.message_id;
+        }
+
+        if (!msgId) {
+          const currentDetail = MessageHeaderViewProvider.instance?.getMessage();
+          if (currentDetail?.message?.message_id) {
+            msgId = currentDetail.message.message_id;
+          }
+        }
+
+        if (!msgId) {
+          msgId = await vscode.window.showInputBox({
+            prompt: "Enter Message-ID of patch series to apply via b4 am:",
+            placeHolder: "e.g. 20261003...-1-author@kernel.org",
+          });
+        }
+
+        if (!msgId) return;
+
+        const cleanId = msgId.replace(/^<|>$/g, "");
+        const cfg = vscode.workspace.getConfiguration("undine");
+        let targetRepo = cfg.get<string>("targetGitRepo");
+
+        if (!targetRepo || targetRepo === "${workspaceFolder}") {
+          const folders = vscode.workspace.workspaceFolders;
+          if (folders && folders.length > 0) {
+            targetRepo = folders[0].uri.fsPath;
+          } else {
+            targetRepo = await vscode.window.showInputBox({
+              prompt: "Target Git repository path to apply patch to:",
+              placeHolder: "/path/to/linux",
+            });
+          }
+        }
+
+        if (!targetRepo) return;
+
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: `Applying patch series <${cleanId}> to ${targetRepo} via b4 am...`,
+            cancellable: false,
+          },
+          async () => {
+            const res = await client.applyPatch(cleanId, targetRepo);
+            if (res.success) {
+              const headHash = res.head || (res as any).commit_id || "";
+              const commitDesc = headHash ? ` (commit ${headHash.slice(0, 10)})` : "";
+              vscode.window.showInformationMessage(
+                `Patch successfully applied to branch "${res.branch || "current"}"${commitDesc}`
+              );
+            } else {
+              vscode.window.showErrorMessage(`Failed to apply patch: ${res.error || res.detail || "git am error"}`);
+            }
+          }
+        );
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Patch application failed: ${err.message}`);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("undine.importPatchStg", async (messageIdOrItem?: any) => {
+      try {
         let targetDbId: number | undefined;
         let msgId: string | undefined;
 

@@ -94,7 +94,8 @@ describe("MessageHeaderViewProvider", () => {
     // Action buttons
     assert.ok(html.includes("View Diff"), "View Diff button should be rendered for patches with files");
     assert.ok(html.includes("Commit Description") || html.includes("Description"), "Description button should be rendered");
-    assert.ok(html.includes("Apply (stg import)"), "Apply button should be rendered");
+    assert.ok(html.includes("Apply (b4 am)"), "Apply (b4 am) button should be rendered");
+    assert.ok(html.includes("Apply (stg import)"), "Apply (stg import) button should be rendered");
     assert.ok(html.includes("Compose LKML Reply"), "Compose LKML Reply button should be rendered");
   });
 

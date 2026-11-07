@@ -8,7 +8,7 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
   - Vertically stacked, collapsible panes for **Folders**, **Thread Hierarchy**, and **Message Header**.
   - Fast keyboard navigation (`j` next patch, `k` previous patch, `/` search threads).
   - Unread badges and status indicators for emails.
-  - Dedicated **Message Header** webview pane that shows envelope details (From, To, Cc, Date, Message-ID), clickable lore.kernel.org links, Patchwork CI checks and delegation, missing parent warning with b4 hydration, changed file shortcuts, and quick maintainer review actions (`Description`, `Apply (stg import)`, `Compose LKML Reply`).
+  - Dedicated **Message Header** webview pane that shows envelope details (From, To, Cc, Date, Message-ID), clickable lore.kernel.org links, Patchwork CI checks and delegation, missing parent warning with b4 hydration, changed file shortcuts, and quick maintainer review actions (`Description`, `Apply (b4 am)`, `Apply (stg import)`, `Compose LKML Reply`).
 - **Native Diff & Patch Viewer**:
   - Virtual document provider (`undine-patch://`) supporting pre-image / post-image diff view with LKML standard 8-space tabs.
   - Dedicated virtual document for commit message body (`undine-patch://<msgid>/DESCRIPTION`).
@@ -19,7 +19,7 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
   - Comments sync bidirectionally with UndineD's REST API and MCP review tools.
 - **Reply Composer, b4 & StGit Integration**:
   - Previews LKML replies with quotes and inline notes (`POST /api/composer/preview-quote`).
-  - Direct series hydration via b4 (`POST /api/threads/import-b4`) and patch import into the current StGit branch (`stg import -m`, `Link:` trailer injection, and `stg edit --sign`).
+  - Direct series hydration via b4 (`POST /api/threads/import-b4`), series Git branch application via b4-am (`POST /api/patch/apply`), and single-patch import into the current StGit branch (`stg import -m`, `Link:` trailer injection, and `stg edit --sign`).
 - **Copilot Chat Participant (`@undine`)**:
   - `/review`: Analyze current patch for LKML guidelines, memory safety, and concurrency.
   - `/summarize`: High-level summary of the patch or thread.
