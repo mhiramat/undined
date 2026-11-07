@@ -839,3 +839,124 @@ func TestExternalMCPCommentAfterInProcessWrites(t *testing.T) {
 		t.Fatalf("CheckAndResetExternalChange() = %v, want true when external write preceded in-process write", got)
 	}
 }
+
+func TestStartupSanitizeLocalFolderMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "sanitize_test.db")
+
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create db: %v", err)
+	}
+
+	todoFolder, err := db.GetOrCreateFolder(constants.FolderTODO, false)
+	if err != nil {
+		t.Fatalf("failed to get TODO folder: %v", err)
+	}
+	imapFolder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("failed to get INBOX folder: %v", err)
+	}
+
+	store := maildir.NewMaildirStore(tmpDir)
+	raw1 := []byte("Message-ID: <stale-replied@kernel.org>\r\nFrom: Dev <dev@example.com>\r\nSubject: [PATCH 1/2] test\r\n\r\nBody 1\r\n")
+	pathSeenOnly, err := store.AddMessage(constants.FolderTODO, raw1, constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("failed to add seen message to TODO maildir: %v", err)
+	}
+
+	raw2 := []byte("Message-ID: <valid-replied@kernel.org>\r\nFrom: Dev <dev@example.com>\r\nSubject: [PATCH 2/2] test\r\n\r\nBody 2\r\n")
+	pathRepliedSeen, err := store.AddMessage(constants.FolderTODO, raw2, constants.FlagReplied+constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("failed to add replied message to TODO maildir: %v", err)
+	}
+
+	// Simulate pre-migration collision state in TODO:
+	// Row 1 has imap_uid = 110380, is_replied = 1, flags = "\Answered \Seen $label1", but Maildir file is only :2,S
+	res1, err := db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, imap_uid, file_path, subject, from_addr, body_plain, is_read, is_replied, flags)
+		VALUES ('stale-replied@kernel.org', ?, 110380, ?, '[PATCH 1/2] test', 'dev@example.com', 'Body 1', 1, 1, '\Answered \Seen $label1');
+	`, todoFolder.ID, pathSeenOnly)
+	if err != nil {
+		t.Fatalf("failed to insert stale TODO row: %v", err)
+	}
+	id1, err := res1.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId() for row 1 failed: %v", err)
+	}
+
+	// Row 2 has Maildir file :2,RS and is genuinely replied
+	res2, err := db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, imap_uid, file_path, subject, from_addr, body_plain, is_read, is_replied, flags)
+		VALUES ('valid-replied@kernel.org', ?, NULL, ?, '[PATCH 2/2] test', 'dev@example.com', 'Body 2', 1, 1, 'RS');
+	`, todoFolder.ID, pathRepliedSeen)
+	if err != nil {
+		t.Fatalf("failed to insert valid replied TODO row: %v", err)
+	}
+	id2, err := res2.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId() for row 2 failed: %v", err)
+	}
+
+	// Row 3 in INBOX (IMAP folder) has imap_uid = 500 and a stale non-existent file_path from a purged TODO file
+	stalePath := filepath.Join(tmpDir, "TODO", "cur", "deleted.devnote2:2,S")
+	res3, err := db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, imap_uid, file_path, subject, from_addr, body_plain, is_read, is_replied, flags)
+		VALUES ('imap-stale-path@kernel.org', ?, 500, ?, '[PATCH] imap', 'dev@example.com', 'Body 3', 1, 0, '\Seen');
+	`, imapFolder.ID, stalePath)
+	if err != nil {
+		t.Fatalf("failed to insert IMAP row with stale path: %v", err)
+	}
+	id3, err := res3.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId() for row 3 failed: %v", err)
+	}
+
+	db.Close()
+
+	// Re-open database to trigger startup sanitization
+	db2, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen db: %v", err)
+	}
+	defer db2.Close()
+
+	m1, err := db2.GetMessageByID(id1)
+	if err != nil {
+		t.Fatalf("GetMessageByID(id1) failed: %v", err)
+	}
+	if m1.IMAPUID != nil {
+		t.Errorf("m1.IMAPUID = %v, want nil for local TODO folder", *m1.IMAPUID)
+	}
+	if !m1.IsRead {
+		t.Errorf("m1.IsRead = false, want true (matching :2,S)")
+	}
+	if m1.IsReplied {
+		t.Errorf("m1.IsReplied = true, want false (matching :2,S without R)")
+	}
+	if m1.Flags != "S $label1" {
+		t.Errorf("m1.Flags = %q, want %q", m1.Flags, "S $label1")
+	}
+
+	m2, err := db2.GetMessageByID(id2)
+	if err != nil {
+		t.Fatalf("GetMessageByID(id2) failed: %v", err)
+	}
+	if !m2.IsRead || !m2.IsReplied {
+		t.Errorf("m2 read/replied = %v/%v, want true/true (matching :2,RS)", m2.IsRead, m2.IsReplied)
+	}
+	if m2.Flags != "RS" {
+		t.Errorf("m2.Flags = %q, want %q", m2.Flags, "RS")
+	}
+
+	m3, err := db2.GetMessageByID(id3)
+	if err != nil {
+		t.Fatalf("GetMessageByID(id3) failed: %v", err)
+	}
+	if m3.IMAPUID == nil || *m3.IMAPUID != 500 {
+		t.Errorf("m3.IMAPUID = %v, want 500", m3.IMAPUID)
+	}
+	if m3.FilePath != "" {
+		t.Errorf("m3.FilePath = %q, want empty string for missing stale file", m3.FilePath)
+	}
+}

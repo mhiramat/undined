@@ -51,7 +51,13 @@ func (s *Server) ensureMessageHydrated(msg *database.Message) *database.Message 
 	if msg == nil {
 		return nil
 	}
-	if msg.FilePath == "" && msg.IMAPUID != nil && s.IMAP != nil {
+	needHydrate := msg.FilePath == ""
+	if !needHydrate && msg.IMAPUID != nil {
+		if _, err := os.Stat(msg.FilePath); os.IsNotExist(err) {
+			needHydrate = true
+		}
+	}
+	if needHydrate && msg.IMAPUID != nil && s.IMAP != nil {
 		folder, fErr := s.DB.GetFolderByID(msg.FolderID)
 		if fErr == nil && folder != nil {
 			hydrated, hErr := s.IMAP.FetchAndHydrateMessage(folder.Name, msg.FolderID, *msg.IMAPUID, msg.ID)

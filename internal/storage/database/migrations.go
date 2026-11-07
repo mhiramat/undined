@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 
 	"undined-go/internal/constants"
+	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
 )
 
@@ -101,6 +103,200 @@ func initDB(db *sql.DB) error {
 	// 7. Migrate legacy comments erroneously saved as 'submitted' to 'draft'
 	_, _ = db.Exec("UPDATE patch_comments SET state = 'draft' WHERE state = 'submitted';")
 
+	// 8. Sanitize local-only folders (clear stray imap_uid and reconcile Maildir flags)
+	if err := sanitizeLocalFolderMessages(db); err != nil {
+		log.Printf("[database] warning: failed to sanitize local folder messages: %v", err)
+	}
+
+	return nil
+}
+
+func isMaildirFilePath(filePath string) bool {
+	return strings.Contains(filePath, ":2,") ||
+		strings.Contains(filePath, "/cur/") ||
+		strings.Contains(filePath, "/new/")
+}
+
+func isStandardSystemFlagToken(tok string) bool {
+	switch strings.ToLower(tok) {
+	case `\seen`, "seen", `\answered`, "answered", `\flagged`, "flagged",
+		`\deleted`, "deleted", `\draft`, "draft", `\recent`, "recent":
+		return true
+	}
+	if tok == "" {
+		return true
+	}
+	for _, r := range tok {
+		switch r {
+		case 'D', 'F', 'P', 'R', 'S', 'T':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func sanitizeLocalMessageFlags(currentFlags, filePath string) string {
+	mdFlags := maildir.ExtractFlags(filePath)
+	var out []string
+	if mdFlags != "" {
+		out = append(out, mdFlags)
+	}
+	for _, tok := range strings.Fields(currentFlags) {
+		if !isStandardSystemFlagToken(tok) {
+			out = append(out, tok)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+func sanitizeLocalFolderMessages(db *sql.DB) error {
+	rows, err := db.Query(`
+		SELECT m.id, m.imap_uid, m.file_path, m.is_read, m.is_replied, m.flags
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.name IN (?, ?, ?, ?, ?, ?, ?);
+	`,
+		constants.FolderB4Imports,
+		constants.FolderDrafts,
+		constants.FolderTODO,
+		constants.FolderSent,
+		constants.FolderAIReviews,
+		constants.FolderTrash,
+		constants.FolderOutbox,
+	)
+	if err != nil {
+		return err
+	}
+
+	type msgSanitizeUpdate struct {
+		id        int64
+		isRead    int
+		isReplied int
+		flags     string
+	}
+	var updates []msgSanitizeUpdate
+
+	for rows.Next() {
+		var id int64
+		var uid sql.NullInt64
+		var filePath, flags sql.NullString
+		var isReadRaw, isRepliedRaw any
+		if err := rows.Scan(&id, &uid, &filePath, &isReadRaw, &isRepliedRaw, &flags); err != nil {
+			continue
+		}
+
+		curRead := toBool(isReadRaw)
+		curReplied := toBool(isRepliedRaw)
+		curFlags := flags.String
+		hadIMAPUID := uid.Valid
+
+		expectedRead := curRead
+		expectedReplied := curReplied
+		expectedFlags := curFlags
+
+		if filePath.String != "" && (hadIMAPUID || isMaildirFilePath(filePath.String)) {
+			expectedRead = maildir.IsRead(filePath.String)
+			expectedReplied = maildir.IsReplied(filePath.String)
+			expectedFlags = sanitizeLocalMessageFlags(curFlags, filePath.String)
+		}
+
+		if hadIMAPUID || expectedRead != curRead || expectedReplied != curReplied || expectedFlags != curFlags {
+			readInt := 0
+			if expectedRead {
+				readInt = 1
+			}
+			repliedInt := 0
+			if expectedReplied {
+				repliedInt = 1
+			}
+			updates = append(updates, msgSanitizeUpdate{
+				id:        id,
+				isRead:    readInt,
+				isReplied: repliedInt,
+				flags:     expectedFlags,
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	// Check IMAP folders for stale cross-folder local Maildir paths that no longer exist on disk
+	imapRows, err := db.Query(`
+		SELECT m.id, m.file_path
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.name NOT IN (?, ?, ?, ?, ?, ?, ?)
+		  AND m.imap_uid IS NOT NULL
+		  AND m.file_path != '';
+	`,
+		constants.FolderB4Imports,
+		constants.FolderDrafts,
+		constants.FolderTODO,
+		constants.FolderSent,
+		constants.FolderAIReviews,
+		constants.FolderTrash,
+		constants.FolderOutbox,
+	)
+	if err != nil {
+		return err
+	}
+	var staleFileIDs []int64
+	for imapRows.Next() {
+		var id int64
+		var fp string
+		if err := imapRows.Scan(&id, &fp); err == nil && fp != "" {
+			if _, statErr := os.Stat(fp); os.IsNotExist(statErr) {
+				staleFileIDs = append(staleFileIDs, id)
+			}
+		}
+	}
+	if err := imapRows.Err(); err != nil {
+		_ = imapRows.Close()
+		return err
+	}
+	if err := imapRows.Close(); err != nil {
+		return err
+	}
+
+	if len(updates) == 0 && len(staleFileIDs) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if len(updates) > 0 {
+		stmt, err := tx.Prepare("UPDATE messages SET imap_uid = NULL, is_read = ?, is_replied = ?, flags = ? WHERE id = ?;")
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, u := range updates {
+			if _, err := stmt.Exec(u.isRead, u.isReplied, u.flags, u.id); err != nil {
+				return err
+			}
+		}
+	}
+
+	for _, id := range staleFileIDs {
+		if _, err := tx.Exec("UPDATE messages SET file_path = '' WHERE id = ?;", id); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("[database] sanitized %d local folder message(s) and %d stale IMAP file path(s)", len(updates), len(staleFileIDs))
 	return nil
 }
 
