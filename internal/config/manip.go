@@ -343,6 +343,35 @@ func GetConfigValue(cfg *Config, keyPath string) (string, error) {
 			return fmt.Sprintf("%.1f", cfg.Patchwork.TimeoutSeconds), nil
 		}
 
+	case "translate":
+		if key == "" {
+			return formatSection(map[string]any{
+				"enabled":         cfg.Translate.Enabled,
+				"url":             cfg.Translate.URL,
+				"source_lang":     cfg.Translate.SourceLang,
+				"target_lang":     cfg.Translate.TargetLang,
+				"style":           cfg.Translate.Style,
+				"max_tokens":      cfg.Translate.MaxTokens,
+				"timeout_seconds": cfg.Translate.TimeoutSeconds,
+			}), nil
+		}
+		switch key {
+		case "enabled":
+			return strconv.FormatBool(cfg.Translate.Enabled), nil
+		case "url":
+			return cfg.Translate.URL, nil
+		case "source_lang":
+			return cfg.Translate.SourceLang, nil
+		case "target_lang":
+			return cfg.Translate.TargetLang, nil
+		case "style":
+			return cfg.Translate.Style, nil
+		case "max_tokens":
+			return strconv.Itoa(cfg.Translate.MaxTokens), nil
+		case "timeout_seconds":
+			return fmt.Sprintf("%.1f", cfg.Translate.TimeoutSeconds), nil
+		}
+
 	case "tags":
 		if key == "" {
 			var b strings.Builder

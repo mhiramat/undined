@@ -119,6 +119,18 @@ func getSectionSpecs() []sectionSpec {
 				{key: "timeout_seconds", getValue: func(c *Config) any { return c.Patchwork.TimeoutSeconds }},
 			},
 		},
+		{
+			name: "translate",
+			fields: []fieldSpec{
+				{key: "enabled", getValue: func(c *Config) any { return c.Translate.Enabled }},
+				{key: "url", getValue: func(c *Config) any { return c.Translate.URL }},
+				{key: "source_lang", getValue: func(c *Config) any { return c.Translate.SourceLang }},
+				{key: "target_lang", getValue: func(c *Config) any { return c.Translate.TargetLang }},
+				{key: "style", getValue: func(c *Config) any { return c.Translate.Style }},
+				{key: "max_tokens", getValue: func(c *Config) any { return c.Translate.MaxTokens }},
+				{key: "timeout_seconds", getValue: func(c *Config) any { return c.Translate.TimeoutSeconds }},
+			},
+		},
 	}
 }
 

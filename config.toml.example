@@ -136,6 +136,19 @@ preferred_archives = ["linux-trace"]
 timeout_seconds = 10.0
 
 # ==============================================================================
+# Local Message Translation (local-jp-translate)
+# ==============================================================================
+[translate]
+enabled = true
+url = "http://127.0.0.1:8787"
+source_lang = "en"
+target_lang = "ja"
+# Style when target_lang = "ja": "default", "polite", or "plain"
+style = "default"
+max_tokens = 2048
+timeout_seconds = 180.0
+
+# ==============================================================================
 # Message Color Tags (IMAP Custom Flags / Thunderbird Compatible)
 # ==============================================================================
 # Built-in defaults:

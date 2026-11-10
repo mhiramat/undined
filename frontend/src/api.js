@@ -649,5 +649,81 @@ export async function downloadAttachment(messageId, index, filename) {
   }, 100);
 }
 
+const translationCache = new Map();
+const inFlightTranslations = new Map();
+let translationQueueTail = Promise.resolve();
+
+function buildTranslationKey(messageId, { targetLang = "", sourceLang = "", style = "" } = {}) {
+  return `${messageId}:${targetLang}:${sourceLang}:${style}`;
+}
+
+export function clearTranslationCache() {
+  translationCache.clear();
+  inFlightTranslations.clear();
+  translationQueueTail = Promise.resolve();
+}
+
+export function getCachedTranslation(messageId, opts = {}) {
+  return translationCache.get(buildTranslationKey(messageId, opts)) || null;
+}
+
+export function getInFlightTranslation(messageId, opts = {}) {
+  return inFlightTranslations.get(buildTranslationKey(messageId, opts)) || null;
+}
+
+export async function translateMessage(messageId, { targetLang = "", sourceLang = "", style = "", bypassCache = false } = {}) {
+  const cacheKey = buildTranslationKey(messageId, { targetLang, sourceLang, style });
+  if (!bypassCache && translationCache.has(cacheKey)) {
+    return translationCache.get(cacheKey);
+  }
+  if (inFlightTranslations.has(cacheKey)) {
+    return inFlightTranslations.get(cacheKey);
+  }
+
+  const payload = {};
+  if (targetLang) payload.target_lang = targetLang;
+  if (sourceLang) payload.source_lang = sourceLang;
+  if (style) payload.style = style;
+
+  const prevTail = translationQueueTail;
+  let releaseQueue;
+  translationQueueTail = new Promise((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  const flightPromise = (async () => {
+    await prevTail.catch(() => {});
+    try {
+      let res;
+      try {
+        res = await fetch(`${BASE_URL}/api/messages/${encodeURIComponent(messageId)}/translate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+      } catch (networkErr) {
+        throw new Error(`Translation request failed: ${networkErr.message || "network error"}`);
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const msg = errData.error || errData.detail || `Translation failed (HTTP ${res.status})`;
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      translationCache.set(cacheKey, data);
+      return data;
+    } finally {
+      inFlightTranslations.delete(cacheKey);
+      releaseQueue();
+    }
+  })();
+
+  inFlightTranslations.set(cacheKey, flightPromise);
+  return flightPromise;
+}
+
+
 
 

@@ -88,6 +88,14 @@ const (
 	DefaultPatchworkAPIVersion     = "1.4"
 	DefaultPatchworkTimeoutSeconds = 10.0
 
+	// Local Translation Server Defaults
+	DefaultTranslateURL            = "http://127.0.0.1:8787"
+	DefaultTranslateSourceLang     = "en"
+	DefaultTranslateTargetLang     = "ja"
+	DefaultTranslateStyle          = "default"
+	DefaultTranslateMaxTokens      = 2048
+	DefaultTranslateTimeoutSeconds = 180.0
+
 	// AI Review Defaults
 	DefaultReviewCmd    = "agy --print"
 	DefaultReviewPrompt = "Review patch for message {message_id} (commit {commit_id}). Post diff review comments using the Undine MCP review comment tool or write a draft review response using write_draft_message."

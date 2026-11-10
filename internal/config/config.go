@@ -351,6 +351,17 @@ func (p *PatchworkConfig) GetDelegateUsers() []string {
 	return res
 }
 
+// TranslateConfig holds settings for the local translation server (local-jp-translate).
+type TranslateConfig struct {
+	Enabled        bool    `toml:"enabled" json:"enabled"`
+	URL            string  `toml:"url" json:"url"`
+	SourceLang     string  `toml:"source_lang" json:"source_lang"`
+	TargetLang     string  `toml:"target_lang" json:"target_lang"`
+	Style          string  `toml:"style" json:"style"`
+	MaxTokens      int     `toml:"max_tokens" json:"max_tokens"`
+	TimeoutSeconds float64 `toml:"timeout_seconds" json:"timeout_seconds"`
+}
+
 // Config represents the complete UndineD configuration tree.
 type Config struct {
 	General   GeneralConfig            `toml:"general" json:"general"`
@@ -360,6 +371,7 @@ type Config struct {
 	MCP       MCPConfig                `toml:"mcp" json:"mcp"`
 	Review    ReviewConfig             `toml:"review" json:"review"`
 	Patchwork PatchworkConfig          `toml:"patchwork" json:"patchwork"`
+	Translate TranslateConfig          `toml:"translate" json:"translate"`
 	Tags      map[string]TagDefinition `toml:"tags" json:"tags"`
 }
 
@@ -484,6 +496,15 @@ func NewDefaultConfig() *Config {
 			Email:             "dev@example.com",
 			PreferredArchives: []string{"linux-trace"},
 			TimeoutSeconds:    constants.DefaultPatchworkTimeoutSeconds,
+		},
+		Translate: TranslateConfig{
+			Enabled:        true,
+			URL:            constants.DefaultTranslateURL,
+			SourceLang:     constants.DefaultTranslateSourceLang,
+			TargetLang:     constants.DefaultTranslateTargetLang,
+			Style:          constants.DefaultTranslateStyle,
+			MaxTokens:      constants.DefaultTranslateMaxTokens,
+			TimeoutSeconds: constants.DefaultTranslateTimeoutSeconds,
 		},
 		Tags: DefaultTags(),
 	}

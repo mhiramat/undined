@@ -29,6 +29,7 @@ import (
 	"undined-go/internal/smtp"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
+	"undined-go/internal/translate"
 )
 
 // Server encapsulates the UndineD HTTP API and web interface.
@@ -42,6 +43,7 @@ type Server struct {
 	B4           *b4.B4Runner
 	Review       *review.Runner
 	Patchwork    *patchwork.Client
+	Translate    *translate.Client
 	Launcher     *bridge.Launcher
 	FrontendDir  string
 	Events       *events.Hub
@@ -83,6 +85,7 @@ func NewServer(
 		B4:           b4Runner,
 		Review:       reviewRunner,
 		Patchwork:    pwClient,
+		Translate:    translate.NewClient(cfg),
 		Launcher:     launcher,
 		FrontendDir:  frontendDir,
 		Events:       hub,
@@ -161,6 +164,8 @@ func (s *Server) setupRoutes() {
 		api.Post("/messages/{id}/read", s.handleSetMessageRead)
 		api.Post("/messages/{id}/replied", s.handleSetMessageReplied)
 		api.Post("/messages/{id}/tag", s.handleSetMessageTag)
+		api.Post("/messages/{id}/translate", s.handleTranslateMessage)
+		api.Post("/translate", s.handleTranslateText)
 
 		// Comments
 		api.Get("/messages/{id}/comments", s.handleGetComments)

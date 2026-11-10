@@ -207,6 +207,15 @@ username = "dev"
 token_eval = "pass show api/patchwork.kernel.org"
 todo_states = ["new", "under-review"]
 delegate-users = ["dev", "reviewer"]
+
+[translate]
+# enabled = true
+# url = "http://127.0.0.1:8787"
+# source_lang = "en"
+# target_lang = "ja"
+# style = "default"
+# max_tokens = 2048
+# timeout_seconds = 180.0
 ```
 
 #### 2. Edit Configuration Interactively (`undined config edit`)
@@ -316,6 +325,13 @@ url = "https://patchwork.kernel.org"
 api_version = "1.4"
 token_eval = "pass show api/patchwork.kernel.org"
 todo_states = ["new", "under-review"]
+
+[translate]
+enabled = true
+url = "http://127.0.0.1:8787"
+source_lang = "en"
+target_lang = "ja"
+style = "default"
 ```
 
 ---
@@ -462,6 +478,49 @@ agy mcp add undine ./bin/undined --mcp-stdio
 4. **Patchwork Synchronization**:
    * View CI check results directly in the email header drawer.
    * Update patch state (e.g. *Under Review*, *Accepted*, *Changes Requested*) or click `👤 Delegate to Me`.
+5. **Local Email Reflow & Translation**:
+   * Click **🌐 Translate (JA)** in the message viewer toolbar to unwrap 80-column hard-wrapped lines and `>` quoted replies into natural sentences and translate them locally via `local-jp-translate`.
+
+---
+
+### 5.4 Setting Up Local Email Translation (`local-jp-translate`)
+
+UndineD includes a **🌐 Translate** button in the message viewer that formats hard-wrapped (~80-column) LKML emails and quoted replies (`>`, `>>`) into natural sentences and translates them offline using [**`local-jp-translate`**](https://github.com/marvelousu/local-jp-translate) (a local loopback HTTP translation server powered by `llama.cpp` and `plamo-2-translate` / `plamo-3-translate` GGUF models).
+
+For architectural details on the 80-column reflow parser, quote-depth preservation, and chunking, see [`docs/DESIGN-LOCAL-TRANSLATE.md`](docs/DESIGN-LOCAL-TRANSLATE.md).
+
+#### 1. Install and Start `local-jp-translate`
+Follow the [`local-jp-translate` repository instructions](https://github.com/marvelousu/local-jp-translate) to install and start the local translation server on `127.0.0.1:8787`:
+
+```bash
+# Clone and start local-jp-translate (default port: 127.0.0.1:8787)
+git clone https://github.com/marvelousu/local-jp-translate.git
+cd local-jp-translate
+# Start the server (see local-jp-translate README for model setup)
+./local-jp-translate
+```
+
+Verify that the translation server is running and ready:
+```bash
+curl -s http://127.0.0.1:8787/ready
+# Expected output: {"ready":true,"model":"..."}
+```
+
+> **Note**: You do **not** need to pass `--cors-origin` to `local-jp-translate`, because UndineD proxies translation requests server-to-server (`POST /api/messages/{id}/translate` -> `http://127.0.0.1:8787/translate`). If `local-jp-translate` is not running when you click **🌐 Translate**, UndineD displays an error toast notifying you to start the server.
+
+#### 2. Configure Target Language and Server URL (Optional)
+By default, UndineD connects to `http://127.0.0.1:8787` and translates from English (`"en"`) to Japanese (`"ja"`). You can customize these settings in `config.toml` or via `undined config set`:
+
+```bash
+# Change target language (e.g., "ja", "de", "fr", "zh-hans", "ko")
+undined config set translate.target_lang ja
+
+# Change Japanese translation style ("default", "polite", or "plain")
+undined config set translate.style polite
+
+# Use a custom local-jp-translate URL/port
+undined config set translate.url "http://127.0.0.1:8787"
+```
 
 ---
 

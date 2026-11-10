@@ -1791,6 +1791,130 @@ func TestAPIEventsStream(t *testing.T) {
 	}
 }
 
+func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "undined.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	defer db.Close()
+
+	maildirPath := filepath.Join(tempDir, "maildir")
+	store := maildir.NewMaildirStore(maildirPath)
+
+	// Start a mock local-jp-translate server
+	translateSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/translate" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		text, _ := req["text"].(string)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"translated_text": "JP(" + text + ")",
+			"model":           "plamo-3-translate",
+			"duration_ms":     5,
+		})
+	}))
+
+	cfg := config.NewDefaultConfig()
+	cfg.General.DataDir = tempDir
+	cfg.General.MaildirPath = maildirPath
+	cfg.General.DBPath = dbPath
+	cfg.Translate.Enabled = true
+	cfg.Translate.URL = translateSrv.URL
+	cfg.Translate.TargetLang = "ja"
+
+	sec, err := security.NewSecurityManager("127.0.0.1", 8080, tempDir)
+	if err != nil {
+		t.Fatalf("failed to init security manager: %v", err)
+	}
+	server := NewServer(cfg, db, store, sec, nil, nil, nil, nil, nil, nil, "")
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	f, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder failed: %v", err)
+	}
+	rawEmail := "Subject: [PATCH] tracing: fix ring buffer\r\n" +
+		"Message-ID: <trans-1@kernel.org>\r\n" +
+		"From: Kernel Developer <dev@example.com>\r\n" +
+		"Date: Mon, 10 Nov 2026 10:00:00 +0000\r\n\r\n" +
+		"This is a hard-wrapped paragraph that spans across\r\n" +
+		"two lines in the original email.\r\n\r\n" +
+		"> Quoted line one\r\n" +
+		"> and line two.\r\n"
+	msgFile, err := store.AddMessage("INBOX", []byte(rawEmail), "")
+	if err != nil {
+		t.Fatalf("AddMessage failed: %v", err)
+	}
+	msgID, err := db.IndexEmailFile(f.ID, msgFile)
+	if err != nil {
+		t.Fatalf("IndexEmailFile failed: %v", err)
+	}
+
+	client := &http.Client{}
+
+	// 1. Successful translation when local-jp-translate is running
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", ts.URL, msgID), strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+sec.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST translate failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resp.StatusCode = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var transRes map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&transRes); err != nil {
+		t.Fatalf("Decode response failed: %v", err)
+	}
+	resp.Body.Close()
+
+	wantBody := "JP(This is a hard-wrapped paragraph that spans across two lines in the original email.)\n\n> JP(Quoted line one and line two.)"
+	if transRes["translated_body"] != wantBody {
+		t.Errorf("translated_body = %q, want %q", transRes["translated_body"], wantBody)
+	}
+	if transRes["translated_subject"] != "[PATCH] JP(tracing: fix ring buffer)" {
+		t.Errorf("translated_subject = %q, want %q", transRes["translated_subject"], "[PATCH] JP(tracing: fix ring buffer)")
+	}
+
+	// 2. Stop local-jp-translate server and verify 503 error response
+	translateSrv.Close()
+
+	req2, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", ts.URL, msgID), strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req2.Header.Set("Authorization", "Bearer "+sec.Token)
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("POST translate (offline) request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("resp2.StatusCode = %d, want %d", resp2.StatusCode, http.StatusServiceUnavailable)
+	}
+	var errRes map[string]any
+	if err := json.NewDecoder(resp2.Body).Decode(&errRes); err != nil {
+		t.Fatalf("Decode error response failed: %v", err)
+	}
+	errMsg, _ := errRes["error"].(string)
+	if !strings.Contains(errMsg, "Local translation server is not running") {
+		t.Errorf("errRes[error] = %q, want substring %q", errMsg, "Local translation server is not running")
+	}
+}
+
+
 
 
 

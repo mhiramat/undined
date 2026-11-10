@@ -3,7 +3,7 @@
  * and the patch diff viewer or plain-text body.
  */
 
-import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment } from "../api.js";
+import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment, translateMessage, getCachedTranslation, getInFlightTranslation } from "../api.js";
 import { store } from "../store.js";
 import { getTags } from "../tags.js";
 import { renderSideDiff, renderSavedNoteRowHtml } from "./SideDiff.js";
@@ -31,6 +31,29 @@ export function renderViewerPane(container) {
   }
   let showPatchwork = false;
   let currentDetail = null;
+  const messageTranslationStateMap = new Map();
+
+  function getMessageTranslationState(msg) {
+    const key = String(msg?.id != null ? msg.id : (msg?.message_id || ""));
+    if (!key) {
+      return { isTranslated: false, displayMode: "translated", data: null };
+    }
+    if (!messageTranslationStateMap.has(key)) {
+      const cached = getCachedTranslation(key);
+      messageTranslationStateMap.set(key, {
+        isTranslated: false,
+        displayMode: "translated",
+        data: cached || null,
+      });
+    } else {
+      const entry = messageTranslationStateMap.get(key);
+      if (!entry.data) {
+        const cached = getCachedTranslation(key);
+        if (cached) entry.data = cached;
+      }
+    }
+    return messageTranslationStateMap.get(key);
+  }
 
   async function loadDetail(msg) {
     if (!msg) {
@@ -372,6 +395,15 @@ export function renderViewerPane(container) {
 
     const mdToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-markdown-view" style="${viewMode === "diff" ? "display: none;" : ""}" title="${viewMode === "markdown" ? "Switch to wrapped plain text mode" : "Render Markdown as rich text"}">${viewMode === "markdown" ? "📄 Plain text" : "📖 Rich text"}</button>`;
 
+    const translateCfg = store.getState().config?.translate;
+    const isTranslateEnabled = !translateCfg || translateCfg.enabled !== false;
+    const targetLangLabel = ((translateCfg && translateCfg.target_lang) || "ja").toUpperCase();
+    const translateBtn = isTranslateEnabled
+      ? `<button type="button" class="action-btn" id="btn-translate-message" title="Format 80-column wrapped lines and translate message (${escapeAttr(targetLangLabel)})">🌐 Translate (${escapeHtml(targetLangLabel)})</button>`
+      : "";
+
+    const translationState = getMessageTranslationState(m);
+
     const draftNotes = store.getNotesList ? store.getNotesList().filter((n) => !n.state || n.state === "draft" || n.state === "submitted") : [];
     const draftCount = draftNotes.length;
     const discardDraftsButton = draftCount > 0
@@ -455,6 +487,7 @@ export function renderViewerPane(container) {
       toolbarHtml = `
         ${openReviewedBtn}
         ${mdToggleBtn}
+        ${translateBtn}
         ${cancelBtn}
         <button type="button" class="action-btn text-danger action-btn-trash" id="btn-trash-message" title="Move to Trash / Delete AI review">
           🗑️ Trash
@@ -471,6 +504,7 @@ export function renderViewerPane(container) {
         ${patchActionButton}
         ${diffToggleBtn}
         ${mdToggleBtn}
+        ${translateBtn}
         ${discardDraftsButton}
         ${!isDraft ? `
           <button type="button" class="action-btn" id="btn-toggle-patchwork" title="Toggle Patchwork line in header">
@@ -530,9 +564,99 @@ export function renderViewerPane(container) {
       });
     }
 
+    function renderTranslatedLinesHtml(text) {
+      if (!text) return "";
+      const lines = String(text).split("\n");
+      return lines
+        .map((line) => {
+          const match = line.match(/^((?:>\s*)+)(.*)$/);
+          if (match) {
+            const rawPrefix = match[1];
+            const depth = (rawPrefix.match(/>/g) || []).length;
+            const depthClass = `translated-quote-depth-${Math.min(depth, 4)}`;
+            return `<div class="translated-line translated-quote-line ${depthClass}" data-quote-depth="${depth}">${linkifyUrls(line)}</div>`;
+          }
+          if (line.trim() === "") {
+            return `<div class="translated-line translated-blank-line">&nbsp;</div>`;
+          }
+          return `<div class="translated-line">${linkifyUrls(line)}</div>`;
+        })
+        .join("");
+    }
+
+    function buildTranslatedBoxHtml(isDiffView) {
+      if (!translationState.isTranslated || !translationState.data) {
+        return "";
+      }
+      const d = translationState.data;
+      const isShowingFormatted = translationState.displayMode === "formatted";
+      const langBadge = (d.target_lang || targetLangLabel).toUpperCase();
+      const modelBadge = d.model ? `<span class="translated-model-badge">${escapeHtml(d.model)}</span>` : "";
+      const subjectHtml = d.translated_subject && !isShowingFormatted
+        ? `<div class="viewer-translated-subject"><strong>Subject:</strong> ${linkifyUrls(d.translated_subject)}</div>`
+        : "";
+
+      const bodyTextToUse = isDiffView
+        ? (isShowingFormatted ? (d.formatted_preamble || d.formatted_body) : (d.translated_preamble || d.translated_body))
+        : (isShowingFormatted ? d.formatted_body : d.translated_body);
+
+      const titleLabel = isDiffView
+        ? (isShowingFormatted ? "📐 Reflowed Patch Description (English)" : `🌐 Translated Patch Description (${escapeHtml(langBadge)})`)
+        : (isShowingFormatted ? "📐 Reflowed Email (Unwrapped English)" : `🌐 Translated Email (${escapeHtml(langBadge)})`);
+
+      return `
+        <div class="viewer-translated-box" id="viewer-translated-box">
+          <div class="viewer-translated-header">
+            <div class="viewer-translated-title">
+              <span>${titleLabel}</span>
+              ${modelBadge}
+            </div>
+            <div class="viewer-translated-actions">
+              <button type="button" class="action-btn btn-xs" id="btn-toggle-translated-source" title="Switch between translated text and unwrapped English sentences">
+                ${isShowingFormatted ? `🌐 Show ${escapeHtml(langBadge)} Translation` : "📐 Show Reflowed English"}
+              </button>
+              <button type="button" class="action-btn btn-xs" id="btn-close-translation" title="Hide translation and return to original message">
+                ✕ Original
+              </button>
+            </div>
+          </div>
+          ${subjectHtml}
+          <div class="viewer-translated-body" id="viewer-translated-body">${renderTranslatedLinesHtml(bodyTextToUse)}</div>
+        </div>
+      `;
+    }
+
+    function attachTranslatedBoxListeners() {
+      const toggleSourceBtn = bodyContainer.querySelector("#btn-toggle-translated-source");
+      if (toggleSourceBtn) {
+        toggleSourceBtn.addEventListener("click", () => {
+          translationState.displayMode = translationState.displayMode === "formatted" ? "translated" : "formatted";
+          updateBodyView();
+        });
+      }
+      const closeTransBtn = bodyContainer.querySelector("#btn-close-translation");
+      if (closeTransBtn) {
+        closeTransBtn.addEventListener("click", () => {
+          translationState.isTranslated = false;
+          updateBodyView();
+        });
+      }
+    }
+
     function updateBodyView() {
       if (viewMode === "diff") {
-        renderSideDiff(bodyContainer, detail.parsed_diff);
+        if (translationState.isTranslated && translationState.data) {
+          bodyContainer.innerHTML = `${buildTranslatedBoxHtml(true)}<div id="viewer-sidediff-mount"></div>`;
+          const mount = bodyContainer.querySelector("#viewer-sidediff-mount");
+          renderSideDiff(mount, detail.parsed_diff);
+          attachTranslatedBoxListeners();
+        } else {
+          renderSideDiff(bodyContainer, detail.parsed_diff);
+        }
+      } else if (translationState.isTranslated && translationState.data) {
+        bodyContainer.innerHTML = `${buildTranslatedBoxHtml(false)}${renderPlainViewNotesHtml()}`;
+        attachTranslatedBoxListeners();
+        attachPlainViewNoteListeners();
       } else if (viewMode === "markdown") {
         bodyContainer.innerHTML = `<div class="markdown-body">${renderMarkdown(bodyPlain)}</div>${renderPlainViewNotesHtml()}`;
         attachPlainViewNoteListeners();
@@ -544,6 +668,19 @@ export function renderViewerPane(container) {
     }
 
     function updateToggleButtons() {
+      const translateBtnEl = container.querySelector("#btn-translate-message");
+      if (translateBtnEl && !translateBtnEl.disabled) {
+        if (translationState.isTranslated) {
+          translateBtnEl.textContent = "🌐 Original";
+          translateBtnEl.classList.add("active");
+          translateBtnEl.title = "Hide translation and show original email";
+        } else {
+          translateBtnEl.textContent = `🌐 Translate (${targetLangLabel})`;
+          translateBtnEl.classList.remove("active");
+          translateBtnEl.title = `Format 80-column wrapped lines and translate message (${targetLangLabel})`;
+        }
+      }
+
       const diffToggleBtnEl = container.querySelector("#btn-toggle-diff-view");
       if (diffToggleBtnEl) {
         if (viewMode === "diff") {
@@ -611,6 +748,62 @@ export function renderViewerPane(container) {
           viewMode = "markdown";
         }
         updateBodyView();
+      });
+    }
+
+    // Event: Translate message via local-jp-translate (with background queue & in-flight state persistence)
+    const translateBtnEl = container.querySelector("#btn-translate-message");
+    const targetTranslateId = m.id != null ? m.id : m.message_id;
+
+    function attachTranslationFlightPromise(flightPromise) {
+      if (!translateBtnEl || !flightPromise) return Promise.resolve();
+      translateBtnEl.disabled = true;
+      translateBtnEl.textContent = "⏳ Translating...";
+      return flightPromise
+        .then((res) => {
+          translationState.data = res;
+          translationState.isTranslated = true;
+          translationState.displayMode = "translated";
+          if (currentDetail && (currentDetail.message?.id === m.id && currentDetail.message?.message_id === m.message_id)) {
+            translateBtnEl.disabled = false;
+            updateBodyView();
+          }
+        })
+        .catch((err) => {
+          translationState.isTranslated = false;
+          if (currentDetail && (currentDetail.message?.id === m.id && currentDetail.message?.message_id === m.message_id)) {
+            translateBtnEl.disabled = false;
+            updateToggleButtons();
+          }
+          showToast(`Translation failed: ${err.message}`, "error");
+        });
+    }
+
+    if (translateBtnEl) {
+      const existingFlight = targetTranslateId ? getInFlightTranslation(targetTranslateId) : null;
+      if (existingFlight) {
+        attachTranslationFlightPromise(existingFlight);
+      }
+
+      translateBtnEl.addEventListener("click", async () => {
+        if (translationState.isTranslated) {
+          translationState.isTranslated = false;
+          updateBodyView();
+          return;
+        }
+        if (translationState.data) {
+          translationState.isTranslated = true;
+          updateBodyView();
+          return;
+        }
+
+        if (!targetTranslateId) {
+          showToast("No message ID available to translate", "error");
+          return;
+        }
+
+        const flight = translateMessage(targetTranslateId);
+        return attachTranslationFlightPromise(flight);
       });
     }
 

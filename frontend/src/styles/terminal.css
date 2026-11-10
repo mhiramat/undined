@@ -3402,5 +3402,103 @@ body.composer-standalone-body {
   background: var(--bg-hover);
 }
 
+/* ==============================================================================
+   Local Message Translation Box & Quote Styling
+   ============================================================================== */
+
+.viewer-translated-box {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  margin-bottom: 14px;
+  overflow: hidden;
+  font-family: var(--font-mono);
+}
+
+.viewer-translated-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 14px;
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.viewer-translated-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-main);
+}
+
+.translated-model-badge {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.viewer-translated-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.viewer-translated-subject {
+  padding: 8px 14px;
+  background-color: rgba(59, 130, 246, 0.08);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+  color: var(--text-main);
+  line-height: 1.5;
+}
+
+.viewer-translated-body {
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.translated-line {
+  min-height: 1.4em;
+}
+
+.translated-blank-line {
+  height: 0.75em;
+}
+
+.translated-quote-line {
+  padding-left: 8px;
+  border-left: 2px solid #60a5fa;
+  color: #93c5fd;
+}
+
+.translated-quote-depth-2 {
+  border-left-color: #34d399;
+  color: #6ee7b7;
+}
+
+.translated-quote-depth-3 {
+  border-left-color: #fbbf24;
+  color: #fcd34d;
+}
+
+.translated-quote-depth-4 {
+  border-left-color: #c084fc;
+  color: #d8b4fe;
+}
+
+
 
 

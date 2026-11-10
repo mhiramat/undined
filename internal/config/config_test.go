@@ -284,3 +284,34 @@ todo-states = "New, queued, under_review"
 	}
 }
 
+func TestTranslateConfig(t *testing.T) {
+	cfgDef := NewDefaultConfig()
+	if !cfgDef.Translate.Enabled {
+		t.Errorf("expected Translate.Enabled=true by default")
+	}
+	if cfgDef.Translate.URL != "http://127.0.0.1:8787" {
+		t.Errorf("Translate.URL = %q, want http://127.0.0.1:8787", cfgDef.Translate.URL)
+	}
+	if cfgDef.Translate.TargetLang != "ja" {
+		t.Errorf("Translate.TargetLang = %q, want ja", cfgDef.Translate.TargetLang)
+	}
+
+	tmpDir := t.TempDir()
+	confPath := filepath.Join(tmpDir, "config.toml")
+	if err := SetTOMLValue(confPath, "translate.target_lang", "de"); err != nil {
+		t.Fatalf("SetTOMLValue failed: %v", err)
+	}
+	cfg, err := Load(confPath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if cfg.Translate.TargetLang != "de" {
+		t.Errorf("Translate.TargetLang = %q, want de", cfg.Translate.TargetLang)
+	}
+	val, err := GetConfigValue(cfg, "translate.target_lang")
+	if err != nil || val != "de" {
+		t.Errorf("GetConfigValue(translate.target_lang) = %q, %v; want de", val, err)
+	}
+}
+
+

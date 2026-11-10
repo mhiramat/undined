@@ -41,6 +41,13 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"default_project": s.Config.Patchwork.DefaultProject,
 			"username":        s.Config.Patchwork.Username,
 		},
+		"translate": map[string]any{
+			"enabled":     s.Config.Translate.Enabled,
+			"url":         s.Config.Translate.URL,
+			"source_lang": s.Config.Translate.SourceLang,
+			"target_lang": s.Config.Translate.TargetLang,
+			"style":       s.Config.Translate.Style,
+		},
 	}
 
 	w.Header().Set("Content-Type", "application/json")
