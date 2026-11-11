@@ -37,14 +37,20 @@ var (
 	// listBulletRe matches bullet or numbered list item markers at the start of a line (after quote prefix).
 	listBulletRe = regexp.MustCompile(`^(\s*(?:[-*+]|\d+[.)])\s+)(.*)$`)
 
-	// trailerRe matches standard Linux kernel commit/email trailers.
-	trailerRe = regexp.MustCompile(`^(?i)(Signed-off-by|Reviewed-by|Acked-by|Tested-by|Reported-by|Suggested-by|Co-developed-by|Fixes|Link|Closes|Cc|Message-ID|Change-Id):\s+\S+`)
+	// trailerRe matches standard Linux kernel commit/email trailers and git log headers.
+	trailerRe = regexp.MustCompile(`^(?i)(Signed-off-by|Reviewed-by|Acked-by|Tested-by|Reported-by|Suggested-by|Co-developed-by|Fixes|Link|Closes|Cc|Message-ID|Change-Id|Author|CommitDate|AuthorDate):\s+\S+`)
+
+	// commitHeaderRe matches "commit <sha>" lines in git log / review emails.
+	commitHeaderRe = regexp.MustCompile(`^commit\s+[0-9a-f]{12,40}$`)
 
 	// attributionStartRe matches the start of an RFC quote attribution line ("On ... wrote:").
 	attributionStartRe = regexp.MustCompile(`^(?:On\s+.+|.+<\S+@\S+>.+wrote:\s*)$`)
 
 	// diffHeaderRe matches unified diff or git diff headers.
-	diffHeaderRe = regexp.MustCompile(`^(?:diff --git\s+|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S+|\+\+\+\s+\S+|@@\s+-\d+)`)
+	diffHeaderRe = regexp.MustCompile(`^(?:diff --git\s+|index [0-9a-f]{7,}\.\.[0-9a-f]{7,}|---\s+\S+|\+\+\+\s+\S+|@@\s+-\d+|new file mode\s+\d+|deleted file mode\s+\d+|similarity index\s+\d+%|rename (?:from|to)\s+\S+|Binary files\s+.+\s+differ|base-commit:\s+[0-9a-f]+)`)
+
+	// diffstatLineRe matches git diffstat summary lines (e.g. " kernel/trace.c | 4 ++--" or " 1 file changed, 2 insertions(+)").
+	diffstatLineRe = regexp.MustCompile(`^\s+(?:\S+\s+\|\s+(?:\d+|Bin\b).*|\d+\s+files?\s+changed\b.*)$`)
 )
 
 // CleanEmailText normalizes line endings and strips invisible preheader padding characters.
@@ -116,6 +122,41 @@ func isTableOrASCIIArtLine(rest string) bool {
 	if strings.HasPrefix(trimmed, "+--") || strings.HasPrefix(trimmed, "---") || strings.HasPrefix(trimmed, "===") {
 		return true
 	}
+	if trimmed == "[ ... ]" || trimmed == "[...]" || trimmed == "..." {
+		return true
+	}
+	return false
+}
+
+// isUnifiedDiffBodyLine returns true when rest (after stripping '>' quote markers)
+// is a unified diff addition/deletion line (e.g. "+static void...", "+\t...", "-old_call();", "+", "-").
+func isUnifiedDiffBodyLine(rest string) bool {
+	if rest == "+" || rest == "-" || strings.HasPrefix(rest, `\ No newline`) {
+		return true
+	}
+	if len(rest) >= 2 && (rest[0] == '+' || rest[0] == '-') {
+		// Note: "- item" or "+ item" with a single space can be a bullet list item outside a diff hunk,
+		// whereas "+code", "+\tcode", "+  code", "-code", "-\tcode", "-  code" are diff lines.
+		second := rest[1]
+		if second != ' ' {
+			return true
+		}
+		if len(rest) >= 3 && rest[2] == ' ' {
+			return true
+		}
+	}
+	return false
+}
+
+// isCodeSnippetBoundaryLine detects unindented C function/block header or closing brace lines
+// such as "kernel/kprobes.c:__arm_kprobe() {" or "}" in plain-text review emails.
+func isCodeSnippetBoundaryLine(trimmed string) bool {
+	if trimmed == "{" || trimmed == "}" || trimmed == "};" {
+		return true
+	}
+	if strings.HasSuffix(trimmed, ") {") || strings.HasSuffix(trimmed, "){") {
+		return true
+	}
 	return false
 }
 
@@ -149,7 +190,9 @@ func ParseEmailSegments(raw string) []Segment {
 
 	var (
 		inFence       bool
-		inDiffOrSig   bool
+		inTrailingSig bool
+		inDiffHunk    bool
+		diffHunkDepth int
 		activeProse   *Segment
 		inListItem    bool
 		inAttribution bool
@@ -183,26 +226,18 @@ func ParseEmailSegments(raw string) []Segment {
 		depth, prefix, rest := parseQuotePrefix(line)
 		trimmedRest := strings.TrimSpace(rest)
 
-		// Once inside an unquoted signature ("-- ") or raw patch diff section, keep remaining lines verbatim.
-		if inDiffOrSig && depth == 0 {
+		// Once inside a trailing unquoted signature ("-- ") at the end of the email, keep remaining lines verbatim.
+		if inTrailingSig && depth == 0 {
 			appendVerbatim(0, "", line)
 			continue
 		}
 
-		// Detect unquoted signature delimiter "-- " or patch separator "---" followed by diffstat/diff
+		// Detect unquoted signature delimiter "-- " or mid-message "--" divider
 		if depth == 0 && !inFence {
 			if rest == "-- " || rest == "--" {
-				inDiffOrSig = true
-				appendVerbatim(0, "", line)
-				continue
-			}
-			if strings.HasPrefix(rest, "diff --git ") {
-				inDiffOrSig = true
-				appendVerbatim(0, "", line)
-				continue
-			}
-			if trimmedRest == "---" && looksLikePatchSeparator(lines[idx+1:]) {
-				inDiffOrSig = true
+				if rest == "-- " && looksLikeTrailingSignature(lines[idx+1:]) {
+					inTrailingSig = true
+				}
 				appendVerbatim(0, "", line)
 				continue
 			}
@@ -222,6 +257,9 @@ func ParseEmailSegments(raw string) []Segment {
 		// Blank line
 		if trimmedRest == "" {
 			flushProse()
+			if inDiffHunk && depth < diffHunkDepth {
+				inDiffHunk = false
+			}
 			segments = append(segments, Segment{
 				Kind:        SegmentBlank,
 				QuoteDepth:  depth,
@@ -231,8 +269,27 @@ func ParseEmailSegments(raw string) []Segment {
 			continue
 		}
 
-		// Verbatim single lines: trailers, diff lines, ASCII tables
-		if trailerRe.MatchString(trimmedRest) || diffHeaderRe.MatchString(trimmedRest) || isTableOrASCIIArtLine(rest) {
+		// Diff headers, diffstat lines, or unified diff body lines (+..., -...) at any quote depth
+		if diffHeaderRe.MatchString(trimmedRest) || diffstatLineRe.MatchString(rest) || isUnifiedDiffBodyLine(rest) {
+			inDiffHunk = true
+			diffHunkDepth = depth
+			appendVerbatim(depth, prefix, line)
+			continue
+		}
+
+		// Inside a diff hunk (quoted or unquoted), context lines starting with space/tab or "[ ... ]" stay verbatim
+		if inDiffHunk && depth == diffHunkDepth {
+			if strings.HasPrefix(rest, " ") || strings.HasPrefix(rest, "\t") || strings.HasPrefix(rest, "+") || strings.HasPrefix(rest, "-") || trimmedRest == "[ ... ]" || trimmedRest == "[...]" {
+				appendVerbatim(depth, prefix, line)
+				continue
+			}
+			inDiffHunk = false
+		} else if inDiffHunk && depth != diffHunkDepth {
+			inDiffHunk = false
+		}
+
+		// Verbatim single lines: trailers, commit SHA headers, code block boundaries, ASCII tables
+		if trailerRe.MatchString(trimmedRest) || commitHeaderRe.MatchString(trimmedRest) || isCodeSnippetBoundaryLine(trimmedRest) || isTableOrASCIIArtLine(rest) {
 			appendVerbatim(depth, prefix, line)
 			continue
 		}
@@ -310,6 +367,21 @@ func ParseEmailSegments(raw string) []Segment {
 
 	flushProse()
 	return segments
+}
+
+// looksLikeTrailingSignature checks whether the lines after a "-- " line are a short
+// email footer/signature at the end of the message (rather than a mid-message divider).
+func looksLikeTrailingSignature(remaining []string) bool {
+	if len(remaining) > 10 {
+		return false
+	}
+	for _, l := range remaining {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, ">") || strings.HasPrefix(trimmed, "diff --git ") {
+			return false
+		}
+	}
+	return true
 }
 
 // looksLikePatchSeparator inspects lines following a "---" line to determine whether

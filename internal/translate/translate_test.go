@@ -302,3 +302,120 @@ func TestTranslateEmail_FIFOQueueNoInterleaving(t *testing.T) {
 	}
 }
 
+func TestTranslateEmail_MidBodyDividerAndQuotedDiff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req translateAPIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"translated_text": "[JA:" + req.Text + "]",
+			"model":           "plamo-3-translate",
+		})
+	}))
+	defer srv.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Translate.URL = srv.URL
+	client := NewClient(cfg)
+
+	rawBody := `Thank you for your contribution! Sashiko AI review found 1 potential
+issue to consider:
+- [Medium] kprobes: test_optprobe_rearm_unoptimizing() misses jump
+  overwrite on re-arm
+--
+
+commit d9ce37575f42c89c2d4a066b90a06cb4ee50df98
+Author: Kernel Developer <dev@example.com>
+
+kprobes: Add KUnit test cases for kprobes regressions
+
+This commit adds four KUnit test cases to lib/tests/test_kprobes.c covering
+regressions in kprobes registration, ftrace ops switching, and optimization
+state transitions.
+
+> diff --git a/lib/tests/test_kprobes.c b/lib/tests/test_kprobes.c
+> index 06e729e4de051..d692612bc2245 100644
+> --- a/lib/tests/test_kprobes.c
+> +++ b/lib/tests/test_kprobes.c
+[ ... ]
+> +/* Test for: kprobes: Do not overwrite jump instruction when re-arming unoptimizing probe */
+> +static void test_optprobe_rearm_unoptimizing(struct kunit *test)
+> +{
+> +	struct kprobe opt_kp = {
+> +		.symbol_name = "kprobe_opt_target",
+> +		.pre_handler = kp_pre_handler,
+> +	};
+> +}
+>
+>  static void context_line_after_blank_in_hunk(void)
+> +#endif
+
+[Severity: Medium]
+Does test_optprobe_rearm_unoptimizing() pass even when enable_kprobe()
+overwrites the jump instruction at opt_kp.addr with a breakpoint?
+
+When disable_kprobe() runs on the optimized probe, __disarm_kprobe() queues
+it on unoptimizing_list and skips arch_disarm_kprobe(), leaving the jump in
+place.  However, enable_kprobe() calls __arm_kprobe(), which unconditionally
+calls arch_arm_kprobe() before optimize_kprobe():
+
+kernel/kprobes.c:__arm_kprobe() {
+    ...
+	arch_arm_kprobe(p);
+	optimize_kprobe(p);	/* Try to optimize (add kprobe to a list) */
+}
+
+arch_arm_kprobe() overwrites the jump opcode at p->addr with a breakpoint,
+while optimize_kprobe() sees KPROBE_FLAG_OPTIMIZED and
+optprobe_queued_unopt(op), dequeues the probe from unoptimizing_list, and
+returns early without re-optimizing it.
+
+-- 
+Sashiko AI review · https://sashiko.dev/#/patchset/123`
+
+	res, err := client.TranslateEmail(context.Background(), "Re: [PATCH v2 4/4] kprobes: Add KUnit test cases", rawBody, Options{})
+	if err != nil {
+		t.Fatalf("TranslateEmail failed: %v", err)
+	}
+
+	// 1. Quoted diff lines (> +static void...) and 1-space context lines after blank hunk lines must remain verbatim (NOT translated)
+	if strings.Contains(res.TranslatedBody, "[JA:+static void") || strings.Contains(res.TranslatedBody, "[JA:+/* Test for:") || strings.Contains(res.TranslatedBody, "[JA:static void context_line_after_blank_in_hunk") {
+		t.Errorf("quoted diff lines were erroneously translated:\n%s", res.TranslatedBody)
+	}
+	if !strings.Contains(res.TranslatedBody, "> +static void test_optprobe_rearm_unoptimizing(struct kunit *test)") {
+		t.Errorf("quoted diff line missing from TranslatedBody:\n%s", res.TranslatedBody)
+	}
+
+	// 2. Actual reply paragraphs after the "--" divider and after the quoted diff MUST be translated!
+	wantReply1 := "[JA:[Severity: Medium] Does test_optprobe_rearm_unoptimizing() pass even when enable_kprobe() overwrites the jump instruction at opt_kp.addr with a breakpoint?]"
+	if !strings.Contains(res.TranslatedBody, wantReply1) {
+		t.Errorf("TranslatedBody = \n%s\nwant translated reply paragraph %q", res.TranslatedBody, wantReply1)
+	}
+
+	wantReply2 := "[JA:When disable_kprobe() runs on the optimized probe, __disarm_kprobe() queues it on unoptimizing_list and skips arch_disarm_kprobe(), leaving the jump in place.  However, enable_kprobe() calls __arm_kprobe(), which unconditionally calls arch_arm_kprobe() before optimize_kprobe():]"
+	if !strings.Contains(res.TranslatedBody, wantReply2) {
+		t.Errorf("TranslatedBody = \n%s\nwant translated reply paragraph %q", res.TranslatedBody, wantReply2)
+	}
+
+	wantReply3 := "[JA:arch_arm_kprobe() overwrites the jump opcode at p->addr with a breakpoint, while optimize_kprobe() sees KPROBE_FLAG_OPTIMIZED and optprobe_queued_unopt(op), dequeues the probe from unoptimizing_list, and returns early without re-optimizing it.]"
+	if !strings.Contains(res.TranslatedBody, wantReply3) {
+		t.Errorf("TranslatedBody = \n%s\nwant translated reply paragraph %q", res.TranslatedBody, wantReply3)
+	}
+
+	// 3. Unquoted C code snippet must remain verbatim
+	wantSnippet := "kernel/kprobes.c:__arm_kprobe() {\n    ...\n\tarch_arm_kprobe(p);\n\toptimize_kprobe(p);\t/* Try to optimize (add kprobe to a list) */\n}"
+	if !strings.Contains(res.TranslatedBody, wantSnippet) {
+		t.Errorf("TranslatedBody = \n%s\nwant verbatim C code snippet:\n%s", res.TranslatedBody, wantSnippet)
+	}
+
+	// 4. Trailing signature after "-- " at the end of the message must remain verbatim
+	wantSig := "-- \nSashiko AI review · https://sashiko.dev/#/patchset/123"
+	if !strings.Contains(res.TranslatedBody, wantSig) {
+		t.Errorf("TranslatedBody = \n%s\nwant verbatim trailing signature:\n%s", res.TranslatedBody, wantSig)
+	}
+}
+
+
