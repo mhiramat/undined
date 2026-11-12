@@ -457,3 +457,94 @@ func TestDownloadPatchMboxFallback(t *testing.T) {
 		t.Errorf("Expected fallback to trusted server after rejecting untrusted mboxURL, got err=%v", err)
 	}
 }
+
+func TestSyncTodoFromPatchwork_OrderingAndErrorPreservesExistingTodo(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := database.NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase() failed: %v", err)
+	}
+	defer db.Close()
+
+	mailPath := filepath.Join(tmpDir, "Mail")
+	store := maildir.NewMaildirStore(mailPath)
+
+	var returnError bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/users/") {
+			w.Write([]byte(`[{"id": 99, "username": "dev", "email": "dev@example.com"}]`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/777/mbox/") {
+			w.Header().Set("Content-Type", "text/plain")
+			w.Write([]byte("From: dev@kernel.org\nSubject: [PATCH] tracing: Fix probe\nMessage-ID: <patch-777@kernel.org>\nDate: Sat, 17 Oct 2026 12:00:00 +0000\n\nFix it\n"))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/api/1.4/patches/") {
+			// Enforce real patchwork.kernel.org ordering constraint: order=date/-date requires project or series
+			order := r.URL.Query().Get("order")
+			project := r.URL.Query().Get("project")
+			series := r.URL.Query().Get("series")
+			if (order == "date" || order == "-date") && project == "" && series == "" {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"detail":"This ordering must be limited with one of these parameters: project, series"}`))
+				return
+			}
+			if r.URL.Query().Get("archived") != "false" {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"detail":"expected archived=false query parameter"}`))
+				return
+			}
+			if returnError {
+				w.WriteHeader(http.StatusBadGateway)
+				w.Write([]byte(`{"detail":"upstream error"}`))
+				return
+			}
+			w.Write([]byte(`[
+				{"id": 777, "name": "[PATCH] tracing: Fix probe", "msgid": "patch-777@kernel.org", "state": "new", "archived": false},
+				{"id": 778, "name": "[PATCH] archived old patch", "msgid": "patch-778@kernel.org", "state": "new", "archived": true}
+			]`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = server.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	cfg.Patchwork.Username = "dev"
+	cfg.Patchwork.Email = "dev@example.com"
+	cfg.Patchwork.Token = "test-token"
+
+	client := NewClient(cfg, db, store)
+
+	// 1. Sync succeeds when project is omitted (using order=-id and archived=false), and skips archived patch 778
+	res, err := client.SyncTodoFromPatchwork([]string{"new"})
+	if err != nil {
+		t.Fatalf("SyncTodoFromPatchwork() failed: %v", err)
+	}
+	if res.SyncedCount != 1 || res.TotalDelegated != 1 {
+		t.Errorf("SyncTodoFromPatchwork() counts = %+v, want SyncedCount=1, TotalDelegated=1", res)
+	}
+
+	// 2. When Patchwork returns an HTTP error, SyncTodoFromPatchwork returns an error and does NOT purge existing TODO messages
+	returnError = true
+	if _, err := client.SyncTodoFromPatchwork([]string{"new"}); err == nil {
+		t.Fatalf("SyncTodoFromPatchwork() on upstream error = nil, want non-nil error")
+	}
+
+	todoFolder, err := db.GetFolderByName(constants.FolderTODO)
+	if err != nil || todoFolder == nil {
+		t.Fatalf("GetFolderByName(TODO) failed: %v", err)
+	}
+	msgs, err := db.ListMessages(&todoFolder.ID, 10, 0)
+	if err != nil {
+		t.Fatalf("ListMessages(TODO) failed: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Errorf("len(msgs in TODO after failed sync) = %d, want 1 preserved", len(msgs))
+	}
+}

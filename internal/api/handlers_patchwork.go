@@ -154,14 +154,32 @@ func (s *Server) handlePatchworkSyncTodo(w http.ResponseWriter, r *http.Request)
 	}
 
 	if s.Patchwork == nil {
-		http.Error(w, "Patchwork client not configured", http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"detail": "Patchwork client not configured",
+			"error":  "Patchwork client not configured",
+		})
 		return
 	}
 
 	res, err := s.Patchwork.SyncTodoFromPatchwork(states)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"detail": err.Error(),
+			"error":  err.Error(),
+		})
 		return
+	}
+
+	if s.Events != nil && (res.SyncedCount > 0 || res.RemovedCount > 0) {
+		s.Events.Publish("mail.sync_completed", map[string]any{
+			"folder":        "TODO",
+			"new_count":     res.SyncedCount,
+			"removed_count": res.RemovedCount,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -163,6 +163,17 @@ func (mp *MockPatchworkServer) handlePatches(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Collection: /patches/?msgid=... or /patches/?delegate=...
+	orderParam := r.URL.Query().Get("order")
+	projectParam := r.URL.Query().Get("project")
+	seriesParam := r.URL.Query().Get("series")
+	if (orderParam == "date" || orderParam == "-date") && projectParam == "" && seriesParam == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"detail": "This ordering must be limited with one of these parameters: project, series",
+		})
+		return
+	}
+
 	msgID := r.URL.Query().Get("msgid")
 	cleanMsgID := strings.Trim(msgID, "<>")
 	delegateStr := r.URL.Query().Get("delegate")

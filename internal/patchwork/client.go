@@ -574,42 +574,49 @@ func (c *Client) ListMyPatches(states []string, project string, limit int, fallb
 	}
 
 	seenIDs := make(map[int]bool)
-	var allPatches []map[string]any
+	allPatches := make([]map[string]any, 0)
 
 	for _, st := range states {
 		page := 1
 		for {
 			params := url.Values{}
 			params.Set("delegate", strconv.Itoa(*uid))
+			params.Set("archived", "false")
 			if st != "" {
 				params.Set("state", st)
 			}
 			if project != "" {
 				params.Set("project", project)
+				params.Set("order", "-date")
+			} else {
+				params.Set("order", "-id")
 			}
 			params.Set("page", strconv.Itoa(page))
 			params.Set("per_page", "100")
-			params.Set("order", "-date")
 
 			endpoint := fmt.Sprintf("/patches/?%s", params.Encode())
 			req, err := c.newRequest("GET", endpoint, nil)
 			if err != nil {
-				break
+				return nil, err
 			}
 
 			resp, err := c.HTTPClient.Do(req)
 			if err != nil {
-				break
+				return nil, fmt.Errorf("patchwork patches request failed: %w", err)
 			}
 
 			if resp.StatusCode != http.StatusOK {
+				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				break
+				return nil, fmt.Errorf("patchwork patches query returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			}
 
 			var items []map[string]any
-			_ = json.NewDecoder(resp.Body).Decode(&items)
+			decodeErr := json.NewDecoder(resp.Body).Decode(&items)
 			resp.Body.Close()
+			if decodeErr != nil {
+				return nil, fmt.Errorf("failed to decode patchwork patches response: %w", decodeErr)
+			}
 
 			if len(items) == 0 {
 				break
@@ -617,6 +624,9 @@ func (c *Client) ListMyPatches(states []string, project string, limit int, fallb
 
 			newItemsAdded := 0
 			for _, item := range items {
+				if archived, ok := item["archived"].(bool); ok && archived {
+					continue
+				}
 				idVal, ok := item["id"]
 				if !ok {
 					continue
@@ -821,7 +831,10 @@ func (c *Client) SyncTodoFromPatchwork(states []string) (*SyncTodoResult, error)
 	}
 
 	// 1. Purge removed/completed patches from TODO folder
-	existingTodoMsgs, _ := c.DB.ListMessages(&todoFolder.ID, 1000, 0)
+	existingTodoMsgs, err := c.DB.ListMessages(&todoFolder.ID, 1000, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list existing TODO messages: %w", err)
+	}
 	removedCount := 0
 	for _, m := range existingTodoMsgs {
 		clean := parser.CleanMsgID(m.MessageID)
@@ -836,7 +849,7 @@ func (c *Client) SyncTodoFromPatchwork(states []string) (*SyncTodoResult, error)
 
 	// 2. Download and index new delegated patches
 	syncedCount := 0
-	var syncedPatches []map[string]any
+	syncedPatches := make([]map[string]any, 0)
 
 	for _, p := range patches {
 		mid, _ := p["msgid"].(string)
@@ -863,13 +876,12 @@ func (c *Client) SyncTodoFromPatchwork(states []string) (*SyncTodoResult, error)
 			mboxURL = u
 		}
 
-		rawBytes, err := c.DownloadPatchMbox(pID, mboxURL)
-		if err != nil || len(rawBytes) == 0 {
-			// Fallback: check if we already have the email file locally in another folder
-			localMsg, _ := c.DB.GetMessageByMsgID(cleanID)
-			if localMsg != nil && localMsg.FilePath != "" {
-				rawBytes, _ = os.ReadFile(localMsg.FilePath)
-			}
+		var rawBytes []byte
+		if localMsg, _ := c.DB.GetMessageByMsgID(cleanID); localMsg != nil && localMsg.FilePath != "" {
+			rawBytes, _ = os.ReadFile(localMsg.FilePath)
+		}
+		if len(rawBytes) == 0 {
+			rawBytes, _ = c.DownloadPatchMbox(pID, mboxURL)
 		}
 
 		if len(rawBytes) == 0 {
