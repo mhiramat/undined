@@ -118,9 +118,13 @@ func TestTranslateEmail_SuccessAndStyleHandling(t *testing.T) {
 		}
 		receivedReqs = append(receivedReqs, req)
 
+		parts := strings.Split(req.Text, "\n\n")
+		for i, p := range parts {
+			parts[i] = "[JA:" + p + "]"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"translated_text": "[JA:" + req.Text + "]",
+			"translated_text": strings.Join(parts, "\n\n"),
 			"model":           "plamo-3-translate-0.8b-Q4_K_M",
 			"duration_ms":     12,
 		})
@@ -160,6 +164,15 @@ Signed-off-by: Kernel Developer <dev@example.com>`
 
 	if res.TranslatedBody != wantBody {
 		t.Errorf("TranslatedBody mismatch:\ngot:\n%s\nwant:\n%s", res.TranslatedBody, wantBody)
+	}
+
+	// Verify the 2 body prose segments were batched into a single HTTP request (plus 1 for subject = 2 total)
+	if len(receivedReqs) != 2 {
+		t.Fatalf("len(receivedReqs) = %d, want 2 (1 subject + 1 batched body)", len(receivedReqs))
+	}
+	wantBatchedBody := "Hello world, this is a line wrapped around eighty columns for testing.\n\nPrevious quoted line one and quoted line two."
+	if receivedReqs[1].Text != wantBatchedBody {
+		t.Errorf("batched body request text = %q, want %q", receivedReqs[1].Text, wantBatchedBody)
 	}
 
 	// Verify style="polite" was sent when target="ja"
@@ -272,12 +285,18 @@ func TestTranslateEmail_FIFOQueueNoInterleaving(t *testing.T) {
 	cfg.Translate.URL = srv.URL
 	client := NewClient(cfg)
 
+	// Construct two paragraphs per email where each paragraph is ~700 runes so
+	// they cannot be packed into a single 1200-rune batch, forcing 2 HTTP calls per email.
+	pad := strings.Repeat("word ", 140)
+	emailA := "A1 " + pad + "\n\nA2 " + pad
+	emailB := "B1 " + pad + "\n\nB2 " + pad
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
-		_, err := client.TranslateEmail(context.Background(), "", "A1.\n\nA2.", Options{})
+		_, err := client.TranslateEmail(context.Background(), "", emailA, Options{})
 		if err != nil {
 			t.Errorf("Email A TranslateEmail failed: %v", err)
 		}
@@ -287,7 +306,7 @@ func TestTranslateEmail_FIFOQueueNoInterleaving(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		_, err := client.TranslateEmail(context.Background(), "", "B1.\n\nB2.", Options{})
+		_, err := client.TranslateEmail(context.Background(), "", emailB, Options{})
 		if err != nil {
 			t.Errorf("Email B TranslateEmail failed: %v", err)
 		}
@@ -295,10 +314,94 @@ func TestTranslateEmail_FIFOQueueNoInterleaving(t *testing.T) {
 
 	wg.Wait()
 
-	wantOrder := "A1.|A2.|B1.|B2."
-	gotOrder := strings.Join(order, "|")
+	var shortOrder []string
+	for _, item := range order {
+		if len(item) >= 2 {
+			shortOrder = append(shortOrder, item[:2])
+		}
+	}
+	wantOrder := "A1|A2|B1|B2"
+	gotOrder := strings.Join(shortOrder, "|")
 	if gotOrder != wantOrder {
 		t.Errorf("request execution order = %q, want %q (no interleaving)", gotOrder, wantOrder)
+	}
+}
+
+func TestTranslateBatch_PackingAndFallback(t *testing.T) {
+	var callTexts []string
+	mergeNextBatch := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req translateAPIRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		callTexts = append(callTexts, req.Text)
+
+		var out string
+		if mergeNextBatch && strings.Contains(req.Text, "\n\n") {
+			// Simulate an LLM backend accidentally collapsing double newlines into a single space
+			out = "[MERGED:" + strings.ReplaceAll(req.Text, "\n\n", " ") + "]"
+		} else {
+			parts := strings.Split(req.Text, "\n\n")
+			for i, p := range parts {
+				parts[i] = "[JA:" + p + "]"
+			}
+			out = strings.Join(parts, "\n\n")
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"translated_text": out,
+			"model":           "plamo-3-translate",
+		})
+	}))
+	defer srv.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Translate.URL = srv.URL
+	client := NewClient(cfg)
+
+	// 1. Normal batching: 3 short segments should be sent in 1 HTTP request joined by "\n\n"
+	got, model, err := client.TranslateBatch(context.Background(), []string{
+		"First sentence.",
+		"- Bullet item two.",
+		"Third quoted paragraph.",
+	}, Options{})
+	if err != nil {
+		t.Fatalf("TranslateBatch failed: %v", err)
+	}
+	if model != "plamo-3-translate" {
+		t.Errorf("model = %q, want %q", model, "plamo-3-translate")
+	}
+	if len(callTexts) != 1 {
+		t.Fatalf("len(callTexts) = %d, want 1 batched HTTP call", len(callTexts))
+	}
+	wantJoined := "First sentence.\n\n- Bullet item two.\n\nThird quoted paragraph."
+	if callTexts[0] != wantJoined {
+		t.Errorf("callTexts[0] = %q, want %q", callTexts[0], wantJoined)
+	}
+	if len(got) != 3 || got[0] != "[JA:First sentence.]" || got[1] != "[JA:- Bullet item two.]" || got[2] != "[JA:Third quoted paragraph.]" {
+		t.Errorf("got = %#v, want 3 translated paragraphs", got)
+	}
+
+	// 2. Fallback on paragraph count mismatch: if backend merges paragraphs, fallback translates each segment individually
+	callTexts = nil
+	mergeNextBatch = true
+	gotFallback, _, err := client.TranslateBatch(context.Background(), []string{
+		"Segment alpha.",
+		"Segment beta.",
+	}, Options{})
+	if err != nil {
+		t.Fatalf("TranslateBatch with fallback failed: %v", err)
+	}
+	// 1 initial batched call + 2 individual fallback calls = 3 total calls
+	if len(callTexts) != 3 {
+		t.Fatalf("len(callTexts) = %d, want 3 HTTP calls (1 batch + 2 fallback): %#v", len(callTexts), callTexts)
+	}
+	if len(gotFallback) != 2 || gotFallback[0] != "[JA:Segment alpha.]" || gotFallback[1] != "[JA:Segment beta.]" {
+		t.Errorf("gotFallback = %#v, want 2 fallback translated paragraphs", gotFallback)
 	}
 }
 
@@ -309,9 +412,13 @@ func TestTranslateEmail_MidBodyDividerAndQuotedDiff(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		parts := strings.Split(req.Text, "\n\n")
+		for i, p := range parts {
+			parts[i] = "[JA:" + p + "]"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"translated_text": "[JA:" + req.Text + "]",
+			"translated_text": strings.Join(parts, "\n\n"),
 			"model":           "plamo-3-translate",
 		})
 	}))

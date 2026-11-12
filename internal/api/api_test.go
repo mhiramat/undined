@@ -1812,9 +1812,13 @@ func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
 		var req map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		text, _ := req["text"].(string)
+		parts := strings.Split(text, "\n\n")
+		for i, p := range parts {
+			parts[i] = "JP(" + p + ")"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"translated_text": "JP(" + text + ")",
+			"translated_text": strings.Join(parts, "\n\n"),
 			"model":           "plamo-3-translate",
 			"duration_ms":     5,
 		})

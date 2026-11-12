@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +22,13 @@ import (
 var ErrServerUnreachable = errors.New("local translation server is not running or unreachable")
 
 const (
-	// maxSingleChunkRunes bounds a single prose segment sent to POST /translate so the
-	// generated translation never exceeds the 2048-token output limit (502 backend_truncated).
+	// maxSingleChunkRunes bounds a single prose segment or "\n\n"-joined batch sent to
+	// POST /translate so the generated translation never exceeds the 2048-token output
+	// limit (502 backend_truncated).
 	maxSingleChunkRunes = 1200
 )
+
+var blankLineSplitRe = regexp.MustCompile(`\n\s*\n+`)
 
 // Options configures a translation request.
 type Options struct {
@@ -200,6 +204,163 @@ func (c *Client) TranslateText(ctx context.Context, text string, opts Options) (
 	return strings.Join(translatedChunks, " "), modelName, nil
 }
 
+// TranslateBatch translates multiple unwrapped prose segments by packing them into
+// double-newline ("\n\n") separated batches bounded by maxSingleChunkRunes.
+// If the translation backend returns a paragraph count that does not match the batch
+// size, TranslateBatch automatically falls back to translating each item in that batch
+// individually so quote prefixes and verbatim block positions are never misaligned.
+func (c *Client) TranslateBatch(ctx context.Context, texts []string, opts Options) ([]string, string, error) {
+	if len(texts) == 0 {
+		return []string{}, "", nil
+	}
+
+	resolved := c.resolveOptions(opts)
+	results := make([]string, len(texts))
+	var modelName string
+
+	var (
+		batchIdxs  []int
+		batchTexts []string
+		batchRunes int
+	)
+
+	flushBatch := func() error {
+		if len(batchTexts) == 0 {
+			return nil
+		}
+		defer func() {
+			batchIdxs = nil
+			batchTexts = nil
+			batchRunes = 0
+		}()
+
+		if len(batchTexts) == 1 {
+			out, model, err := c.callTranslateEndpoint(ctx, batchTexts[0], resolved)
+			if err != nil {
+				return err
+			}
+			if model != "" {
+				modelName = model
+			}
+			results[batchIdxs[0]] = strings.TrimSpace(out)
+			return nil
+		}
+
+		combined := strings.Join(batchTexts, "\n\n")
+		out, model, err := c.callTranslateEndpoint(ctx, combined, resolved)
+		if err != nil {
+			return err
+		}
+		if model != "" {
+			modelName = model
+		}
+
+		if parts, ok := splitTranslatedBatch(out, len(batchTexts)); ok {
+			for k, idx := range batchIdxs {
+				results[idx] = parts[k]
+			}
+			return nil
+		}
+
+		// Fallback: translate each segment in the batch individually to guarantee 1:1 alignment
+		for k, idx := range batchIdxs {
+			singleOut, singleModel, err := c.TranslateText(ctx, batchTexts[k], resolved)
+			if err != nil {
+				return err
+			}
+			if singleModel != "" {
+				modelName = singleModel
+			}
+			results[idx] = singleOut
+		}
+		return nil
+	}
+
+	for i, rawText := range texts {
+		trimmed := strings.TrimSpace(rawText)
+		if trimmed == "" {
+			results[i] = rawText
+			continue
+		}
+
+		runeCount := len([]rune(trimmed))
+		// Oversized single paragraph: flush pending batch and translate via sentence chunking
+		if runeCount > maxSingleChunkRunes {
+			if err := flushBatch(); err != nil {
+				return nil, "", err
+			}
+			out, model, err := c.TranslateText(ctx, trimmed, resolved)
+			if err != nil {
+				return nil, "", err
+			}
+			if model != "" {
+				modelName = model
+			}
+			results[i] = out
+			continue
+		}
+
+		sepRunes := 0
+		if len(batchTexts) > 0 {
+			sepRunes = 2 // "\n\n"
+		}
+		if len(batchTexts) > 0 && batchRunes+sepRunes+runeCount > maxSingleChunkRunes {
+			if err := flushBatch(); err != nil {
+				return nil, "", err
+			}
+			sepRunes = 0
+		}
+
+		batchIdxs = append(batchIdxs, i)
+		batchTexts = append(batchTexts, trimmed)
+		batchRunes += sepRunes + runeCount
+	}
+
+	if err := flushBatch(); err != nil {
+		return nil, "", err
+	}
+
+	return results, modelName, nil
+}
+
+// splitTranslatedBatch parses a multi-paragraph translation response back into expected parts.
+func splitTranslatedBatch(raw string, expected int) ([]string, bool) {
+	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	trimmed := strings.TrimSpace(normalized)
+	if expected <= 0 {
+		return []string{}, true
+	}
+	if expected == 1 {
+		return []string{trimmed}, true
+	}
+
+	rawParts := blankLineSplitRe.Split(trimmed, -1)
+	parts := make([]string, 0, len(rawParts))
+	for _, p := range rawParts {
+		if clean := strings.TrimSpace(p); clean != "" {
+			parts = append(parts, clean)
+		}
+	}
+	if len(parts) == expected {
+		return parts, true
+	}
+
+	// Secondary check: if the backend separated single-line inputs with single "\n" instead of "\n\n"
+	rawLines := strings.Split(trimmed, "\n")
+	lines := make([]string, 0, len(rawLines))
+	for _, l := range rawLines {
+		if clean := strings.TrimSpace(l); clean != "" {
+			lines = append(lines, clean)
+		}
+	}
+	if len(lines) == expected {
+		return lines, true
+	}
+
+	return nil, false
+}
+
 func (c *Client) callTranslateEndpoint(ctx context.Context, text string, opts Options) (string, string, error) {
 	baseURL := c.effectiveBaseURL()
 	endpoint := baseURL + "/translate"
@@ -318,6 +479,12 @@ func (c *Client) TranslateEmail(ctx context.Context, subject string, rawBody str
 	translatedSegments := make([]Segment, len(segments))
 	copy(translatedSegments, segments)
 
+	var (
+		proseSegIndices []int
+		bulletPrefixes  []string
+		proseInputs     []string
+	)
+
 	for i, seg := range segments {
 		if seg.Kind != SegmentProse || strings.TrimSpace(seg.Text) == "" {
 			continue
@@ -329,14 +496,22 @@ func (c *Client) TranslateEmail(ctx context.Context, subject string, rawBody str
 			continue
 		}
 
-		translatedText, model, err := c.TranslateText(ctx, proseContent, resolved)
+		proseSegIndices = append(proseSegIndices, i)
+		bulletPrefixes = append(bulletPrefixes, bulletPrefix)
+		proseInputs = append(proseInputs, proseContent)
+	}
+
+	if len(proseInputs) > 0 {
+		translatedTexts, model, err := c.TranslateBatch(ctx, proseInputs, resolved)
 		if err != nil {
 			return nil, err
 		}
 		if model != "" {
 			res.Model = model
 		}
-		translatedSegments[i].Text = bulletPrefix + translatedText
+		for k, segIdx := range proseSegIndices {
+			translatedSegments[segIdx].Text = bulletPrefixes[k] + translatedTexts[k]
+		}
 	}
 
 	res.TranslatedBody = RenderSegments(translatedSegments)

@@ -83,10 +83,13 @@ Lines are classified into three categories:
    - **Bullet & Numbered List Items** (`- `, `* `, `+ `, `1. `, `1) `): Starts a new prose segment; indented continuation lines at the same quote depth unwrap into that list item while preserving its bullet marker.
    - **Standard Prose Paragraphs**: Consecutive prose lines at the same `QuoteDepth` are joined with a single space (`" "`), converting 80-column hard-wrapped lines into natural English sentences.
 
-### Step 4: Chunked Translation & Quote-Prefix Restoration
+### Step 4: Double-Newline Batch Translation & Quote-Prefix Restoration
 Implemented in [`internal/translate/client.go`](../internal/translate/client.go):
 - **Subject Translation**: Leading `[PATCH ...]` and `Re:` prefixes are separated so only the descriptive subject phrase is translated, then re-combined (e.g., `[PATCH v2 1/2] <translated subject>`).
-- **Preventing `502 backend_truncated`**: `local-jp-translate` enforces a maximum `max_tokens` of `2048` and returns `502 backend_truncated` if a single response reaches `max_tokens`. Each unwrapped `SegmentProse` is translated individually (and any single paragraph exceeding 1,200 runes is split at sentence boundaries `. `, `? `, `! `).
+- **Double-Newline (`\n\n`) Multi-Paragraph Batching (`TranslateBatch`) & Preventing `502 backend_truncated`**:
+  - `local-jp-translate` (`plamo-2-translate` / `plamo-3-translate`) supports translating multiple paragraphs in a single prompt when separated by double newlines (`\n\n`), while enforcing a maximum `max_tokens` of `2048` (`502 backend_truncated` if exceeded).
+  - `TranslateEmail` collects all unwrapped `SegmentProse` segments in the email body and passes them to `TranslateBatch`, which packs consecutive segments joined by `"\n\n"` into batches up to `maxSingleChunkRunes` (`1,200` runes). Any single oversized paragraph (> 1,200 runes) is translated via `TranslateText`, which splits at sentence boundaries (`. `, `? `, `! `).
+  - When a batched response returns, `splitTranslatedBatch` splits the translated text on blank-line boundaries (`\n\s*\n+`), or falls back to single-line splits (`\n`) if the backend condensed blank lines. If the returned paragraph count still does not match the number of input segments in the batch, `TranslateBatch` automatically falls back to translating each segment in that batch individually via `TranslateText` so quote prefixes (`>`, `>>`), list bullets (`- `, `1. `), and interleaved `SegmentVerbatim` blocks never drift out of alignment.
 - **Style Parameter Guard**: The `style` parameter (`"default"`, `"polite"`, `"plain"`) is only included in the `POST /translate` JSON payload when `target == "ja"`, adhering to the `local-jp-translate` API rule that rejects `style` with `400 style_target_mismatch` for non-Japanese targets.
 - **Quote Prefix Re-application**: Once a quoted prose segment is translated, `ApplyPrefixToLines(translatedText, seg.QuotePrefix)` re-prefixes every line of the translated block with `> `, `>> `, etc.
 - **FIFO Translation Queue & Message Switching**:
