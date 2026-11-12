@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"undined-go/internal/constants"
@@ -958,5 +959,101 @@ func TestStartupSanitizeLocalFolderMessages(t *testing.T) {
 	}
 	if m3.FilePath != "" {
 		t.Errorf("m3.FilePath = %q, want empty string for missing stale file", m3.FilePath)
+	}
+}
+
+func TestReconcileSentRepliesAndPreserveRepliedAcrossFolders(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test_reconcile_replies.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase() failed: %v", err)
+	}
+
+	inboxFolder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(INBOX) failed: %v", err)
+	}
+	b4Folder, err := db.GetOrCreateFolder("b4-imports", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(b4-imports) failed: %v", err)
+	}
+	sentFolder, err := db.GetOrCreateFolder("Sent", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(Sent) failed: %v", err)
+	}
+
+	b4CurDir := filepath.Join(tmpDir, "b4-imports", "cur")
+	if err := os.MkdirAll(b4CurDir, 0700); err != nil {
+		t.Fatalf("os.MkdirAll(b4CurDir) failed: %v", err)
+	}
+	b4FilePath := filepath.Join(b4CurDir, "1700000100.1.devnote2:2,S")
+	rawParent := "From: Kernel Developer <dev@kernel.org>\r\n" +
+		"Subject: [PATCH] tracing: fix buffer\r\n" +
+		"Message-ID: <replied-parent@kernel.org>\r\n\r\n" +
+		"Patch body\r\n"
+	if err := os.WriteFile(b4FilePath, []byte(rawParent), 0600); err != nil {
+		t.Fatalf("os.WriteFile(b4FilePath) failed: %v", err)
+	}
+
+	// Insert parent message into INBOX and b4-imports with is_replied = 0
+	inboxID, err := db.InsertHeaderSummary(inboxFolder.ID, 10, []byte(rawParent), true, `\Seen`)
+	if err != nil {
+		t.Fatalf("InsertHeaderSummary(INBOX) failed: %v", err)
+	}
+	b4ID, err := db.IndexEmailFile(b4Folder.ID, b4FilePath)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(b4-imports) failed: %v", err)
+	}
+
+	// Insert a sent reply in Sent with in_reply_to = "<replied-parent@kernel.org>"
+	if _, err := db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, file_path, in_reply_to, subject, from_addr, to_addr, body_plain, is_read, is_replied, flags)
+		VALUES ('sent-reply-1@kernel.org', ?, '', '<replied-parent@kernel.org>', 'Re: [PATCH] tracing: fix buffer', 'dev@example.com', 'dev@kernel.org', 'LGTM', 1, 0, 'S');
+	`, sentFolder.ID); err != nil {
+		t.Fatalf("failed to insert Sent reply: %v", err)
+	}
+
+	db.Close()
+
+	// Re-open database to trigger startup reconcileSentReplies + sanitizeLocalFolderMessages
+	db2, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase(reopen) failed: %v", err)
+	}
+	defer db2.Close()
+
+	inboxMsg, err := db2.GetMessageByID(inboxID)
+	if err != nil {
+		t.Fatalf("GetMessageByID(inboxID) failed: %v", err)
+	}
+	if !inboxMsg.IsReplied {
+		t.Errorf("inboxMsg.IsReplied = false, want true after Sent reconciliation")
+	}
+	if !strings.Contains(inboxMsg.Flags, `\Answered`) {
+		t.Errorf("inboxMsg.Flags = %q, want substring \\Answered", inboxMsg.Flags)
+	}
+
+	b4Msg, err := db2.GetMessageByID(b4ID)
+	if err != nil {
+		t.Fatalf("GetMessageByID(b4ID) failed: %v", err)
+	}
+	if !b4Msg.IsReplied {
+		t.Errorf("b4Msg.IsReplied = false, want true after Sent reconciliation")
+	}
+	if !strings.HasSuffix(b4Msg.FilePath, ":2,RS") {
+		t.Errorf("b4Msg.FilePath = %q, want suffix :2,RS", b4Msg.FilePath)
+	}
+
+	// Verify InsertHeaderSummary without \Answered does NOT overwrite existing is_replied = 1
+	if _, err := db2.InsertHeaderSummary(inboxFolder.ID, 10, []byte(rawParent), true, `\Seen`); err != nil {
+		t.Fatalf("InsertHeaderSummary(re-sync) failed: %v", err)
+	}
+	inboxMsgAfterSync, err := db2.GetMessageByID(inboxID)
+	if err != nil {
+		t.Fatalf("GetMessageByID(inboxID after sync) failed: %v", err)
+	}
+	if !inboxMsgAfterSync.IsReplied {
+		t.Errorf("inboxMsgAfterSync.IsReplied = false, want true preserved on conflict")
 	}
 }

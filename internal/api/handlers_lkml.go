@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"undined-go/internal/bridge"
@@ -363,7 +364,7 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		Body       string `json:"body"`
 		InReplyTo  string `json:"in_reply_to"`
 		References string `json:"references"`
-		OrigMsgID  string `json:"orig_msg_id"`
+		OrigMsgID  any    `json:"orig_msg_id"`
 		DraftID    int64  `json:"draft_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -401,21 +402,33 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		_ = s.DB.RecordKnownAddressesFromHeaders(toAddr, ccAddr)
 	}
 
-	// If this message was replying to an existing email, mark the original email as replied
-	origRef := body.OrigMsgID
-	if origRef == "" {
-		origRef = body.InReplyTo
+	// If this message was replying to an existing email, mark all folder copies of the original email as replied
+	var origRefStr string
+	switch v := body.OrigMsgID.(type) {
+	case string:
+		origRefStr = strings.TrimSpace(v)
+	case float64:
+		if v > 0 {
+			origRefStr = fmt.Sprintf("%.0f", v)
+		}
 	}
-	if origRef != "" && s.DB != nil {
-		if orig, _ := s.resolveMessage(origRef); orig != nil {
-			_ = s.DB.SetMessageReplied(orig.ID, true)
-			if s.Maildir != nil && orig.FilePath != "" {
-				newPath, flagErr := s.Maildir.AddFlag(orig.FilePath, constants.FlagReplied)
-				if flagErr == nil && newPath != orig.FilePath {
-					_ = s.DB.SetMessageFilePath(orig.ID, newPath)
-				}
+	if s.DB != nil {
+		seenMsgIDs := make(map[int64]bool)
+		for _, ref := range []string{origRefStr, body.InReplyTo} {
+			if strings.TrimSpace(ref) == "" {
+				continue
 			}
-			_, _ = s.DB.DiscardDraftComments(orig.MessageID)
+			if orig, _ := s.resolveMessage(ref); orig != nil {
+				if (body.DraftID > 0 && orig.ID == body.DraftID) || orig.FolderName == constants.FolderDrafts || orig.FolderName == constants.FolderSent {
+					continue
+				}
+				if seenMsgIDs[orig.ID] {
+					continue
+				}
+				seenMsgIDs[orig.ID] = true
+				_ = s.markMessageAndCopiesReplied(orig, true)
+				_, _ = s.DB.DiscardDraftComments(orig.MessageID)
+			}
 		}
 	}
 

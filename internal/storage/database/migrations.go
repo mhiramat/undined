@@ -103,12 +103,162 @@ func initDB(db *sql.DB) error {
 	// 7. Migrate legacy comments erroneously saved as 'submitted' to 'draft'
 	_, _ = db.Exec("UPDATE patch_comments SET state = 'draft' WHERE state = 'submitted';")
 
-	// 8. Sanitize local-only folders (clear stray imap_uid and reconcile Maildir flags)
+	// 8. Reconcile replied status across folders from Sent messages and sanitize local-only folders
+	if err := reconcileSentReplies(db); err != nil {
+		log.Printf("[database] warning: failed to reconcile sent replies: %v", err)
+	}
 	if err := sanitizeLocalFolderMessages(db); err != nil {
 		log.Printf("[database] warning: failed to sanitize local folder messages: %v", err)
 	}
 
 	return nil
+}
+
+func reconcileSentReplies(db *sql.DB) error {
+	sentRows, err := db.Query(`
+		SELECT m.in_reply_to
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.name = ? AND m.in_reply_to IS NOT NULL AND m.in_reply_to != '';
+	`, constants.FolderSent)
+	if err != nil {
+		return err
+	}
+
+	repliedMsgIDs := make(map[string]bool)
+	for sentRows.Next() {
+		var inReplyTo sql.NullString
+		if err := sentRows.Scan(&inReplyTo); err == nil && inReplyTo.String != "" {
+			for _, id := range parser.ExtractMsgIDs(inReplyTo.String) {
+				if id != "" {
+					repliedMsgIDs[id] = true
+				}
+			}
+		}
+	}
+	if err := sentRows.Err(); err != nil {
+		_ = sentRows.Close()
+		return err
+	}
+	if err := sentRows.Close(); err != nil {
+		return err
+	}
+
+	if len(repliedMsgIDs) == 0 {
+		return nil
+	}
+
+	msgRows, err := db.Query(`
+		SELECT m.id, m.message_id, m.imap_uid, m.file_path, m.is_replied, m.flags
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE f.name NOT IN (?, ?);
+	`, constants.FolderDrafts, constants.FolderSent)
+	if err != nil {
+		return err
+	}
+
+	type replyUpdate struct {
+		id       int64
+		filePath string
+		flags    string
+	}
+	var updates []replyUpdate
+	mdStore := maildir.NewMaildirStore("")
+
+	for msgRows.Next() {
+		var id int64
+		var msgID string
+		var uid sql.NullInt64
+		var filePath, flags sql.NullString
+		var isRepliedRaw any
+		if err := msgRows.Scan(&id, &msgID, &uid, &filePath, &isRepliedRaw, &flags); err != nil {
+			continue
+		}
+
+		cleanID := parser.CleanMsgID(msgID)
+		if cleanID == "" || !repliedMsgIDs[cleanID] {
+			continue
+		}
+
+		curReplied := toBool(isRepliedRaw)
+		curPath := filePath.String
+		newPath := curPath
+		if curPath != "" && isMaildirFilePath(curPath) && !maildir.IsReplied(curPath) {
+			if updatedPath, flagErr := mdStore.AddFlag(curPath, constants.FlagReplied); flagErr == nil && updatedPath != "" {
+				newPath = updatedPath
+			}
+		}
+
+		newFlags := ensureRepliedFlagToken(flags.String, uid.Valid)
+		if !curReplied || newPath != curPath || newFlags != flags.String {
+			updates = append(updates, replyUpdate{
+				id:       id,
+				filePath: newPath,
+				flags:    newFlags,
+			})
+		}
+	}
+	if err := msgRows.Err(); err != nil {
+		_ = msgRows.Close()
+		return err
+	}
+	if err := msgRows.Close(); err != nil {
+		return err
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("UPDATE messages SET is_replied = 1, file_path = ?, flags = ? WHERE id = ?;")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if _, err := stmt.Exec(u.filePath, u.flags, u.id); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("[database] reconciled replied state on %d message(s) from Sent history", len(updates))
+	return nil
+}
+
+func hasRepliedFlagToken(flags string) bool {
+	for _, tok := range strings.Fields(flags) {
+		if tok == `\Answered` || tok == "Answered" {
+			return true
+		}
+		if !strings.HasPrefix(tok, `\`) && !strings.HasPrefix(tok, "$") && !strings.EqualFold(tok, "recent") && strings.Contains(tok, "R") {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureRepliedFlagToken(flags string, isIMAP bool) string {
+	if hasRepliedFlagToken(flags) {
+		return flags
+	}
+	tokens := strings.Fields(flags)
+	if isIMAP {
+		tokens = append(tokens, `\Answered`)
+	} else {
+		tokens = append(tokens, constants.FlagReplied)
+	}
+	return strings.Join(tokens, " ")
 }
 
 func isMaildirFilePath(filePath string) bool {

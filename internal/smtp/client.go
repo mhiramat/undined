@@ -366,17 +366,36 @@ func (c *Client) SendMessage(
 		return false, msg, err
 	}
 
-	// If this was a reply to an existing message, mark it replied and discard draft comments
+	// If this was a reply to an existing message, mark all folder copies replied and discard draft comments
 	if inReplyTo != "" && c.DB != nil {
 		cleanInReply := parser.CleanMsgID(inReplyTo)
-		orig, _ := c.DB.GetMessageByMsgID(cleanInReply)
-		if orig != nil {
+		origs, _ := c.DB.GetMessagesByMsgID(cleanInReply)
+		for _, orig := range origs {
+			if orig == nil || orig.FolderName == constants.FolderDrafts || orig.FolderName == constants.FolderSent {
+				continue
+			}
 			_ = c.DB.SetMessageReplied(orig.ID, true)
 			if c.Maildir != nil && orig.FilePath != "" {
 				newPath, flagErr := c.Maildir.AddFlag(orig.FilePath, constants.FlagReplied)
 				if flagErr == nil && newPath != orig.FilePath {
 					_ = c.DB.SetMessageFilePath(orig.ID, newPath)
 				}
+			}
+			flagsSlice := strings.Fields(orig.Flags)
+			hasReplied := false
+			for _, f := range flagsSlice {
+				if f == `\Answered` || f == "Answered" || f == "R" {
+					hasReplied = true
+					break
+				}
+			}
+			if !hasReplied {
+				if orig.IMAPUID != nil {
+					flagsSlice = append(flagsSlice, `\Answered`)
+				} else {
+					flagsSlice = append(flagsSlice, constants.FlagReplied)
+				}
+				_ = c.DB.SetMessageFlags(orig.ID, strings.Join(flagsSlice, " "))
 			}
 			_, _ = c.DB.DiscardDraftComments(orig.MessageID)
 		}

@@ -776,22 +776,54 @@ class UndineDStore {
   }
 
   updateMessageReplied(messageId, isReplied = true) {
-    const rawMsg = this.state.rawMessages.find((m) => m.id === messageId || m.message_id === messageId);
-    if (rawMsg) {
-      rawMsg.is_replied = isReplied ? 1 : 0;
+    if (messageId == null || messageId === "") return;
+    const cleanTarget = typeof messageId === "string" ? cleanMsgId(messageId) : String(messageId);
+    const matchesTarget = (m) => {
+      if (!m) return false;
+      if (m.id === messageId || String(m.id) === String(messageId)) return true;
+      if (m.message_id && (m.message_id === messageId || cleanMsgId(m.message_id) === cleanTarget)) return true;
+      return false;
+    };
+
+    const matchedIds = new Set();
+    for (const rawMsg of this.state.rawMessages) {
+      if (matchesTarget(rawMsg)) {
+        rawMsg.is_replied = isReplied ? 1 : 0;
+        if (rawMsg.id != null) matchedIds.add(rawMsg.id);
+      }
     }
-    const computedMsg = this.state.messages.find((m) => m.id === messageId || m.message_id === messageId);
-    if (computedMsg) {
-      computedMsg.is_replied = isReplied ? 1 : 0;
+    for (const computedMsg of this.state.messages) {
+      if (matchesTarget(computedMsg)) {
+        computedMsg.is_replied = isReplied ? 1 : 0;
+        if (computedMsg.id != null) matchedIds.add(computedMsg.id);
+      }
     }
     if (
       this.state.activeMessageDetail &&
       this.state.activeMessageDetail.message &&
-      (this.state.activeMessageDetail.message.id === messageId || this.state.activeMessageDetail.message.message_id === messageId)
+      matchesTarget(this.state.activeMessageDetail.message)
     ) {
       this.state.activeMessageDetail.message.is_replied = isReplied ? 1 : 0;
+      if (this.state.activeMessageDetail.message.id != null) {
+        matchedIds.add(this.state.activeMessageDetail.message.id);
+      }
     }
-    this.notify(EVENT_MESSAGE_REPLIED_UPDATED, { id: rawMsg ? rawMsg.id : messageId, is_replied: isReplied ? 1 : 0 });
+
+    if (matchedIds.size > 0) {
+      for (const id of matchedIds) {
+        this.notify(EVENT_MESSAGE_REPLIED_UPDATED, {
+          id,
+          message_id: cleanTarget,
+          is_replied: isReplied ? 1 : 0,
+        });
+      }
+    } else {
+      this.notify(EVENT_MESSAGE_REPLIED_UPDATED, {
+        id: messageId,
+        message_id: cleanTarget,
+        is_replied: isReplied ? 1 : 0,
+      });
+    }
     if (this.state.parsedFilter != null) {
       this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
     }

@@ -1914,6 +1914,127 @@ func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
 	}
 }
 
+func TestSMTPSendMarksAllFolderCopiesReplied(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	smtpListener, smtpPort := startMockSMTPServer(t)
+	defer smtpListener.Close()
+
+	server.Config.SMTP.Host = "127.0.0.1"
+	server.Config.SMTP.Port = smtpPort
+	server.Config.SMTP.UseSTARTTLS = false
+	server.Config.SMTP.UseSSL = false
+	server.SMTP = smtp.NewClient(server.Config, server.Maildir, db)
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	inboxFolder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(INBOX) failed: %v", err)
+	}
+	b4Folder, err := db.GetOrCreateFolder("b4-imports", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(b4-imports) failed: %v", err)
+	}
+	draftsFolder, err := db.GetOrCreateFolder("Drafts", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(Drafts) failed: %v", err)
+	}
+
+	rawParent := "From: Kernel Developer <dev@kernel.org>\r\n" +
+		"To: Linux Trace Kernel <linux-trace-kernel@vger.kernel.org>\r\n" +
+		"Subject: [PATCH] tracing: fix event trigger\r\n" +
+		"Message-ID: <cross-folder-parent@kernel.org>\r\n" +
+		"Date: Mon, 12 Oct 2026 10:00:00 +0000\r\n\r\n" +
+		"Patch description.\r\n"
+
+	inboxPath, err := server.Maildir.AddMessage("INBOX", []byte(rawParent), "S")
+	if err != nil {
+		t.Fatalf("AddMessage(INBOX) failed: %v", err)
+	}
+	inboxMsgID, err := db.IndexEmailFile(inboxFolder.ID, inboxPath)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(INBOX) failed: %v", err)
+	}
+
+	b4Path, err := server.Maildir.AddMessage("b4-imports", []byte(rawParent), "S")
+	if err != nil {
+		t.Fatalf("AddMessage(b4-imports) failed: %v", err)
+	}
+	b4MsgID, err := db.IndexEmailFile(b4Folder.ID, b4Path)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(b4-imports) failed: %v", err)
+	}
+
+	// Simulate a saved draft in Drafts replying to <cross-folder-parent@kernel.org>,
+	// and pass the draft's own message_id in orig_msg_id (the legacy openEditForMessage behavior)
+	rawDraft := "From: Kernel Developer <dev@example.com>\r\n" +
+		"To: Kernel Developer <dev@kernel.org>\r\n" +
+		"Subject: Re: [PATCH] tracing: fix event trigger\r\n" +
+		"Message-ID: <draft-reply-1@example.com>\r\n" +
+		"In-Reply-To: <cross-folder-parent@kernel.org>\r\n\r\n" +
+		"Looks good to me.\r\n"
+	draftPath, err := server.Maildir.AddMessage("Drafts", []byte(rawDraft), "DS")
+	if err != nil {
+		t.Fatalf("AddMessage(Drafts) failed: %v", err)
+	}
+	draftDBID, err := db.IndexEmailFile(draftsFolder.ID, draftPath)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(Drafts) failed: %v", err)
+	}
+
+	sendPayload := fmt.Sprintf(`{
+		"to_addr": "dev@kernel.org",
+		"subject": "Re: [PATCH] tracing: fix event trigger",
+		"body_text": "Looks good to me.",
+		"in_reply_to": "<cross-folder-parent@kernel.org>",
+		"orig_msg_id": "draft-reply-1@example.com",
+		"draft_id": %d
+	}`, draftDBID)
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", ts.URL+"/api/smtp/send", strings.NewReader(sendPayload))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/smtp/send failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resp.StatusCode = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Verify BOTH the INBOX copy and the b4-imports copy are marked is_replied = true
+	inboxMsg, err := db.GetMessageByID(inboxMsgID)
+	if err != nil {
+		t.Fatalf("GetMessageByID(inboxMsgID) failed: %v", err)
+	}
+	if !inboxMsg.IsReplied {
+		t.Errorf("inboxMsg.IsReplied = false, want true")
+	}
+	if !strings.HasSuffix(inboxMsg.FilePath, ":2,RS") {
+		t.Errorf("inboxMsg.FilePath = %q, want suffix :2,RS", inboxMsg.FilePath)
+	}
+
+	b4Msg, err := db.GetMessageByID(b4MsgID)
+	if err != nil {
+		t.Fatalf("GetMessageByID(b4MsgID) failed: %v", err)
+	}
+	if !b4Msg.IsReplied {
+		t.Errorf("b4Msg.IsReplied = false, want true")
+	}
+	if !strings.HasSuffix(b4Msg.FilePath, ":2,RS") {
+		t.Errorf("b4Msg.FilePath = %q, want suffix :2,RS", b4Msg.FilePath)
+	}
+}
+
 
 
 

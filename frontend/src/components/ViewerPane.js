@@ -22,6 +22,7 @@ import {
   EVENT_NOTES_UPDATED,
   EVENT_AI_REVIEW_STATE_CHANGED,
   EVENT_MESSAGE_TAG_UPDATED,
+  EVENT_MESSAGE_REPLIED_UPDATED,
 } from "../constants.js";
 
 export function renderViewerPane(container) {
@@ -1728,6 +1729,18 @@ export function renderViewerPane(container) {
         currentDetail.message.tag_key = payload.tagKey;
         currentDetail.message.tag_name = payload.tagName;
         currentDetail.message.tag_color = payload.tagColor;
+        render(currentDetail);
+      }
+    } else if (event === EVENT_MESSAGE_REPLIED_UPDATED) {
+      if (
+        currentDetail &&
+        currentDetail.message &&
+        (currentDetail.message.id === payload?.id ||
+          (payload?.message_id &&
+            currentDetail.message.message_id &&
+            currentDetail.message.message_id.replace(/^<+|>+$/g, "") === String(payload.message_id).replace(/^<+|>+$/g, "")))
+      ) {
+        currentDetail.message.is_replied = payload.is_replied;
         render(currentDetail);
       }
     }

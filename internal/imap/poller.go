@@ -639,17 +639,32 @@ func (p *Poller) FetchAndHydrateMessage(folderName string, folderID int64, imapU
 		return nil, fmt.Errorf("no payload returned for UID %d in folder %s", imapUID, folderName)
 	}
 
-	// Determine read flag
+	// Determine read and replied flags from IMAP and existing DB row
 	isSeen := false
+	isAnswered := false
 	for _, f := range flags {
 		if strings.EqualFold(f, imap.SeenFlag) {
 			isSeen = true
-			break
+		} else if strings.EqualFold(f, imap.AnsweredFlag) || strings.EqualFold(f, "Answered") {
+			isAnswered = true
+		}
+	}
+	if messageDBID > 0 && p.DB != nil {
+		if existingMsg, dbErr := p.DB.GetMessageByID(messageDBID); dbErr == nil && existingMsg != nil {
+			if existingMsg.IsRead {
+				isSeen = true
+			}
+			if existingMsg.IsReplied {
+				isAnswered = true
+			}
 		}
 	}
 	maildirFlags := ""
+	if isAnswered {
+		maildirFlags += constants.FlagReplied
+	}
 	if isSeen {
-		maildirFlags = constants.FlagSeen
+		maildirFlags += constants.FlagSeen
 	}
 
 	// Save to Maildir
@@ -672,6 +687,9 @@ func (p *Poller) FetchAndHydrateMessage(folderName string, folderID int64, imapU
 	if messageDBID > 0 {
 		if err := p.DB.HydrateMessageBody(messageDBID, savedPath, bodyPlain, isPatch); err != nil {
 			return nil, fmt.Errorf("failed to hydrate message body in DB: %w", err)
+		}
+		if isAnswered {
+			_ = p.DB.SetMessageReplied(messageDBID, true)
 		}
 		return p.DB.GetMessageByID(messageDBID)
 	}

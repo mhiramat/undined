@@ -539,6 +539,88 @@ func (s *Server) handleSetMessageRead(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) markMessageAndCopiesReplied(target *database.Message, isReplied bool) string {
+	if target == nil || s.DB == nil {
+		return ""
+	}
+	seenIDs := make(map[int64]bool)
+	targets := []*database.Message{target}
+	seenIDs[target.ID] = true
+
+	if target.MessageID != "" {
+		if copies, err := s.DB.GetMessagesByMsgID(target.MessageID); err == nil {
+			for _, c := range copies {
+				if c != nil && !seenIDs[c.ID] && c.FolderName != constants.FolderDrafts && c.FolderName != constants.FolderSent {
+					seenIDs[c.ID] = true
+					targets = append(targets, c)
+				}
+			}
+		}
+	}
+
+	primaryNewPath := target.FilePath
+	for _, msg := range targets {
+		_ = s.DB.SetMessageReplied(msg.ID, isReplied)
+		newPath := msg.FilePath
+		if s.Maildir != nil && msg.FilePath != "" {
+			var flagErr error
+			if isReplied {
+				newPath, flagErr = s.Maildir.AddFlag(msg.FilePath, constants.FlagReplied)
+			} else {
+				newPath, flagErr = s.Maildir.RemoveFlag(msg.FilePath, constants.FlagReplied)
+			}
+			if flagErr == nil && newPath != msg.FilePath {
+				_ = s.DB.SetMessageFilePath(msg.ID, newPath)
+			}
+		}
+		if msg.ID == target.ID {
+			primaryNewPath = newPath
+		}
+
+		flagsSlice := strings.Fields(msg.Flags)
+		newFlagsSlice := make([]string, 0, len(flagsSlice)+1)
+		hasReplied := false
+		for _, f := range flagsSlice {
+			if f == `\Answered` || f == "Answered" || f == "R" {
+				if isReplied {
+					hasReplied = true
+					newFlagsSlice = append(newFlagsSlice, f)
+				}
+			} else {
+				newFlagsSlice = append(newFlagsSlice, f)
+			}
+		}
+		if isReplied && !hasReplied {
+			newFlagsSlice = append(newFlagsSlice, `\Answered`)
+		}
+		newFlags := strings.Join(newFlagsSlice, " ")
+		_ = s.DB.SetMessageFlags(msg.ID, newFlags)
+
+		if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
+			msgID := msg.ID
+			folderName := msg.FolderName
+			uid := *msg.IMAPUID
+			go func() {
+				if err := s.IMAP.MarkIMAPMessageReplied(folderName, uid, isReplied); err != nil {
+					log.Printf("Warning: failed to update IMAP replied flag for message %d (UID %d in %s): %v", msgID, uid, folderName, err)
+				}
+			}()
+		}
+
+		if s.Events != nil {
+			s.Events.Publish("message.updated", map[string]any{
+				"message_id":    msg.MessageID,
+				"message_db_id": msg.ID,
+				"folder":        msg.FolderName,
+				"folder_id":     msg.FolderID,
+				"is_replied":    isReplied,
+				"flags":         newFlagsSlice,
+			})
+		}
+	}
+	return primaryNewPath
+}
+
 func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request) {
 	idParam := chi.URLParam(r, "id")
 	msg, err := s.resolveMessage(idParam)
@@ -561,59 +643,7 @@ func (s *Server) handleSetMessageReplied(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	_ = s.DB.SetMessageReplied(msg.ID, isReplied)
-	newPath := msg.FilePath
-	if s.Maildir != nil && msg.FilePath != "" {
-		var flagErr error
-		if isReplied {
-			newPath, flagErr = s.Maildir.AddFlag(msg.FilePath, constants.FlagReplied)
-		} else {
-			newPath, flagErr = s.Maildir.RemoveFlag(msg.FilePath, constants.FlagReplied)
-		}
-		if flagErr == nil && newPath != msg.FilePath {
-			_ = s.DB.SetMessageFilePath(msg.ID, newPath)
-		}
-	}
-
-	flagsSlice := strings.Fields(msg.Flags)
-	var newFlagsSlice []string
-	hasReplied := false
-	for _, f := range flagsSlice {
-		if f == `\Answered` || f == "Answered" || f == "R" {
-			if isReplied {
-				hasReplied = true
-				newFlagsSlice = append(newFlagsSlice, f)
-			}
-		} else {
-			newFlagsSlice = append(newFlagsSlice, f)
-		}
-	}
-	if isReplied && !hasReplied {
-		newFlagsSlice = append(newFlagsSlice, `\Answered`)
-	}
-	newFlags := strings.Join(newFlagsSlice, " ")
-	_ = s.DB.SetMessageFlags(msg.ID, newFlags)
-
-	if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
-		folderName := msg.FolderName
-		uid := *msg.IMAPUID
-		go func() {
-			if err := s.IMAP.MarkIMAPMessageReplied(folderName, uid, isReplied); err != nil {
-				log.Printf("Warning: failed to update IMAP replied flag for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
-			}
-		}()
-	}
-
-	if s.Events != nil {
-		s.Events.Publish("message.updated", map[string]any{
-			"message_id":    msg.MessageID,
-			"message_db_id": msg.ID,
-			"folder":        msg.FolderName,
-			"folder_id":     msg.FolderID,
-			"is_replied":    isReplied,
-			"flags":         newFlagsSlice,
-		})
-	}
+	newPath := s.markMessageAndCopiesReplied(msg, isReplied)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{

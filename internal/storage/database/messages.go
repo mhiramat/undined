@@ -90,6 +90,16 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 		// Fallback for draft or synthesized emails without Message-ID
 		msgID = fmt.Sprintf("undine-%d-%d@local", folderID, parsed.EpochTimestamp)
 	}
+	if !isReplied && d.hasRepliedEvidence(msgID) {
+		isReplied = true
+		if isMaildirFilePath(filePath) {
+			mdStore := maildir.NewMaildirStore("")
+			if updatedPath, flagErr := mdStore.AddFlag(filePath, constants.FlagReplied); flagErr == nil && updatedPath != "" {
+				filePath = updatedPath
+				flags = maildir.ExtractFlags(filePath)
+			}
+		}
+	}
 
 	query := `
 	INSERT INTO messages (
@@ -112,7 +122,7 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 		body_plain = excluded.body_plain,
 		is_patch = excluded.is_patch,
 		is_read = excluded.is_read,
-		is_replied = excluded.is_replied,
+		is_replied = CASE WHEN excluded.is_replied = 1 OR messages.is_replied = 1 THEN 1 ELSE 0 END,
 		flags = excluded.flags;
 	`
 
@@ -256,6 +266,58 @@ func (d *Database) GetMessageByMsgID(msgID string) (*Message, error) {
 		LIMIT 1;
 	`, messageSelectColumns)
 	return scanMessage(d.DB.QueryRow(query, cleaned, msgID))
+}
+
+// GetMessagesByMsgID retrieves all message rows across all folders matching the given Message-ID.
+func (d *Database) GetMessagesByMsgID(msgID string) ([]*Message, error) {
+	cleaned := parser.CleanMsgID(msgID)
+	if cleaned == "" && msgID == "" {
+		return []*Message{}, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.message_id = ? OR m.message_id = ?
+		ORDER BY m.id ASC;
+	`, messageSelectColumns)
+	rows, err := d.DB.Query(query, cleaned, msgID)
+	if err != nil {
+		return []*Message{}, err
+	}
+	defer rows.Close()
+
+	result := make([]*Message, 0)
+	for rows.Next() {
+		m, scanErr := scanMessage(rows)
+		if scanErr != nil {
+			return []*Message{}, scanErr
+		}
+		result = append(result, m)
+	}
+	if err := rows.Err(); err != nil {
+		return []*Message{}, err
+	}
+	return result, nil
+}
+
+func (d *Database) hasRepliedEvidence(msgID string) bool {
+	cleaned := parser.CleanMsgID(msgID)
+	if cleaned == "" {
+		return false
+	}
+	bracketed := "<" + cleaned + ">"
+	var count int
+	err := d.DB.QueryRow(`
+		SELECT COUNT(1) FROM (
+			SELECT 1 FROM messages WHERE (message_id = ? OR message_id = ?) AND is_replied = 1
+			UNION ALL
+			SELECT 1 FROM messages m
+			JOIN folders f ON m.folder_id = f.id
+			WHERE f.name = ? AND (m.in_reply_to = ? OR m.in_reply_to = ?)
+		);
+	`, cleaned, bracketed, constants.FolderSent, cleaned, bracketed).Scan(&count)
+	return err == nil && count > 0
 }
 
 // GetMessageByFolderAndMsgID retrieves a message within a specific folder.
@@ -521,9 +583,11 @@ func (d *Database) InsertHeaderSummary(
 		msgID = fmt.Sprintf("gen-imap-%d-%d", folderID, imapUID)
 	}
 
-	isReplied := strings.Contains(flags, "R") ||
-		strings.Contains(flags, `\Answered`) ||
-		strings.Contains(flags, "Answered")
+	isReplied := hasRepliedFlagToken(flags)
+	if !isReplied && d.hasRepliedEvidence(msgID) {
+		isReplied = true
+		flags = ensureRepliedFlagToken(flags, imapUID > 0)
+	}
 
 	// Check Review-Commit-ID
 	revCommit, _ := d.GetReviewCommit(msgID)
@@ -555,7 +619,7 @@ func (d *Database) InsertHeaderSummary(
 		in_reply_to = excluded.in_reply_to,
 		references_header = excluded.references_header,
 		is_read = excluded.is_read,
-		is_replied = excluded.is_replied,
+		is_replied = CASE WHEN excluded.is_replied = 1 OR messages.is_replied = 1 THEN 1 ELSE 0 END,
 		flags = excluded.flags,
 		review_commit_id = COALESCE(excluded.review_commit_id, messages.review_commit_id);
 	`

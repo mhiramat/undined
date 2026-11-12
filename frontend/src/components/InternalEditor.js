@@ -556,8 +556,9 @@ export function openInternalEditor({
         draft_id: sessionDraftId,
       });
 
-      if (origMsgId) {
-        store.updateMessageReplied(origMsgId, true);
+      const replyTargetId = origMsgId || (inReplyTo ? inReplyTo.replace(/^<+|>+$/g, "").trim() : "");
+      if (replyTargetId) {
+        store.updateMessageReplied(replyTargetId, true);
       }
       if (sessionDraftId) {
         store.removeMessage(sessionDraftId);
@@ -571,7 +572,7 @@ export function openInternalEditor({
             {
               type: "UNDINE_MAIL_SENT",
               draftId: sessionDraftId,
-              origMsgId: origMsgId || null,
+              origMsgId: replyTargetId || null,
             },
             window.location.origin !== "null" ? window.location.origin : "*"
           );
@@ -1179,7 +1180,7 @@ export async function openForwardForMessage(msg) {
     body: body,
     inReplyTo: "",
     references: "",
-    origMsgId: msg.message_id,
+    origMsgId: "",
     notes: [],
   });
 }
@@ -1196,6 +1197,7 @@ export function openEditForMessage(msg) {
   const body = msg.body_plain || "";
   const inReplyTo = msg.in_reply_to ? (msg.in_reply_to.startsWith("<") ? msg.in_reply_to : `<${msg.in_reply_to}>`) : "";
   const refs = msg.references_header || "";
+  const parentMsgId = msg.in_reply_to ? msg.in_reply_to.replace(/^<+|>+$/g, "").trim() : "";
 
   openInternalEditor({
     to: toAddr,
@@ -1204,7 +1206,7 @@ export function openEditForMessage(msg) {
     body: body,
     inReplyTo: inReplyTo,
     references: refs,
-    origMsgId: msg.message_id || (msg.id != null ? String(msg.id) : ""),
+    origMsgId: parentMsgId,
     draftId: msg.id != null ? msg.id : null,
     notes: [],
     title: "Edit Draft (Internal Editor)",

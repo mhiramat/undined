@@ -347,6 +347,12 @@ export async function sendEmail({
     const err = await res.json().catch(() => ({ detail: "Failed to send email" }));
     throw new Error(err.detail || "Failed to send email");
   }
+  if (orig_msg_id) {
+    invalidateMessageDetailCache(orig_msg_id);
+  }
+  if (in_reply_to) {
+    invalidateMessageDetailCache(in_reply_to);
+  }
   return res.json();
 }
 
@@ -358,6 +364,7 @@ export async function setMessageReplied(messageId, isReplied = true) {
     body: JSON.stringify({ is_replied: isReplied }),
   });
   if (!res.ok) throw new Error("Failed to update message replied status");
+  invalidateMessageDetailCache(messageId);
   return res.json();
 }
 
