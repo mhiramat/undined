@@ -502,11 +502,15 @@
     "@types/mocha": "^10.0.6",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^4.0.0",
+    "@vscode/vsce": "^4.1.1",
     "mocha": "^12.0.3",
     "typescript": "^5.4.5"
   },
+  "overrides": {
+    "glob": "^14.0.6",
+    "minimatch": "^11.0.8"
+  },
   "allowScripts": {
-    "@vscode/vsce-sign@2.1.0": true
+    "@vscode/vsce-sign@2.1.1": true
   }
 }
