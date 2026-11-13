@@ -43,8 +43,17 @@ export class TreeItem {
   public iconPath?: any;
   public command?: any;
   public contextValue?: string;
+  public resourceUri?: any;
 
   constructor(public label: string, public collapsibleState?: TreeItemCollapsibleState) {}
+}
+
+export class FileDecoration {
+  constructor(
+    public badge?: string,
+    public tooltip?: string,
+    public color?: any
+  ) {}
 }
 
 export class ThemeIcon {
@@ -89,6 +98,7 @@ export const mockVscode = {
   ProgressLocation,
   ThemeIcon,
   ThemeColor,
+  FileDecoration,
   MarkdownString,
   EventEmitter,
   window: {
@@ -129,6 +139,7 @@ export const mockVscode = {
       reveal: () => {},
     }),
     registerTreeDataProvider: () => ({ dispose: () => {} }),
+    registerFileDecorationProvider: () => ({ dispose: () => {} }),
     registerWebviewViewProvider: () => ({ dispose: () => {} }),
   },
   env: {

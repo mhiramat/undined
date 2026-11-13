@@ -141,6 +141,224 @@
         "command": "undine.prevMessage",
         "title": "Previous Message",
         "category": "Undine"
+      },
+      {
+        "command": "undine.setMessageTag",
+        "title": "Set Message Color Tag",
+        "category": "Undine",
+        "icon": "$(tag)"
+      }
+    ],
+    "colors": [
+      {
+        "id": "undine.tag.cl_1",
+        "description": "Undine message tag color: Red ($cl_1)",
+        "defaults": {
+          "dark": "#CC0000",
+          "light": "#CC0000",
+          "highContrast": "#FF4D4D",
+          "highContrastLight": "#B30000"
+        }
+      },
+      {
+        "id": "undine.tag.cl_2",
+        "description": "Undine message tag color: Blue ($cl_2)",
+        "defaults": {
+          "dark": "#4D79FF",
+          "light": "#3333FF",
+          "highContrast": "#668CFF",
+          "highContrastLight": "#0000CC"
+        }
+      },
+      {
+        "id": "undine.tag.cl_3",
+        "description": "Undine message tag color: Green ($cl_3)",
+        "defaults": {
+          "dark": "#22A022",
+          "light": "#006600",
+          "highContrast": "#33CC33",
+          "highContrastLight": "#005500"
+        }
+      },
+      {
+        "id": "undine.tag.cl_4",
+        "description": "Undine message tag color: Gray ($cl_4)",
+        "defaults": {
+          "dark": "#999999",
+          "light": "#777777",
+          "highContrast": "#BBBBBB",
+          "highContrastLight": "#555555"
+        }
+      },
+      {
+        "id": "undine.tag.cl_5",
+        "description": "Undine message tag color: Purple ($cl_5)",
+        "defaults": {
+          "dark": "#994DFF",
+          "light": "#6600CC",
+          "highContrast": "#B380FF",
+          "highContrastLight": "#5200A3"
+        }
+      },
+      {
+        "id": "undine.tag.cl_6",
+        "description": "Undine message tag color: Light green ($cl_6)",
+        "defaults": {
+          "dark": "#33CC00",
+          "light": "#29A300",
+          "highContrast": "#4CE600",
+          "highContrastLight": "#1F7A00"
+        }
+      },
+      {
+        "id": "undine.tag.cl_7",
+        "description": "Undine message tag color: Orange ($cl_7)",
+        "defaults": {
+          "dark": "#FF9900",
+          "light": "#D98200",
+          "highContrast": "#FFB84D",
+          "highContrastLight": "#B36B00"
+        }
+      },
+      {
+        "id": "undine.tag.cl_8",
+        "description": "Undine message tag color: Pink ($cl_8)",
+        "defaults": {
+          "dark": "#CC33CC",
+          "light": "#B324B3",
+          "highContrast": "#E64CE6",
+          "highContrastLight": "#8F1D8F"
+        }
+      },
+      {
+        "id": "undine.tag.cl_9",
+        "description": "Undine message tag color: Light blue ($cl_9)",
+        "defaults": {
+          "dark": "#33CCFF",
+          "light": "#0099CC",
+          "highContrast": "#66D9FF",
+          "highContrastLight": "#007399"
+        }
+      },
+      {
+        "id": "undine.tag.cl_10",
+        "description": "Undine message tag color: Yellow ($cl_10)",
+        "defaults": {
+          "dark": "#FFFF00",
+          "light": "#B39B00",
+          "highContrast": "#FFFF4D",
+          "highContrastLight": "#8F7C00"
+        }
+      },
+      {
+        "id": "undine.tag.label1",
+        "description": "Undine message tag color: Important ($label1)",
+        "defaults": {
+          "dark": "#FF2600",
+          "light": "#D92000",
+          "highContrast": "#FF5938",
+          "highContrastLight": "#B31B00"
+        }
+      },
+      {
+        "id": "undine.tag.label2",
+        "description": "Undine message tag color: Work ($label2)",
+        "defaults": {
+          "dark": "#FF9900",
+          "light": "#D98200",
+          "highContrast": "#FFB84D",
+          "highContrastLight": "#B36B00"
+        }
+      },
+      {
+        "id": "undine.tag.label3",
+        "description": "Undine message tag color: Personal ($label3)",
+        "defaults": {
+          "dark": "#009900",
+          "light": "#007A00",
+          "highContrast": "#00CC00",
+          "highContrastLight": "#005C00"
+        }
+      },
+      {
+        "id": "undine.tag.label4",
+        "description": "Undine message tag color: To Do ($label4)",
+        "defaults": {
+          "dark": "#4D79FF",
+          "light": "#3333FF",
+          "highContrast": "#668CFF",
+          "highContrastLight": "#0000CC"
+        }
+      },
+      {
+        "id": "undine.tag.label5",
+        "description": "Undine message tag color: Later ($label5)",
+        "defaults": {
+          "dark": "#B34DB3",
+          "light": "#993399",
+          "highContrast": "#CC66CC",
+          "highContrastLight": "#732673"
+        }
+      },
+      {
+        "id": "undine.tag.teal",
+        "description": "Undine custom message tag color: Teal",
+        "defaults": {
+          "dark": "#14B8A6",
+          "light": "#0D9488",
+          "highContrast": "#2DD4BF",
+          "highContrastLight": "#0F766E"
+        }
+      },
+      {
+        "id": "undine.tag.cyan",
+        "description": "Undine custom message tag color: Cyan",
+        "defaults": {
+          "dark": "#06B6D4",
+          "light": "#0891B2",
+          "highContrast": "#22D3EE",
+          "highContrastLight": "#0E7490"
+        }
+      },
+      {
+        "id": "undine.tag.magenta",
+        "description": "Undine custom message tag color: Magenta",
+        "defaults": {
+          "dark": "#EC4899",
+          "light": "#DB2777",
+          "highContrast": "#F472B6",
+          "highContrastLight": "#BE185D"
+        }
+      },
+      {
+        "id": "undine.tag.gold",
+        "description": "Undine custom message tag color: Gold",
+        "defaults": {
+          "dark": "#F59E0B",
+          "light": "#D97706",
+          "highContrast": "#FBBF24",
+          "highContrastLight": "#B45309"
+        }
+      },
+      {
+        "id": "undine.tag.indigo",
+        "description": "Undine custom message tag color: Indigo",
+        "defaults": {
+          "dark": "#6366F1",
+          "light": "#4F46E5",
+          "highContrast": "#818CF8",
+          "highContrastLight": "#4338CA"
+        }
+      },
+      {
+        "id": "undine.tag.coral",
+        "description": "Undine custom message tag color: Coral",
+        "defaults": {
+          "dark": "#F87171",
+          "light": "#EF4444",
+          "highContrast": "#FCA5A5",
+          "highContrastLight": "#DC2626"
+        }
       }
     ],
     "menus": {
@@ -191,6 +409,11 @@
           "command": "undine.importPatchStg",
           "when": "view == undine.threadsView && viewItem == patch",
           "group": "1_b4"
+        },
+        {
+          "command": "undine.setMessageTag",
+          "when": "view == undine.threadsView",
+          "group": "2_tag"
         }
       ]
     },

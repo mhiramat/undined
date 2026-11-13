@@ -55,13 +55,22 @@ type Message struct {
 
 // SearchResult represents full-text search match from FTS5.
 type SearchResult struct {
-	ID        int64  `json:"id"`
-	MessageID string `json:"message_id"`
-	Subject   string `json:"subject"`
-	FromAddr  string `json:"from_addr"`
-	Date      string `json:"date"`
-	IsPatch   bool   `json:"is_patch"`
-	Snippet   string `json:"snippet"`
+	ID               int64   `json:"id"`
+	MessageID        string  `json:"message_id"`
+	Subject          string  `json:"subject"`
+	FromName         string  `json:"from_name"`
+	FromAddr         string  `json:"from_addr"`
+	Date             string  `json:"date"`
+	IsPatch          bool    `json:"is_patch"`
+	IsRead           bool    `json:"is_read"`
+	IsReplied        bool    `json:"is_replied"`
+	Flags            string  `json:"flags"`
+	InReplyTo        string  `json:"in_reply_to"`
+	ReferencesHeader string  `json:"references_header"`
+	TagKey           *string `json:"tag_key"`
+	TagName          *string `json:"tag_name"`
+	TagColor         *string `json:"tag_color"`
+	Snippet          string  `json:"snippet"`
 }
 
 // IndexEmailFile reads a raw .eml file from disk, parses it, and indexes it into the messages table.
@@ -522,7 +531,7 @@ func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
 
 	cleanQuery := strings.TrimSpace(query)
 	if cleanQuery == "" {
-		return nil, nil
+		return []*SearchResult{}, nil
 	}
 
 	sqlQuery := `
@@ -530,9 +539,15 @@ func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
 		m.id,
 		m.message_id,
 		m.subject,
+		COALESCE(m.from_name, ''),
 		m.from_addr,
 		m.date,
 		m.is_patch,
+		m.is_read,
+		m.is_replied,
+		COALESCE(m.flags, ''),
+		COALESCE(m.in_reply_to, ''),
+		COALESCE(m.references_header, ''),
 		snippet(messages_fts, 3, '<mark>', '</mark>', '...', 32) AS matched_snippet
 	FROM messages_fts
 	JOIN messages m ON messages_fts.rowid = m.id
@@ -552,15 +567,34 @@ func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
 	}
 	defer rows.Close()
 
-	var results []*SearchResult
+	results := make([]*SearchResult, 0)
 	for rows.Next() {
 		var r SearchResult
-		var isPatch any
-		if err := rows.Scan(&r.ID, &r.MessageID, &r.Subject, &r.FromAddr, &r.Date, &isPatch, &r.Snippet); err != nil {
+		var isPatch, isRead, isReplied any
+		if err := rows.Scan(
+			&r.ID,
+			&r.MessageID,
+			&r.Subject,
+			&r.FromName,
+			&r.FromAddr,
+			&r.Date,
+			&isPatch,
+			&isRead,
+			&isReplied,
+			&r.Flags,
+			&r.InReplyTo,
+			&r.ReferencesHeader,
+			&r.Snippet,
+		); err != nil {
 			return nil, err
 		}
 		r.IsPatch = toBool(isPatch)
+		r.IsRead = toBool(isRead)
+		r.IsReplied = toBool(isReplied)
 		results = append(results, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }

@@ -39,6 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("undine.foldersView", foldersProvider),
     vscode.window.registerTreeDataProvider("undine.threadsView", threadsProvider),
+    vscode.window.registerFileDecorationProvider(threadsProvider.decorationProvider),
     vscode.window.registerWebviewViewProvider(MessageHeaderViewProvider.viewType, headerProvider)
   );
 
@@ -246,6 +247,55 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.showInformationMessage(`Found ${results.length} message(s) matching "${query}".`);
       } catch (err: any) {
         vscode.window.showErrorMessage(`Search failed: ${err.message}`);
+      }
+    }),
+
+    vscode.commands.registerCommand("undine.setMessageTag", async (itemOrMessage?: any) => {
+      const msg = itemOrMessage?.message || itemOrMessage || activeDetail?.message;
+      const msgId: number | undefined = typeof msg?.id === "number" ? msg.id : undefined;
+      if (!msgId) {
+        vscode.window.showWarningMessage("Select a message first to set its color tag.");
+        return;
+      }
+
+      const tagsMap = await threadsProvider.ensureTagsLoaded();
+      const items: Array<vscode.QuickPickItem & { tagKey: string | null }> = [
+        {
+          label: "$(circle-slash) Clear Tag",
+          description: "Remove custom color tag from message",
+          tagKey: null,
+        },
+      ];
+      for (const [key, def] of Object.entries(tagsMap)) {
+        if (def && def.tag) {
+          items.push({
+            label: `$(tag) ${def.tag}`,
+            description: `${def.color} (${key})`,
+            tagKey: key,
+          });
+        }
+      }
+
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `Select a color tag for "${msg.subject || `Message #${msgId}`}"`,
+      });
+      if (!picked) {
+        return;
+      }
+
+      try {
+        await client.setMessageTag(msgId, picked.tagKey);
+        threadsProvider.updateMessageTagInPlace(msgId, picked.tagKey);
+        if (activeDetail && activeDetail.message.id === msgId) {
+          const def = picked.tagKey ? tagsMap[picked.tagKey] : undefined;
+          activeDetail.message.tag_key = picked.tagKey;
+          activeDetail.message.tag_name = def ? def.tag : picked.tagKey;
+          activeDetail.message.tag_color = def ? def.color : null;
+          activeDetail.message.tag = def ? def.tag : (picked.tagKey || undefined);
+          await headerProvider.setMessage(activeDetail);
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Failed to update message tag: ${err.message}`);
       }
     })
   );

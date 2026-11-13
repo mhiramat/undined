@@ -40,6 +40,11 @@ export interface FolderSyncStatus {
   error?: string;
 }
 
+export interface TagDefinition {
+  tag: string;
+  color: string;
+}
+
 export interface MessageSummary {
   id: number;
   message_id: string;
@@ -51,8 +56,13 @@ export interface MessageSummary {
   is_read: boolean;
   is_replied: boolean;
   tag?: string;
+  tag_key?: string | null;
+  tag_name?: string | null;
+  tag_color?: string | null;
+  flags?: string;
   in_reply_to?: string;
   references?: string;
+  references_header?: string;
   has_notes?: boolean;
   is_ai_review?: boolean;
 }

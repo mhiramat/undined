@@ -7,6 +7,7 @@
 import * as vscode from "vscode";
 import { MessageDetail } from "../client/types";
 import { UndineRestClient } from "../client/restClient";
+import { resolveMessageTag } from "./threadsProvider";
 
 export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "undine.headerView";
@@ -100,6 +101,11 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
               "undine.generateReplyDraft",
               message.msgId || this._currentDetail?.message.message_id
             );
+            break;
+          case "setTag":
+            if (this._currentDetail?.message) {
+              vscode.commands.executeCommand("undine.setMessageTag", this._currentDetail.message);
+            }
             break;
           case "delegateToMe":
             if (message.patchId) {
@@ -220,6 +226,11 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       m.from_name === "AI review" ||
       m.from_addr === "ai@undine.local"
     );
+    const resolvedTag = resolveMessageTag(m);
+    const safeTagColor = resolvedTag && /^#[0-9a-fA-F]{3,6}$/.test(resolvedTag.color) ? resolvedTag.color : "";
+    const tagBadgeStyle = safeTagColor
+      ? `background-color: ${safeTagColor}; color: ${this.getContrastTextColor(safeTagColor)}; cursor: pointer;`
+      : "cursor: pointer;";
 
     // Missing parent banner
     let missingParentHtml = "";
@@ -324,10 +335,10 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       ${isAiReview ? '<span class="badge badge-ai">AI REVIEW</span>' : (m.is_patch ? '<span class="badge badge-patch">PATCH</span>' : '<span class="badge badge-email">EMAIL</span>')}
       ${!m.is_read ? '<span class="badge badge-unread">UNREAD</span>' : ""}
       ${m.is_replied ? '<span class="badge badge-replied">REPLIED</span>' : ""}
-      ${m.tag ? `<span class="badge badge-tag">${this.escapeHtml(m.tag)}</span>` : ""}
+      ${resolvedTag ? `<span class="badge badge-tag" style="${tagBadgeStyle}" data-command="setTag" title="Click to change or clear color tag">${this.escapeHtml(resolvedTag.name)}</span>` : ""}
     </div>
 
-    <div class="subject-title">${this.escapeHtml(m.subject || "(No Subject)")}</div>
+    <div class="subject-title" style="${safeTagColor ? `color: ${safeTagColor};` : ""}">${this.escapeHtml(m.subject || "(No Subject)")}</div>
 
     <div class="meta-table">
       <div class="field-row">
@@ -392,6 +403,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       ` : ""}
       <div class="actions-row">
         <button class="btn btn-secondary" data-command="generateReply">💬 Compose LKML Reply</button>
+        <button class="btn btn-secondary" data-command="setTag" title="Set or clear custom color tag">🏷️ Tag</button>
       </div>
     </div>
   </div>
@@ -445,6 +457,24 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
       "'": "&#39;",
     };
     return str.replace(/[&<>"']/g, (m) => map[m] || m);
+  }
+
+  private getContrastTextColor(hexColor: string): string {
+    const clean = (hexColor || "").trim().replace(/^#/, "");
+    let r = 0, g = 0, b = 0;
+    if (clean.length === 3) {
+      r = parseInt(clean[0] + clean[0], 16);
+      g = parseInt(clean[1] + clean[1], 16);
+      b = parseInt(clean[2] + clean[2], 16);
+    } else if (clean.length === 6) {
+      r = parseInt(clean.slice(0, 2), 16);
+      g = parseInt(clean.slice(2, 4), 16);
+      b = parseInt(clean.slice(4, 6), 16);
+    } else {
+      return "#fff";
+    }
+    const yiq = (r * 299 + g * 587 + b * 114) / 1000;
+    return yiq >= 160 ? "#111" : "#fff";
   }
 
   private getStyles(): string {

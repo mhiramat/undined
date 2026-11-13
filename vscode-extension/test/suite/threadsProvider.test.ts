@@ -148,4 +148,101 @@ describe("ThreadsTreeProvider", () => {
     const foundMsg85 = provider.findMessageByMsgId("msg-85");
     assert.strictEqual(foundMsg85?.id, 85);
   });
+
+  it("should color message tree items and provide file decorations according to custom color tags", () => {
+    const tm = new TokenManager();
+    const client = new UndineRestClient("http://127.0.0.1:8080", tm);
+    const provider = new ThreadsTreeProvider(client);
+
+    // Register a custom user tag in addition to DEFAULT_TAGS
+    provider.setTagsMap({
+      "$custom_teal": { tag: "Needs Review", color: "#14B8A6" },
+    });
+
+    const taggedMessages: MessageSummary[] = [
+      {
+        id: 10,
+        message_id: "tagged-1@kernel.org",
+        subject: "[PATCH] tracing: fix ring buffer race",
+        from_addr: "dev@example.com",
+        from_name: "Kernel Developer",
+        date: "2026-10-18 12:00:00",
+        is_patch: true,
+        is_read: false,
+        is_replied: false,
+        tag_key: "$cl_1",
+        tag_name: "Red",
+        tag_color: "#CC0000",
+      },
+      {
+        id: 11,
+        message_id: "tagged-2@kernel.org",
+        subject: "Re: [PATCH] tracing: fix ring buffer race",
+        from_addr: "reviewer@kernel.org",
+        from_name: "Reviewer",
+        date: "2026-10-18 12:05:00",
+        is_patch: false,
+        is_read: true,
+        is_replied: false,
+        flags: "\\Seen $custom_teal",
+      },
+      {
+        id: 12,
+        message_id: "untagged-3@kernel.org",
+        subject: "[PATCH] kprobes: minor cleanup",
+        from_addr: "dev@example.com",
+        from_name: "Kernel Developer",
+        date: "2026-10-18 12:10:00",
+        is_patch: true,
+        is_read: true,
+        is_replied: false,
+      },
+    ];
+
+    (provider as any).flatList = taggedMessages;
+    const roots = provider.buildThreadHierarchy(taggedMessages);
+    assert.strictEqual(roots.length, 3);
+
+    // 1. Message with explicit tag_key / tag_name / tag_color ($cl_1 Red)
+    const item1 = roots[0];
+    assert.ok(item1.resolvedTag, "item1 should have a resolvedTag");
+    assert.strictEqual(item1.resolvedTag?.name, "Red");
+    assert.strictEqual(item1.resolvedTag?.color, "#CC0000");
+    assert.strictEqual(item1.resolvedTag?.themeColorId, "undine.tag.cl_1");
+    assert.ok(String(item1.description).includes("[Red]"), "description should include [Red] badge");
+    assert.strictEqual((item1.iconPath as any)?.color?.id, "undine.tag.cl_1", "icon should use undine.tag.cl_1 ThemeColor");
+    assert.ok(item1.resourceUri, "tagged item should set resourceUri for FileDecorationProvider");
+
+    const dec1 = provider.decorationProvider.provideFileDecoration(item1.resourceUri!) as any;
+    assert.ok(dec1, "FileDecorationProvider should return a decoration for tagged item");
+    assert.strictEqual(dec1.badge, "●");
+    assert.strictEqual(dec1.color?.id, "undine.tag.cl_1");
+    assert.ok(dec1.tooltip?.includes("Red"), "decoration tooltip should include tag name");
+
+    // 2. Message with custom tag resolved from flags ("$custom_teal" -> "#14B8A6" -> "undine.tag.teal")
+    const item2 = roots[1];
+    assert.ok(item2.resolvedTag, "item2 should resolve custom tag from flags");
+    assert.strictEqual(item2.resolvedTag?.name, "Needs Review");
+    assert.strictEqual(item2.resolvedTag?.themeColorId, "undine.tag.teal");
+    assert.strictEqual((item2.iconPath as any)?.color?.id, "undine.tag.teal");
+    const dec2 = provider.decorationProvider.provideFileDecoration(item2.resourceUri!) as any;
+    assert.strictEqual(dec2?.color?.id, "undine.tag.teal");
+
+    // 3. Untagged message should have no resourceUri or icon color override
+    const item3 = roots[2];
+    assert.strictEqual(item3.resolvedTag, null);
+    assert.strictEqual(item3.resourceUri, undefined);
+    assert.strictEqual((item3.iconPath as any)?.color, undefined);
+
+    // 4. In-place tag update should update flatList and fire decoration change event
+    let decorationFired = false;
+    provider.decorationProvider.onDidChangeFileDecorations(() => {
+      decorationFired = true;
+    });
+    provider.updateMessageTagInPlace(12, "$label1");
+    assert.ok(decorationFired, "updateMessageTagInPlace should fire onDidChangeFileDecorations");
+    const rebuilt = provider.buildThreadHierarchy(provider.getFlatList());
+    assert.strictEqual(rebuilt[2].resolvedTag?.name, "Important");
+    assert.strictEqual(rebuilt[2].resolvedTag?.themeColorId, "undine.tag.label1");
+  });
 });

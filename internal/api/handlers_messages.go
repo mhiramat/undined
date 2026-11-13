@@ -997,6 +997,15 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if results == nil {
 		results = make([]*database.SearchResult, 0)
 	}
+	if s.Config != nil {
+		for _, item := range results {
+			if tagInfo := s.Config.ResolveTag(item.Flags); tagInfo != nil {
+				item.TagKey = &tagInfo.Key
+				item.TagName = &tagInfo.Tag
+				item.TagColor = &tagInfo.Color
+			}
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(results)

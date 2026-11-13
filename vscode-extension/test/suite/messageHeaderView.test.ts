@@ -202,4 +202,25 @@ describe("MessageHeaderViewProvider", () => {
     // Review report action button
     assert.ok(html.includes("View Review Report"), "View Review Report button should be rendered");
   });
+
+  it("should render custom color tag badge and colored subject when message has a color tag", async () => {
+    const taggedDetail: MessageDetail = {
+      ...samplePatchDetail,
+      message: {
+        ...samplePatchDetail.message,
+        tag_key: "$cl_1",
+        tag_name: "Red",
+        tag_color: "#CC0000",
+      },
+    };
+
+    const provider = new MessageHeaderViewProvider(mockExtensionUri, client);
+    await provider.setMessage(taggedDetail);
+
+    const html = provider.getHtmlForWebview();
+    assert.ok(html.includes("badge-tag"), "Tag badge should be rendered");
+    assert.ok(html.includes(">Red<"), "Tag name 'Red' should be rendered inside badge");
+    assert.ok(html.includes("background-color: #CC0000;"), "Tag badge should use custom hex background color");
+    assert.ok(html.includes('class="subject-title" style="color: #CC0000;"'), "Subject should be colored with custom tag color");
+  });
 });
