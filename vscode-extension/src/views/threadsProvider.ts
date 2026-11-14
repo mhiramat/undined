@@ -25,23 +25,28 @@ export const DEFAULT_TAGS: Record<string, TagDefinition> = {
   "$label5": { tag: "Later", color: "#993399" },
 };
 
-interface PaletteEntry {
+export interface PaletteEntry {
   themeColorId: string;
   hex: string;
   key?: string;
 }
 
-const THEME_COLOR_PALETTE: PaletteEntry[] = [
-  { key: "$cl_1", themeColorId: "undine.tag.cl_1", hex: "#CC0000" },
-  { key: "$cl_2", themeColorId: "undine.tag.cl_2", hex: "#3333FF" },
-  { key: "$cl_3", themeColorId: "undine.tag.cl_3", hex: "#006600" },
-  { key: "$cl_4", themeColorId: "undine.tag.cl_4", hex: "#999999" },
-  { key: "$cl_5", themeColorId: "undine.tag.cl_5", hex: "#6600CC" },
-  { key: "$cl_6", themeColorId: "undine.tag.cl_6", hex: "#33CC00" },
-  { key: "$cl_7", themeColorId: "undine.tag.cl_7", hex: "#FF9900" },
-  { key: "$cl_8", themeColorId: "undine.tag.cl_8", hex: "#CC33CC" },
-  { key: "$cl_9", themeColorId: "undine.tag.cl_9", hex: "#33CCFF" },
-  { key: "$cl_10", themeColorId: "undine.tag.cl_10", hex: "#FFFF00" },
+/**
+ * Contributed VS Code ThemeColor palette.
+ * Note: VS Code's colorExtensionPoint requires IDs matching word[.word]*
+ * (alphanumeric/hyphen segments separated by dots; underscores are rejected).
+ */
+export const THEME_COLOR_PALETTE: PaletteEntry[] = [
+  { key: "$cl_1", themeColorId: "undine.tag.cl1", hex: "#CC0000" },
+  { key: "$cl_2", themeColorId: "undine.tag.cl2", hex: "#3333FF" },
+  { key: "$cl_3", themeColorId: "undine.tag.cl3", hex: "#006600" },
+  { key: "$cl_4", themeColorId: "undine.tag.cl4", hex: "#999999" },
+  { key: "$cl_5", themeColorId: "undine.tag.cl5", hex: "#6600CC" },
+  { key: "$cl_6", themeColorId: "undine.tag.cl6", hex: "#33CC00" },
+  { key: "$cl_7", themeColorId: "undine.tag.cl7", hex: "#FF9900" },
+  { key: "$cl_8", themeColorId: "undine.tag.cl8", hex: "#CC33CC" },
+  { key: "$cl_9", themeColorId: "undine.tag.cl9", hex: "#33CCFF" },
+  { key: "$cl_10", themeColorId: "undine.tag.cl10", hex: "#FFFF00" },
   { key: "$label1", themeColorId: "undine.tag.label1", hex: "#FF2600" },
   { key: "$label2", themeColorId: "undine.tag.label2", hex: "#FF9900" },
   { key: "$label3", themeColorId: "undine.tag.label3", hex: "#009900" },
@@ -79,16 +84,20 @@ function parseHexRgb(hex: string): [number, number, number] | null {
   return null;
 }
 
+function normalizeTagKeySlug(raw: string): string {
+  return (raw || "").trim().toLowerCase().replace(/^\$/, "").replace(/_/g, "");
+}
+
 /**
  * Maps a tag key and/or hex color to a contributed VS Code ThemeColor ID.
  */
 export function resolveTagThemeColorId(tagKey?: string | null, tagColor?: string | null): string {
-  const normKey = (tagKey || "").trim().toLowerCase();
+  const normSlug = normalizeTagKeySlug(tagKey || "");
   const normColor = (tagColor || "").trim().toUpperCase();
 
-  if (normKey) {
+  if (normSlug) {
     const keyEntry = THEME_COLOR_PALETTE.find(
-      (e) => e.key && (e.key.toLowerCase() === normKey || e.key.replace(/^\$/, "").toLowerCase() === normKey.replace(/^\$/, ""))
+      (e) => e.key && normalizeTagKeySlug(e.key) === normSlug
     );
     if (keyEntry && (!normColor || keyEntry.hex.toUpperCase() === normColor)) {
       return keyEntry.themeColorId;
@@ -115,16 +124,16 @@ export function resolveTagThemeColorId(tagKey?: string | null, tagColor?: string
     return bestId;
   }
 
-  if (normKey) {
+  if (normSlug) {
     const keyEntry = THEME_COLOR_PALETTE.find(
-      (e) => e.key && (e.key.toLowerCase() === normKey || e.key.replace(/^\$/, "").toLowerCase() === normKey.replace(/^\$/, ""))
+      (e) => e.key && normalizeTagKeySlug(e.key) === normSlug
     );
     if (keyEntry) {
       return keyEntry.themeColorId;
     }
   }
 
-  return "undine.tag.cl_2";
+  return "undine.tag.cl2";
 }
 
 /**
@@ -239,12 +248,12 @@ export class MessageTreeItem extends vscode.TreeItem {
       : undefined;
 
     if (this.resolvedTag) {
-      const qs =
-        `themeColor=${encodeURIComponent(this.resolvedTag.themeColorId)}` +
-        `&tag=${encodeURIComponent(this.resolvedTag.name)}` +
-        `&color=${encodeURIComponent(this.resolvedTag.color)}` +
-        `&key=${encodeURIComponent(this.resolvedTag.key)}`;
-      this.resourceUri = vscode.Uri.parse(`undine-msg://message/${message.id}?${qs}`);
+      // Use a pure path-only URI (no query/fragment/#/$) so VS Code's URI serializer
+      // and DecorationsService ResourceMap match identically across Extension Host IPC.
+      this.resourceUri = vscode.Uri.from({
+        scheme: MessageDecorationProvider.SCHEME,
+        path: `/${message.id}/${this.resolvedTag.themeColorId}`,
+      });
     }
 
     // Icons (colored with the message's tag ThemeColor when present)
@@ -279,6 +288,8 @@ export class MessageDecorationProvider implements vscode.FileDecorationProvider 
   public readonly onDidChangeFileDecorations: vscode.Event<vscode.Uri | vscode.Uri[] | undefined> =
     this._onDidChangeFileDecorations.event;
 
+  constructor(private readonly threadsProvider?: ThreadsTreeProvider) {}
+
   public fireDidChange(uris?: vscode.Uri | vscode.Uri[]): void {
     this._onDidChangeFileDecorations.fire(uris);
   }
@@ -288,14 +299,29 @@ export class MessageDecorationProvider implements vscode.FileDecorationProvider 
       return undefined;
     }
 
-    const params = new URLSearchParams(uri.query || "");
-    const themeColorId = params.get("themeColor");
+    // Path format: /<messageId>/<themeColorId>
+    const parts = (uri.path || "").split("/").filter(Boolean);
+    if (parts.length < 2) {
+      return undefined;
+    }
+    const msgId = parseInt(parts[0], 10);
+    const themeColorId = parts[1];
     if (!themeColorId) {
       return undefined;
     }
-    const tagName = params.get("tag") || "Tagged";
-    const tagColor = params.get("color") || "";
-    const tooltip = tagColor ? `Tag: ${tagName} (${tagColor})` : `Tag: ${tagName}`;
+
+    let tooltip = "Tagged";
+    if (this.threadsProvider && !isNaN(msgId)) {
+      const msg = this.threadsProvider.findMessageById(msgId);
+      if (msg) {
+        const resolved = resolveMessageTag(msg, this.threadsProvider.getTagsMap());
+        if (resolved) {
+          tooltip = resolved.color
+            ? `Tag: ${resolved.name} (${resolved.color})`
+            : `Tag: ${resolved.name}`;
+        }
+      }
+    }
 
     return new vscode.FileDecoration("●", tooltip, new vscode.ThemeColor(themeColorId));
   }
@@ -307,7 +333,7 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
   readonly onDidChangeTreeData: vscode.Event<MessageTreeItem | undefined | null | void> =
     this._onDidChangeTreeData.event;
 
-  public readonly decorationProvider = new MessageDecorationProvider();
+  public readonly decorationProvider = new MessageDecorationProvider(this);
 
   private currentFolder: Folder | null = null;
   private rootItems: MessageTreeItem[] = [];
@@ -380,6 +406,15 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
     this.refresh();
   }
 
+  public findMessageById(id: number): MessageSummary | undefined {
+    const found = this.flatList.find((m) => m.id === id);
+    if (found) return found;
+    if (this.searchResults) {
+      return this.searchResults.find((m) => m.id === id);
+    }
+    return undefined;
+  }
+
   public findMessageByMsgId(msgId: string): MessageSummary | undefined {
     const clean = this.cleanMsgId(msgId);
     if (clean) {
@@ -388,7 +423,7 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
     }
     const num = parseInt(msgId.replace(/^msg-/, ""), 10);
     if (!isNaN(num)) {
-      return this.flatList.find((m) => m.id === num);
+      return this.findMessageById(num);
     }
     return undefined;
   }
@@ -430,12 +465,16 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
     const itemMap = new Map<string, MessageTreeItem>();
     const roots: MessageTreeItem[] = [];
     const items: MessageTreeItem[] = [];
+    const taggedUris: vscode.Uri[] = [];
     const tags = this.getTagsMap();
 
     // Pre-create distinct items
     for (const msg of messages) {
       const item = new MessageTreeItem(msg, false, tags);
       items.push(item);
+      if (item.resourceUri) {
+        taggedUris.push(item.resourceUri);
+      }
       const cleanId = this.cleanMsgId(msg.message_id);
       if (cleanId) {
         itemMap.set(cleanId, item);
@@ -451,6 +490,15 @@ export class ThreadsTreeProvider implements vscode.TreeDataProvider<MessageTreeI
         parent.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
       } else {
         roots.push(item);
+      }
+    }
+
+    if (taggedUris.length > 0) {
+      const timer = setTimeout(() => {
+        this.decorationProvider.fireDidChange(taggedUris);
+      }, 0);
+      if (typeof (timer as any).unref === "function") {
+        (timer as any).unref();
       }
     }
 

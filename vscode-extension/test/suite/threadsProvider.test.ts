@@ -1,5 +1,8 @@
 import * as assert from "assert";
-import { ThreadsTreeProvider } from "../../src/views/threadsProvider";
+import * as fs from "fs";
+import * as path from "path";
+import * as vscode from "vscode";
+import { THEME_COLOR_PALETTE, ThreadsTreeProvider } from "../../src/views/threadsProvider";
 import { UndineRestClient } from "../../src/client/restClient";
 import { TokenManager } from "../../src/client/tokenManager";
 import { MessageSummary } from "../../src/client/types";
@@ -208,16 +211,19 @@ describe("ThreadsTreeProvider", () => {
     assert.ok(item1.resolvedTag, "item1 should have a resolvedTag");
     assert.strictEqual(item1.resolvedTag?.name, "Red");
     assert.strictEqual(item1.resolvedTag?.color, "#CC0000");
-    assert.strictEqual(item1.resolvedTag?.themeColorId, "undine.tag.cl_1");
+    assert.strictEqual(item1.resolvedTag?.themeColorId, "undine.tag.cl1");
     assert.ok(String(item1.description).includes("[Red]"), "description should include [Red] badge");
-    assert.strictEqual((item1.iconPath as any)?.color?.id, "undine.tag.cl_1", "icon should use undine.tag.cl_1 ThemeColor");
+    assert.strictEqual((item1.iconPath as any)?.color?.id, "undine.tag.cl1", "icon should use undine.tag.cl1 ThemeColor");
     assert.ok(item1.resourceUri, "tagged item should set resourceUri for FileDecorationProvider");
+    assert.strictEqual(item1.resourceUri?.toString(), "undine-msg:/10/undine.tag.cl1");
 
-    const dec1 = provider.decorationProvider.provideFileDecoration(item1.resourceUri!) as any;
+    // Verify URI round-trip across Extension Host <-> Workbench IPC
+    const roundTrippedUri = vscode.Uri.parse(item1.resourceUri!.toString());
+    const dec1 = provider.decorationProvider.provideFileDecoration(roundTrippedUri) as any;
     assert.ok(dec1, "FileDecorationProvider should return a decoration for tagged item");
     assert.strictEqual(dec1.badge, "●");
-    assert.strictEqual(dec1.color?.id, "undine.tag.cl_1");
-    assert.ok(dec1.tooltip?.includes("Red"), "decoration tooltip should include tag name");
+    assert.strictEqual(dec1.color?.id, "undine.tag.cl1");
+    assert.ok(dec1.tooltip?.includes("Red (#CC0000)"), "decoration tooltip should include tag name and hex color");
 
     // 2. Message with custom tag resolved from flags ("$custom_teal" -> "#14B8A6" -> "undine.tag.teal")
     const item2 = roots[1];
@@ -244,5 +250,32 @@ describe("ThreadsTreeProvider", () => {
     const rebuilt = provider.buildThreadHierarchy(provider.getFlatList());
     assert.strictEqual(rebuilt[2].resolvedTag?.name, "Important");
     assert.strictEqual(rebuilt[2].resolvedTag?.themeColorId, "undine.tag.label1");
+  });
+
+  it("should register valid word[.word]* ThemeColor IDs in package.json without underscores", () => {
+    const pkgPath = path.resolve(__dirname, "../../../package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+    const contributedColors: Array<{ id: string }> = pkg?.contributes?.colors || [];
+    const contributedIds = new Set(contributedColors.map((c) => c.id));
+
+    // VS Code colorExtensionPoint rejects IDs containing underscores
+    const colorIdPattern = /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$/;
+    for (const c of contributedColors) {
+      assert.ok(
+        colorIdPattern.test(c.id),
+        `contributes.colors ID "${c.id}" violates VS Code word[.word]* pattern`
+      );
+    }
+
+    for (const entry of THEME_COLOR_PALETTE) {
+      assert.ok(
+        colorIdPattern.test(entry.themeColorId),
+        `THEME_COLOR_PALETTE ID "${entry.themeColorId}" violates VS Code word[.word]* pattern`
+      );
+      assert.ok(
+        contributedIds.has(entry.themeColorId),
+        `THEME_COLOR_PALETTE ID "${entry.themeColorId}" is missing from package.json contributes.colors`
+      );
+    }
   });
 });

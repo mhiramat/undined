@@ -2,7 +2,7 @@
   "name": "undine-vscode",
   "displayName": "Undine Review Workstation",
   "description": "Integrated Linux kernel mail and patch review workstation for UndineD",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "undine",
   "license": "Apache-2.0",
   "engines": {
@@ -151,7 +151,7 @@
     ],
     "colors": [
       {
-        "id": "undine.tag.cl_1",
+        "id": "undine.tag.cl1",
         "description": "Undine message tag color: Red ($cl_1)",
         "defaults": {
           "dark": "#CC0000",
@@ -161,7 +161,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_2",
+        "id": "undine.tag.cl2",
         "description": "Undine message tag color: Blue ($cl_2)",
         "defaults": {
           "dark": "#4D79FF",
@@ -171,7 +171,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_3",
+        "id": "undine.tag.cl3",
         "description": "Undine message tag color: Green ($cl_3)",
         "defaults": {
           "dark": "#22A022",
@@ -181,7 +181,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_4",
+        "id": "undine.tag.cl4",
         "description": "Undine message tag color: Gray ($cl_4)",
         "defaults": {
           "dark": "#999999",
@@ -191,7 +191,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_5",
+        "id": "undine.tag.cl5",
         "description": "Undine message tag color: Purple ($cl_5)",
         "defaults": {
           "dark": "#994DFF",
@@ -201,7 +201,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_6",
+        "id": "undine.tag.cl6",
         "description": "Undine message tag color: Light green ($cl_6)",
         "defaults": {
           "dark": "#33CC00",
@@ -211,7 +211,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_7",
+        "id": "undine.tag.cl7",
         "description": "Undine message tag color: Orange ($cl_7)",
         "defaults": {
           "dark": "#FF9900",
@@ -221,7 +221,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_8",
+        "id": "undine.tag.cl8",
         "description": "Undine message tag color: Pink ($cl_8)",
         "defaults": {
           "dark": "#CC33CC",
@@ -231,7 +231,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_9",
+        "id": "undine.tag.cl9",
         "description": "Undine message tag color: Light blue ($cl_9)",
         "defaults": {
           "dark": "#33CCFF",
@@ -241,7 +241,7 @@
         }
       },
       {
-        "id": "undine.tag.cl_10",
+        "id": "undine.tag.cl10",
         "description": "Undine message tag color: Yellow ($cl_10)",
         "defaults": {
           "dark": "#FFFF00",

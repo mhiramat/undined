@@ -9,18 +9,49 @@ export class MockUri {
   public query: string;
   public fragment: string;
 
-  constructor(uriStr: string) {
+  constructor(uriStr?: string) {
+    if (!uriStr) {
+      this.scheme = "";
+      this.authority = "";
+      this.path = "";
+      this.query = "";
+      this.fragment = "";
+      return;
+    }
     const url = new URL(uriStr);
     this.scheme = url.protocol.replace(/:$/, "");
     const userinfo = url.username ? (url.password ? `${url.username}:${url.password}@` : `${url.username}@`) : "";
     this.authority = userinfo + url.host;
     this.path = url.pathname;
-    this.query = url.search.replace(/^\?/, "");
-    this.fragment = url.hash.replace(/^#/, "");
+    this.query = decodeURIComponent(url.search.replace(/^\?/, ""));
+    this.fragment = decodeURIComponent(url.hash.replace(/^#/, ""));
   }
 
   static parse(val: string): MockUri {
     return new MockUri(val);
+  }
+
+  static from(components: {
+    scheme: string;
+    authority?: string;
+    path?: string;
+    query?: string;
+    fragment?: string;
+  }): MockUri {
+    const u = new MockUri();
+    u.scheme = components.scheme;
+    u.authority = components.authority || "";
+    u.path = components.path || "";
+    u.query = components.query || "";
+    u.fragment = components.fragment || "";
+    return u;
+  }
+
+  public toString(): string {
+    const auth = this.authority ? `//${this.authority}` : "";
+    const qs = this.query ? `?${this.query}` : "";
+    const frag = this.fragment ? `#${this.fragment}` : "";
+    return `${this.scheme}:${auth}${this.path}${qs}${frag}`;
   }
 }
 

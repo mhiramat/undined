@@ -77,8 +77,9 @@ To package the extension into an installable `.vsix` archive:
 3. Install into VS Code:
    - **Via Command Line**:
      ```bash
-     code --install-extension undine-vscode-0.1.0.vsix
+     code --install-extension undine-vscode-0.1.1.vsix --force
      ```
+     *(After installing or updating, run **Developer: Reload Window** in VS Code so contributed theme colors take effect immediately.)*
    - **Via VS Code GUI**:
      Open the Extensions view (`Ctrl+Shift+X`), click the `...` (More Actions) menu in the top right corner of the Extensions panel, choose **"Install from VSIX..."**, and select the generated file.
 
