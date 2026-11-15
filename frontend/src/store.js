@@ -111,22 +111,36 @@ class UndineDStore {
   getAiReviewStatusForTarget(id) {
     if (!id) return null;
     const current = String(id).replace(/^<|>$/g, "").trim();
-    if (this.state.activeReview.messageId) {
-      const target = String(this.state.activeReview.messageId).replace(/^<|>$/g, "").trim();
-      if (target === current) {
-        return this.state.activeReview.isRunning ? "in-progress" : (this.state.activeReview.status || "idle");
+    const activeStatus = this.state.activeReview.status;
+    const isActivePending = Boolean(
+      this.state.activeReview.isRunning &&
+      activeStatus !== "completed" &&
+      activeStatus !== "error" &&
+      activeStatus !== "cancelled" &&
+      activeStatus !== "idle"
+    );
+    if (isActivePending) {
+      if (this.state.activeReview.messageId) {
+        const target = String(this.state.activeReview.messageId).replace(/^<|>$/g, "").trim();
+        if (target === current) {
+          return activeStatus === "queued" ? "queued" : "in-progress";
+        }
       }
-    }
-    if (this.state.activeReview.activeReviewDbId != null && String(this.state.activeReview.activeReviewDbId) === current) {
-      return this.state.activeReview.isRunning ? "in-progress" : (this.state.activeReview.status || "idle");
+      if (this.state.activeReview.activeReviewDbId != null && String(this.state.activeReview.activeReviewDbId) === current) {
+        return activeStatus === "queued" ? "queued" : "in-progress";
+      }
     }
     if (this.state.activeReview.queue && Array.isArray(this.state.activeReview.queue)) {
       for (const q of this.state.activeReview.queue) {
+        const qStatus = q.status || "queued";
+        if (qStatus !== "queued" && qStatus !== "in-progress" && qStatus !== "running") {
+          continue;
+        }
         if (q.message_id && String(q.message_id).replace(/^<|>$/g, "").trim() === current) {
-          return q.status || "queued";
+          return qStatus;
         }
         if (q.review_db_id != null && String(q.review_db_id) === current) {
-          return q.status || "queued";
+          return qStatus;
         }
       }
     }

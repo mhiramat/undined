@@ -227,10 +227,18 @@ export class NotificationChannel {
           data.is_running || (data.queue_length && data.queue_length > 0)
         );
 
+        const isJobActive = Boolean(
+          data.is_running &&
+          data.status !== "completed" &&
+          data.status !== "error" &&
+          data.status !== "cancelled" &&
+          data.status !== "idle"
+        );
+
         this.store.setAiReviewState({
           isRunning: Boolean(data.is_running),
-          messageId: data.active_message_id || null,
-          activeReviewDbId: data.active_review_db_id || null,
+          messageId: isJobActive ? (data.active_message_id || null) : null,
+          activeReviewDbId: isJobActive ? (data.active_review_db_id || null) : null,
           status: data.status,
           error: data.error || null,
           output: data.output || null,

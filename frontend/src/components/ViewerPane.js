@@ -25,6 +25,10 @@ import {
   EVENT_MESSAGE_REPLIED_UPDATED,
 } from "../constants.js";
 
+function isPendingAiReviewStatus(status) {
+  return status === "in-progress" || status === "running" || status === "queued";
+}
+
 export function renderViewerPane(container) {
   let headerMode = localStorage.getItem("undine_header_mode") || "abbreviated";
   if (!["abbreviated", "full", "from_only"].includes(headerMode)) {
@@ -470,13 +474,22 @@ export function renderViewerPane(container) {
           </button>
         `;
       }
+      const aiReviewTargetStatus = store.getAiReviewStatusForTarget
+        ? (
+            store.getAiReviewStatusForTarget(m.id) ||
+            store.getAiReviewStatusForTarget(m.message_id) ||
+            (reviewedMsg && (store.getAiReviewStatusForTarget(reviewedMsg.id) || store.getAiReviewStatusForTarget(reviewedMsg.message_id)))
+          )
+        : null;
       const bodyTrim = (m.body_plain || "").trim();
-      const isPending = bodyTrim === "Queued" || bodyTrim === "In-progress" ||
-        (store.getAiReviewStatusForTarget && (
-          store.getAiReviewStatusForTarget(m.id) ||
-          store.getAiReviewStatusForTarget(m.message_id) ||
-          (reviewedMsg && (store.getAiReviewStatusForTarget(reviewedMsg.id) || store.getAiReviewStatusForTarget(reviewedMsg.message_id)))
-        ));
+      const isBodyPlaceholder = bodyTrim === "Queued" || bodyTrim === "In-progress";
+      const activeReviewState = store.getState().activeReview || {};
+      const isTerminalIdle = !isReviewActive && (
+        activeReviewState.status === "completed" ||
+        activeReviewState.status === "error" ||
+        activeReviewState.status === "cancelled"
+      );
+      const isPending = isPendingAiReviewStatus(aiReviewTargetStatus) || (isBodyPlaceholder && !isTerminalIdle);
       let cancelBtn = "";
       if (isPending) {
         cancelBtn = `
@@ -919,7 +932,7 @@ export function renderViewerPane(container) {
     if (aiReviewBtn && !aiReviewBtn.disabled) {
       aiReviewBtn.addEventListener("click", async () => {
         const targetId = m.message_id || m.id;
-        if (store.getAiReviewStatusForTarget && store.getAiReviewStatusForTarget(targetId)) return;
+        if (store.getAiReviewStatusForTarget && isPendingAiReviewStatus(store.getAiReviewStatusForTarget(targetId))) return;
         if (aiReviewMsg) {
           if (!confirm("An AI review has already been run on this patch/commit. Do you want to run it again?")) {
             return;

@@ -237,13 +237,24 @@ func TestReviewRunnerStatusUpdatedSSEEvent(t *testing.T) {
 		t.Fatalf("expected success")
 	}
 
+	var finalStatus StatusResponse
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		st := runner.GetStatus()
-		if !st.IsRunning && st.Status == "completed" {
+		finalStatus = runner.GetStatus()
+		if !finalStatus.IsRunning && finalStatus.Status == "completed" {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+
+	if finalStatus.IsRunning || finalStatus.Status != "completed" {
+		t.Fatalf("GetStatus() = {IsRunning: %v, Status: %q, Error: %q}, want {IsRunning: false, Status: %q}",
+			finalStatus.IsRunning, finalStatus.Status, finalStatus.Error, "completed")
+	}
+
+	if finalStatus.ActiveMessageID != "" || finalStatus.ActiveReviewDBID != nil {
+		t.Errorf("GetStatus() after completion = {ActiveMessageID: %q, ActiveReviewDBID: %v}, want cleared active job fields",
+			finalStatus.ActiveMessageID, finalStatus.ActiveReviewDBID)
 	}
 
 	// Verify events were published to the hub ring buffer
@@ -260,6 +271,12 @@ func TestReviewRunnerStatusUpdatedSSEEvent(t *testing.T) {
 			if st, ok := ev.Payload.(StatusResponse); ok {
 				if st.Status == "completed" {
 					foundCompleted = true
+					if st.ActiveMessageID != "20261017-test-msg@example.com" {
+						t.Errorf("completed SSE event ActiveMessageID = %q, want %q", st.ActiveMessageID, "20261017-test-msg@example.com")
+					}
+					if st.ActiveReviewDBID == nil {
+						t.Errorf("completed SSE event ActiveReviewDBID = nil, want non-nil review message DB ID")
+					}
 				}
 			}
 		}

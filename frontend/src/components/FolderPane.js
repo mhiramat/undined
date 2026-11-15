@@ -405,12 +405,19 @@ export function renderFolderPane(container) {
   // On mount, check if there is an in-flight review to hydrate initial store state
   fetchAiReviewStatus()
     .then((status) => {
-      if (status && (status.is_running || (status.queue_length && status.queue_length > 0))) {
+      if (status) {
+        const isJobActive = Boolean(
+          status.is_running &&
+          status.status !== "completed" &&
+          status.status !== "error" &&
+          status.status !== "cancelled" &&
+          status.status !== "idle"
+        );
         store.setAiReviewState({
-          isRunning: status.is_running,
-          messageId: status.active_message_id,
-          activeReviewDbId: status.active_review_db_id || null,
-          status: status.status,
+          isRunning: Boolean(status.is_running),
+          messageId: isJobActive ? (status.active_message_id || null) : null,
+          activeReviewDbId: isJobActive ? (status.active_review_db_id || null) : null,
+          status: status.status || "idle",
           error: status.error || null,
           output: status.output || null,
           queue: status.queue || [],

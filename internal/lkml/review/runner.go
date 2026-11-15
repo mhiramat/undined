@@ -367,8 +367,13 @@ func (r *Runner) CancelReview(target string) bool {
 			r.queue = r.queue[1:]
 			q.Status = "cancelled"
 			q.Error = "Review was cancelled"
-			r.status = "cancelled"
-			r.lastError = "Review was cancelled"
+			if r.activeJob == nil {
+				r.status = "cancelled"
+				r.lastError = "Review was cancelled"
+				if len(r.queue) == 0 {
+					r.isRunning = false
+				}
+			}
 			r.saveOrUpdateReviewMessage(q, "Review was cancelled", " (cancelled)")
 			cancelled = true
 		}
@@ -384,8 +389,13 @@ func (r *Runner) CancelReview(target string) bool {
 				r.queue = append(r.queue[:i], r.queue[i+1:]...)
 				qj.Status = "cancelled"
 				qj.Error = "Review was cancelled"
-				r.status = "cancelled"
-				r.lastError = "Review was cancelled"
+				if r.activeJob == nil {
+					r.status = "cancelled"
+					r.lastError = "Review was cancelled"
+					if len(r.queue) == 0 {
+						r.isRunning = false
+					}
+				}
 				r.saveOrUpdateReviewMessage(qj, "Review was cancelled", " (cancelled)")
 				cancelled = true
 				break
@@ -444,7 +454,20 @@ func (r *Runner) workerLoop() {
 		r.publishStatus(st)
 
 		r.executeJob(ctx, job)
+		cancel()
 	}
+}
+
+func (r *Runner) finishActiveJobLocked() StatusResponse {
+	if len(r.queue) == 0 {
+		r.isRunning = false
+	}
+	st := r.getStatusLocked()
+	if !r.isRunning {
+		r.activeJob = nil
+		r.cancelFunc = nil
+	}
+	return st
 }
 
 func (r *Runner) executeJob(ctx context.Context, job *Job) {
@@ -472,11 +495,8 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 			job.Status = "error"
 			job.Error = fmt.Sprintf("invalid review command %q: %v", cmdStr, err)
 			r.lastError = job.Error
-			if len(r.queue) == 0 {
-				r.isRunning = false
-			}
 			r.saveOrUpdateReviewMessage(job, job.Error, " (failed)")
-			st := r.getStatusLocked()
+			st := r.finishActiveJobLocked()
 			r.mu.Unlock()
 			r.publishStatus(st)
 			return
@@ -518,9 +538,6 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	r.mu.Lock()
 	r.lastOutput = output
 	job.Output = output
-	if len(r.queue) == 0 {
-		r.isRunning = false
-	}
 
 	if ctx.Err() == context.Canceled {
 		r.status = "cancelled"
@@ -528,7 +545,7 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 		r.lastError = "Review was cancelled"
 		job.Error = r.lastError
 		r.saveOrUpdateReviewMessage(job, "Review was cancelled", " (cancelled)")
-		st := r.getStatusLocked()
+		st := r.finishActiveJobLocked()
 		r.mu.Unlock()
 		r.publishStatus(st)
 		return
@@ -540,7 +557,7 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 		r.lastError = fmt.Sprintf("%s: %s", err.Error(), strings.TrimSpace(output))
 		job.Error = r.lastError
 		r.saveOrUpdateReviewMessage(job, r.lastError, " (failed)")
-		st := r.getStatusLocked()
+		st := r.finishActiveJobLocked()
 		r.mu.Unlock()
 		r.publishStatus(st)
 		return
@@ -551,7 +568,7 @@ func (r *Runner) executeJob(ctx context.Context, job *Job) {
 	r.lastError = ""
 	job.Error = ""
 	r.saveOrUpdateReviewMessage(job, output, "")
-	st := r.getStatusLocked()
+	st := r.finishActiveJobLocked()
 	r.mu.Unlock()
 	r.publishStatus(st)
 	if r.Events != nil && job.MessageID != "" {
@@ -629,10 +646,14 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 				}
 			}
 			if r.Events != nil {
-				r.Events.Publish("message.updated", map[string]any{
+				payload := map[string]any{
 					"folder":     constants.FolderAIReviews,
 					"message_id": job.MessageID,
-				})
+				}
+				if job.ReviewDBID != nil {
+					payload["message_db_id"] = *job.ReviewDBID
+				}
+				r.Events.Publish("message.updated", payload)
 			}
 			return
 		}
@@ -664,8 +685,9 @@ func (r *Runner) saveOrUpdateReviewMessage(job *Job, bodyText, statusTag string)
 				"timestamp": time.Now().Unix(),
 			})
 			r.Events.Publish("message.updated", map[string]any{
-				"folder":     constants.FolderAIReviews,
-				"message_id": job.MessageID,
+				"folder":        constants.FolderAIReviews,
+				"message_id":    job.MessageID,
+				"message_db_id": dbID,
 			})
 		}
 	}
