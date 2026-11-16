@@ -9,6 +9,11 @@ import (
 )
 
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.Config == nil {
+		http.Error(w, "server configuration unavailable", http.StatusInternalServerError)
+		return
+	}
+
 	editorCmd := s.Config.General.GetExternalEditorCmd()
 	var reviewPromptFile any
 	if s.Config.Review.PromptFile != "" {
@@ -42,11 +47,13 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 			"username":        s.Config.Patchwork.Username,
 		},
 		"translate": map[string]any{
-			"enabled":     s.Config.Translate.Enabled,
-			"url":         s.Config.Translate.URL,
-			"source_lang": s.Config.Translate.SourceLang,
-			"target_lang": s.Config.Translate.TargetLang,
-			"style":       s.Config.Translate.Style,
+			"enabled":         s.Config.Translate.Enabled,
+			"url":             s.Config.Translate.URL,
+			"source_lang":     s.Config.Translate.SourceLang,
+			"target_lang":     s.Config.Translate.TargetLang,
+			"style":           s.Config.Translate.Style,
+			"max_tokens":      s.Config.Translate.MaxTokens,
+			"timeout_seconds": s.Config.Translate.TimeoutSeconds,
 		},
 	}
 

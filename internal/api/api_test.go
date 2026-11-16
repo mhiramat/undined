@@ -769,7 +769,6 @@ func TestAIReviewMessageDetailAndLinks(t *testing.T) {
 	}
 }
 
-
 func TestRESTAPIAccessLogging(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
@@ -1828,7 +1827,6 @@ func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
 	cfg.General.DataDir = tempDir
 	cfg.General.MaildirPath = maildirPath
 	cfg.General.DBPath = dbPath
-	cfg.Translate.Enabled = true
 	cfg.Translate.URL = translateSrv.URL
 	cfg.Translate.TargetLang = "ja"
 
@@ -1863,8 +1861,71 @@ func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
 
 	client := &http.Client{}
 
-	// 1. Successful translation when local-jp-translate is running
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", ts.URL, msgID), strings.NewReader(`{}`))
+	// 0. By default (Translate.Enabled = false), GET /api/config reports enabled=false and translate endpoints return 403 Forbidden
+	cfgReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/config", ts.URL), nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest(GET /api/config) failed: %v", err)
+	}
+	cfgReq.Header.Set("Authorization", "Bearer "+sec.Token)
+	cfgResp, err := client.Do(cfgReq)
+	if err != nil {
+		t.Fatalf("GET /api/config failed: %v", err)
+	}
+	defer cfgResp.Body.Close()
+	if cfgResp.StatusCode != http.StatusOK {
+		t.Fatalf("cfgResp.StatusCode = %d, want %d", cfgResp.StatusCode, http.StatusOK)
+	}
+	var cfgPayload map[string]any
+	if err := json.NewDecoder(cfgResp.Body).Decode(&cfgPayload); err != nil {
+		t.Fatalf("Decode /api/config failed: %v", err)
+	}
+	transCfg, ok := cfgPayload["translate"].(map[string]any)
+	if !ok {
+		t.Fatalf("cfgPayload[translate] = %T, want map[string]any", cfgPayload["translate"])
+	}
+	if transCfg["enabled"] != false {
+		t.Errorf("transCfg[enabled] = %v, want false by default", transCfg["enabled"])
+	}
+
+	disabledReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", ts.URL, msgID), strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	disabledReq.Header.Set("Authorization", "Bearer "+sec.Token)
+	disabledReq.Header.Set("Content-Type", "application/json")
+	disabledResp, err := client.Do(disabledReq)
+	if err != nil {
+		t.Fatalf("POST translate while disabled failed: %v", err)
+	}
+	disabledResp.Body.Close()
+	if disabledResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("disabledResp.StatusCode = %d, want %d", disabledResp.StatusCode, http.StatusForbidden)
+	}
+
+	disabledTextReq, err := http.NewRequest("POST", fmt.Sprintf("%s/api/translate", ts.URL), strings.NewReader(`{"text":"hello"}`))
+	if err != nil {
+		t.Fatalf("http.NewRequest(POST /api/translate) failed: %v", err)
+	}
+	disabledTextReq.Header.Set("Authorization", "Bearer "+sec.Token)
+	disabledTextReq.Header.Set("Content-Type", "application/json")
+	disabledTextResp, err := client.Do(disabledTextReq)
+	if err != nil {
+		t.Fatalf("POST /api/translate while disabled failed: %v", err)
+	}
+	disabledTextResp.Body.Close()
+	if disabledTextResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("disabledTextResp.StatusCode = %d, want %d", disabledTextResp.StatusCode, http.StatusForbidden)
+	}
+
+	// Explicitly enable translation in a new server instance
+	enabledCfg := *cfg
+	enabledCfg.Translate.Enabled = true
+	enabledServer := NewServer(&enabledCfg, db, store, sec, nil, nil, nil, nil, nil, nil, "")
+	enabledTS := httptest.NewServer(enabledServer.Router())
+	defer enabledTS.Close()
+
+	// 1. Successful translation when enabled and local-jp-translate is running
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", enabledTS.URL, msgID), strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("http.NewRequest failed: %v", err)
 	}
@@ -1894,7 +1955,7 @@ func TestTranslateMessageAPI_SuccessAndServerOffline(t *testing.T) {
 	// 2. Stop local-jp-translate server and verify 503 error response
 	translateSrv.Close()
 
-	req2, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", ts.URL, msgID), strings.NewReader(`{}`))
+	req2, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/translate", enabledTS.URL, msgID), strings.NewReader(`{}`))
 	if err != nil {
 		t.Fatalf("http.NewRequest failed: %v", err)
 	}
@@ -2038,9 +2099,3 @@ func TestSMTPSendMarksAllFolderCopiesReplied(t *testing.T) {
 		t.Errorf("b4Msg.FilePath = %q, want suffix :2,RS", b4Msg.FilePath)
 	}
 }
-
-
-
-
-
-

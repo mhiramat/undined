@@ -286,8 +286,8 @@ todo-states = "New, queued, under_review"
 
 func TestTranslateConfig(t *testing.T) {
 	cfgDef := NewDefaultConfig()
-	if !cfgDef.Translate.Enabled {
-		t.Errorf("expected Translate.Enabled=true by default")
+	if cfgDef.Translate.Enabled {
+		t.Errorf("cfgDef.Translate.Enabled = true, want false by default")
 	}
 	if cfgDef.Translate.URL != "http://127.0.0.1:8787" {
 		t.Errorf("Translate.URL = %q, want http://127.0.0.1:8787", cfgDef.Translate.URL)
@@ -305,6 +305,9 @@ func TestTranslateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
+	if cfg.Translate.Enabled {
+		t.Errorf("cfg.Translate.Enabled = true when only target_lang set, want false")
+	}
 	if cfg.Translate.TargetLang != "de" {
 		t.Errorf("Translate.TargetLang = %q, want de", cfg.Translate.TargetLang)
 	}
@@ -312,6 +315,15 @@ func TestTranslateConfig(t *testing.T) {
 	if err != nil || val != "de" {
 		t.Errorf("GetConfigValue(translate.target_lang) = %q, %v; want de", val, err)
 	}
+
+	if err := SetTOMLValue(confPath, "translate.enabled", "true"); err != nil {
+		t.Fatalf("SetTOMLValue(translate.enabled) failed: %v", err)
+	}
+	cfgEnabled, err := Load(confPath)
+	if err != nil {
+		t.Fatalf("Load after enabling failed: %v", err)
+	}
+	if !cfgEnabled.Translate.Enabled {
+		t.Errorf("cfgEnabled.Translate.Enabled = false, want true")
+	}
 }
-
-

@@ -119,6 +119,10 @@ When the user clicks **🌐 Translate** in the message viewer:
 
 ## 5. Configuration (`[translate]` in `config.toml`)
 
+Translation is **disabled by default** (`enabled = false`). When disabled, `GET /api/config` reports `translate.enabled = false`, the Web UI hides `#btn-translate-message` in `ViewerPane.js` (retrieving `/api/config` at session start and reacting to `EVENT_CONFIG_LOADED`), and `POST /api/messages/{id}/translate` / `POST /api/translate` return `403 Forbidden`.
+
+To enable local email translation, set `enabled = true` under `[translate]` in `config.toml`:
+
 ```toml
 [translate]
 enabled = true

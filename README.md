@@ -209,7 +209,7 @@ todo_states = ["new", "under-review"]
 delegate-users = ["dev", "reviewer"]
 
 [translate]
-# enabled = true
+# enabled = false
 # url = "http://127.0.0.1:8787"
 # source_lang = "en"
 # target_lang = "ja"
@@ -508,17 +508,20 @@ curl -s http://127.0.0.1:8787/ready
 
 > **Note**: You do **not** need to pass `--cors-origin` to `local-jp-translate`, because UndineD proxies translation requests server-to-server (`POST /api/messages/{id}/translate` -> `http://127.0.0.1:8787/translate`). If `local-jp-translate` is not running when you click **🌐 Translate**, UndineD displays an error toast notifying you to start the server.
 
-#### 2. Configure Target Language and Server URL (Optional)
-By default, UndineD connects to `http://127.0.0.1:8787` and translates from English (`"en"`) to Japanese (`"ja"`). You can customize these settings in `config.toml` or via `undined config set`:
+#### 2. Enable Translation in Configuration
+Translation is **disabled by default** (`translate.enabled = false`), and the **🌐 Translate** button is hidden in the Web UI until enabled. Enable it in `config.toml` (`[translate] enabled = true`) or via `undined config set`:
 
 ```bash
-# Change target language (e.g., "ja", "de", "fr", "zh-hans", "ko")
+# Enable the translation feature (shows the 🌐 Translate button in the Web UI)
+undined config set translate.enabled true
+
+# Optional: change target language (default: "ja"; e.g., "ja", "de", "fr", "zh-hans", "ko")
 undined config set translate.target_lang ja
 
-# Change Japanese translation style ("default", "polite", or "plain")
+# Optional: change Japanese translation style (default: "default"; "default", "polite", or "plain")
 undined config set translate.style polite
 
-# Use a custom local-jp-translate URL/port
+# Optional: use a custom local-jp-translate URL/port (default: "http://127.0.0.1:8787")
 undined config set translate.url "http://127.0.0.1:8787"
 ```
 

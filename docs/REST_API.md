@@ -926,6 +926,15 @@ Retrieves public, non-sensitive configuration parameters for the frontend client
       "$cl_1": {"tag": "Review", "color": "#f38ba8", "shortcut": "1"},
       "$cl_2": {"tag": "Bug", "color": "#fab387", "shortcut": "2"},
       "$cl_3": {"tag": "Feature", "color": "#a6e3a1", "shortcut": "3"}
+    },
+    "translate": {
+      "enabled": false,
+      "url": "http://127.0.0.1:8787",
+      "source_lang": "en",
+      "target_lang": "ja",
+      "style": "default",
+      "max_tokens": 2048,
+      "timeout_seconds": 180
     }
   }
   ```

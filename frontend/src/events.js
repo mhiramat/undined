@@ -3,7 +3,7 @@
  * Receives real-time invalidation events and triggers debounced REST re-fetching.
  */
 
-import { fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
+import { fetchConfig, fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
 
 function showToast(message, type = "info") {
   if (typeof document === "undefined") return;
@@ -316,6 +316,9 @@ export class NotificationChannel {
 
     this.es.addEventListener("system.resync_required", () => {
       clearMessageDetailCache();
+      fetchConfig()
+        .then((cfg) => this.store.setConfig(cfg))
+        .catch(() => {});
       this.debouncedSyncFolders();
       const activeDetail = this.store.getState().activeMessageDetail;
       if (activeDetail?.message) {

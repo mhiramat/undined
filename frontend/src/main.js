@@ -70,20 +70,20 @@ async function init() {
   // Initialize draggable pane resizer
   initPaneResizer();
 
-  // Initialize real-time server-side event stream
-  const notificationChannel = new NotificationChannel(store);
-  notificationChannel.connect();
-  window.addEventListener("beforeunload", () => {
-    notificationChannel.disconnect();
-  });
-
-  // Load configuration
+  // Retrieve active server configuration when the session begins
   try {
     const config = await fetchConfig();
     store.setConfig(config);
   } catch (err) {
     console.warn("Could not load config:", err);
   }
+
+  // Initialize real-time server-side event stream
+  const notificationChannel = new NotificationChannel(store);
+  notificationChannel.connect();
+  window.addEventListener("beforeunload", () => {
+    notificationChannel.disconnect();
+  });
 
   // Listen for cross-window messages from standalone composer windows
   window.addEventListener("message", async (event) => {

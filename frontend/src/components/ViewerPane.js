@@ -15,6 +15,7 @@ import { isMarkdown, renderMarkdown, cleanBodyText } from "../markdown.js";
 import {
   FOLDER_B4_IMPORTS,
   FOLDER_AI_REVIEWS,
+  EVENT_CONFIG_LOADED,
   EVENT_FOLDER_SELECTED,
   EVENT_MESSAGES_UPDATED,
   EVENT_MESSAGE_SELECTED,
@@ -401,7 +402,7 @@ export function renderViewerPane(container) {
     const mdToggleBtn = `<button type="button" class="action-btn" id="btn-toggle-markdown-view" style="${viewMode === "diff" ? "display: none;" : ""}" title="${viewMode === "markdown" ? "Switch to wrapped plain text mode" : "Render Markdown as rich text"}">${viewMode === "markdown" ? "📄 Plain text" : "📖 Rich text"}</button>`;
 
     const translateCfg = store.getState().config?.translate;
-    const isTranslateEnabled = !translateCfg || translateCfg.enabled !== false;
+    const isTranslateEnabled = Boolean(translateCfg && translateCfg.enabled === true);
     const targetLangLabel = ((translateCfg && translateCfg.target_lang) || "ja").toUpperCase();
     const translateBtn = isTranslateEnabled
       ? `<button type="button" class="action-btn" id="btn-translate-message" title="Format 80-column wrapped lines and translate message (${escapeAttr(targetLangLabel)})">🌐 Translate (${escapeHtml(targetLangLabel)})</button>`
@@ -659,7 +660,7 @@ export function renderViewerPane(container) {
 
     function updateBodyView() {
       if (viewMode === "diff") {
-        if (translationState.isTranslated && translationState.data) {
+        if (isTranslateEnabled && translationState.isTranslated && translationState.data) {
           bodyContainer.innerHTML = `${buildTranslatedBoxHtml(true)}<div id="viewer-sidediff-mount"></div>`;
           const mount = bodyContainer.querySelector("#viewer-sidediff-mount");
           renderSideDiff(mount, detail.parsed_diff);
@@ -667,7 +668,7 @@ export function renderViewerPane(container) {
         } else {
           renderSideDiff(bodyContainer, detail.parsed_diff);
         }
-      } else if (translationState.isTranslated && translationState.data) {
+      } else if (isTranslateEnabled && translationState.isTranslated && translationState.data) {
         bodyContainer.innerHTML = `${buildTranslatedBoxHtml(false)}${renderPlainViewNotesHtml()}`;
         attachTranslatedBoxListeners();
         attachPlainViewNoteListeners();
@@ -1733,7 +1734,11 @@ export function renderViewerPane(container) {
       loadDetail(payload);
     } else if (event === EVENT_MESSAGE_DETAIL_LOADED) {
       render(payload);
-    } else if (event === EVENT_NOTES_UPDATED || event === EVENT_AI_REVIEW_STATE_CHANGED) {
+    } else if (
+      event === EVENT_CONFIG_LOADED ||
+      event === EVENT_NOTES_UPDATED ||
+      event === EVENT_AI_REVIEW_STATE_CHANGED
+    ) {
       if (currentDetail) {
         render(currentDetail);
       }

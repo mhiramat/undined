@@ -17,7 +17,7 @@ func TestFormatActiveConfig_NonExistentFile(t *testing.T) {
 	}
 
 	// Verify all expected sections are present
-	sections := []string{"[general]", "[imap]", "[smtp]", "[lkml]", "[mcp]", "[review]", "[patchwork]", "[tags]"}
+	sections := []string{"[general]", "[imap]", "[smtp]", "[lkml]", "[mcp]", "[review]", "[patchwork]", "[translate]", "[tags]"}
 	for _, sec := range sections {
 		if !strings.Contains(out, sec) {
 			t.Errorf("expected section %s in output, got:\n%s", sec, out)
@@ -32,6 +32,8 @@ func TestFormatActiveConfig_NonExistentFile(t *testing.T) {
 		`# poll_interval_seconds = 60`,
 		`# from_name = "Kernel Developer"`,
 		`# delegate-users = []`,
+		`# enabled = false`,
+		`# url = "http://127.0.0.1:8787"`,
 		`# "$cl_1" = { tag = "Red", color = "#CC0000" }`,
 	}
 	for _, exp := range expectedCommented {

@@ -44,7 +44,7 @@ func (s *Server) writeTranslateError(w http.ResponseWriter, err error) {
 }
 
 func (s *Server) handleTranslateMessage(w http.ResponseWriter, r *http.Request) {
-	if s.Config != nil && !s.Config.Translate.Enabled {
+	if s.Config == nil || !s.Config.Translate.Enabled {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -109,7 +109,7 @@ func (s *Server) handleTranslateMessage(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleTranslateText(w http.ResponseWriter, r *http.Request) {
-	if s.Config != nil && !s.Config.Translate.Enabled {
+	if s.Config == nil || !s.Config.Translate.Enabled {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]any{

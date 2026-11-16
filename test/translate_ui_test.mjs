@@ -48,7 +48,7 @@ globalThis.document = {
 };
 
 import { store } from "../frontend/src/store.js";
-import { translateMessage, clearTranslationCache } from "../frontend/src/api.js";
+import { fetchConfig, translateMessage, clearTranslationCache } from "../frontend/src/api.js";
 import { renderViewerPane } from "../frontend/src/components/ViewerPane.js";
 
 function createMockElement(id = "") {
@@ -130,6 +130,111 @@ function createMockElement(id = "") {
   };
   return el;
 }
+
+test("ViewerPane hides Translate button by default and displays it only when enabled via server config", async () => {
+  clearTranslationCache();
+  store.setConfig(null);
+
+  const container = createMockElement("viewer-pane");
+  renderViewerPane(container);
+
+  const normalDetail = {
+    message: {
+      id: 90,
+      message_id: "msg-90@kernel.org",
+      subject: "[PATCH] sample: cleanup",
+      from_name: "Kernel Developer",
+      from_email: "dev@example.com",
+      to_addr: "linux-kernel@vger.kernel.org",
+      date: "2026-11-16",
+      is_read: 1,
+      is_patch: 0,
+      body_plain: "Plain body text.",
+    },
+    comments: [],
+    attachments: [],
+  };
+
+  const aiReviewDetail = {
+    message: {
+      id: 91,
+      message_id: "",
+      subject: "AI review: [PATCH] sample: cleanup",
+      from_name: "AI review",
+      from_addr: "",
+      date: "2026-11-16",
+      is_read: 1,
+      is_ai_review: true,
+      body_plain: "## Review Summary\n\nLooks clean.",
+    },
+    comments: [],
+    attachments: [],
+  };
+
+  // 1. Before session config is loaded (config === null), button must not be rendered
+  store.setActiveMessageDetail(normalDetail);
+  assert.equal(
+    container.querySelector("#btn-translate-message"),
+    null,
+    "Translate button must not be displayed when config is null"
+  );
+
+  store.setActiveMessageDetail(aiReviewDetail);
+  assert.equal(
+    container.querySelector("#btn-translate-message"),
+    null,
+    "Translate button must not be displayed on AI-review message when config is null"
+  );
+
+  // 2. Session begins and retrieves default server config (translate.enabled = false)
+  let serverEnabled = false;
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/api/config")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          translate: {
+            enabled: serverEnabled,
+            url: "http://127.0.0.1:8787",
+            source_lang: "en",
+            target_lang: "ja",
+            style: "default",
+          },
+        }),
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+  };
+
+  store.setActiveMessageDetail(normalDetail);
+  const defaultCfg = await fetchConfig();
+  store.setConfig(defaultCfg);
+  assert.equal(
+    container.querySelector("#btn-translate-message"),
+    null,
+    "Translate button must not be displayed when server config has translate.enabled = false"
+  );
+
+  // 3. Server config enables translation (translate.enabled = true); EVENT_CONFIG_LOADED updates open message
+  serverEnabled = true;
+  const enabledCfg = await fetchConfig();
+  store.setConfig(enabledCfg);
+  const btn = container.querySelector("#btn-translate-message");
+  assert.ok(
+    btn,
+    "Translate button should appear immediately once server config with translate.enabled = true is loaded"
+  );
+  assert.equal(btn.textContent, "🌐 Translate (JA)");
+
+  // 4. Disabling translation again hides the button immediately
+  store.setConfig({ translate: { enabled: false, target_lang: "ja" } });
+  assert.equal(
+    container.querySelector("#btn-translate-message"),
+    null,
+    "Translate button must be removed if translate.enabled becomes false"
+  );
+});
 
 test("translateMessage API throws descriptive error when local translation server is offline and does not cache failure", async () => {
   clearTranslationCache();
@@ -342,6 +447,16 @@ test("Background translation queue and message switching preserves in-flight sta
     }
     return { ok: true, status: 200, json: async () => ({}) };
   };
+
+  store.setConfig({
+    translate: {
+      enabled: true,
+      url: "http://127.0.0.1:8787",
+      source_lang: "en",
+      target_lang: "ja",
+      style: "default",
+    },
+  });
 
   const container = createMockElement("viewer-pane");
   renderViewerPane(container);

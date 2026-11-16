@@ -180,14 +180,14 @@ func (r *ReviewConfig) EffectivePrompt() string {
 
 // PatchworkConfig holds patchwork.kernel.org integration settings.
 type PatchworkConfig struct {
-	Enabled           bool     `toml:"enabled" json:"enabled"`
-	URL               string   `toml:"url" json:"url"`
-	APIVersion        string   `toml:"api_version" json:"api_version"`
-	Username          string   `toml:"username" json:"username"`
-	Email             string   `toml:"email" json:"email"`
-	TokenCmd          string   `toml:"token_cmd" json:"token_cmd"`
-	Token             string   `toml:"token" json:"token"`
-	PreferredArchives []string `toml:"preferred_archives" json:"preferred_archives"`
+	Enabled            bool     `toml:"enabled" json:"enabled"`
+	URL                string   `toml:"url" json:"url"`
+	APIVersion         string   `toml:"api_version" json:"api_version"`
+	Username           string   `toml:"username" json:"username"`
+	Email              string   `toml:"email" json:"email"`
+	TokenCmd           string   `toml:"token_cmd" json:"token_cmd"`
+	Token              string   `toml:"token" json:"token"`
+	PreferredArchives  []string `toml:"preferred_archives" json:"preferred_archives"`
 	DefaultProject     string   `toml:"default_project" json:"default_project"`
 	TodoStates         []string `toml:"todo_states,omitempty" json:"todo_states,omitempty"`
 	TodoStatesKebab    any      `toml:"todo-states,omitempty" json:"-"`
@@ -498,7 +498,7 @@ func NewDefaultConfig() *Config {
 			TimeoutSeconds:    constants.DefaultPatchworkTimeoutSeconds,
 		},
 		Translate: TranslateConfig{
-			Enabled:        true,
+			Enabled:        false,
 			URL:            constants.DefaultTranslateURL,
 			SourceLang:     constants.DefaultTranslateSourceLang,
 			TargetLang:     constants.DefaultTranslateTargetLang,
