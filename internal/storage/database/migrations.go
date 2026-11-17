@@ -110,8 +110,67 @@ func initDB(db *sql.DB) error {
 	if err := sanitizeLocalFolderMessages(db); err != nil {
 		log.Printf("[database] warning: failed to sanitize local folder messages: %v", err)
 	}
+	if err := reconcileBaseCommitPatches(db); err != nil {
+		log.Printf("[database] warning: failed to reconcile base-commit patches: %v", err)
+	}
 
 	return nil
+}
+
+func reconcileBaseCommitPatches(db *sql.DB) error {
+	rows, err := db.Query(`
+		SELECT m.id, m.body_plain
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.is_patch = 0
+		  AND f.name != ?
+		  AND m.body_plain IS NOT NULL
+		  AND (m.body_plain LIKE '%base-commit:%' OR m.body_plain LIKE '%prerequisite-patch-id:%' OR m.body_plain LIKE '%change-id:%')
+		  AND (m.body_plain LIKE '%diff --git %' OR m.body_plain LIKE '%--- a/%');
+	`, constants.FolderAIReviews)
+	if err != nil {
+		return err
+	}
+	var patchIDs []int64
+	for rows.Next() {
+		var id int64
+		var bodyPlain string
+		if err := rows.Scan(&id, &bodyPlain); err != nil {
+			continue
+		}
+		if parser.DetectPatch(bodyPlain) {
+			patchIDs = append(patchIDs, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close() // Safe to ignore close error when returning prior iteration error.
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(patchIDs) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("UPDATE messages SET is_patch = 1 WHERE id = ?;")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, id := range patchIDs {
+		if _, err := stmt.Exec(id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func reconcileSentReplies(db *sql.DB) error {
@@ -369,7 +428,7 @@ func sanitizeLocalFolderMessages(db *sql.DB) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
+		_ = rows.Close() // Safe to ignore close error when returning prior iteration error.
 		return err
 	}
 	if err := rows.Close(); err != nil {

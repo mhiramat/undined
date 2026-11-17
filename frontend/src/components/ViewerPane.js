@@ -372,7 +372,7 @@ export function renderViewerPane(container) {
       } else {
         patchActionButton = `<button type="button" class="action-btn" id="btn-ai-review" title="Trigger background AI review with agy --print">🤖 AI review</button>`;
       }
-    } else if (m.is_patch && !isDraftMessage(m)) {
+    } else if ((m.is_patch || detail.parsed_diff?.is_patch) && !isDraftMessage(m)) {
       if (isPatchCorrupted) {
         const reason = detail.parsed_diff.corrupted_reason || "Non-ASCII characters detected in patch diff";
         patchActionButton = `<button type="button" class="action-btn text-muted" id="btn-apply-git" disabled title="Cannot apply corrupted patch: ${escapeHtml(reason)}">⚠️ Corrupted patch</button>`;
@@ -877,7 +877,8 @@ export function renderViewerPane(container) {
     const applyBtn = container.querySelector("#btn-apply-git");
     if (applyBtn && !isPatchCorrupted) {
       applyBtn.addEventListener("click", () => {
-        openApplyPatchDialog(m, async (applyRes) => {
+        const detectedBase = detail.base_commit || detail.parsed_diff?.base_commit || "";
+        openApplyPatchDialog(detectedBase ? { ...m, base_commit: detectedBase } : m, async (applyRes) => {
           try {
             const updated = await fetchMessageDetail(m.id, { bypassCache: true });
             store.setActiveMessageDetail(updated);

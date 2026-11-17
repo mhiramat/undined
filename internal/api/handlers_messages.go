@@ -203,8 +203,22 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 	var primaryParentID string
 	var parentInfo *database.ParentInfo
 	var aiReviewMsg *database.ReviewedMessage
+	var baseCommit string
+	if parsedDiff != nil && parsedDiff.BaseCommit != "" {
+		baseCommit = parsedDiff.BaseCommit
+	} else if !isAIReview && msg.BodyPlain != "" {
+		baseCommit = patch.ExtractBaseCommit(msg.BodyPlain)
+	}
 	if !isAIReview {
 		missingParent, primaryParentID, parentInfo = s.DB.FindParentInfo(msg.InReplyTo, msg.ReferencesHeader, &msg.FolderID, msg.MessageID)
+		if baseCommit == "" && primaryParentID != "" {
+			if parentMsg, err := s.DB.GetMessageByMsgID(primaryParentID); err == nil && parentMsg != nil && parentMsg.BodyPlain != "" {
+				baseCommit = patch.ExtractBaseCommit(parentMsg.BodyPlain)
+			}
+		}
+		if parsedDiff != nil && parsedDiff.BaseCommit == "" && baseCommit != "" {
+			parsedDiff.BaseCommit = baseCommit
+		}
 		if aiRev, err := s.DB.FindAIReviewMessage(msg); err == nil && aiRev != nil {
 			aiReviewMsg = aiRev
 			msg.AIReviewMessage = aiRev
@@ -282,6 +296,7 @@ func (s *Server) handleGetMessageDetail(w http.ResponseWriter, r *http.Request) 
 		"attachments":       attachments,
 		"patch":             parsedDiff,
 		"parsed_diff":       parsedDiff,
+		"base_commit":       baseCommit,
 		"comments":          comments,
 		"review_commit_id":  revCommit,
 		"missing_parent":    missingParent,

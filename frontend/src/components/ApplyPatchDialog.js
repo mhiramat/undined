@@ -79,14 +79,35 @@ export function generateBranchName(subject) {
   return `review/${slug}`;
 }
 
+/**
+ * Extracts a git format-patch / b4 `base-commit: <ref>` value from an email body.
+ */
+export function extractBaseCommit(text) {
+  if (!text) return "";
+  const match = String(text).match(/^[ \t]*base-commit:[ \t]*([0-9a-fA-F]{7,64}|[a-zA-Z0-9._\-+/~^:]+)[ \t]*$/im);
+  if (!match || !match[1]) return "";
+  const val = match[1].trim();
+  if (val.startsWith("-")) return "";
+  return val;
+}
+
 export function openApplyPatchDialog(msg, onApplySuccess = null) {
   closeApplyPatchDialog();
 
   if (!msg || !msg.message_id) return;
 
   const cfg = store.getState().config;
+  const activeDetail = store.getState().activeMessageDetail;
   const defaultRepo = cfg?.kernel_git_dir || "~/linux";
   const defaultBranch = generateBranchName(msg.subject);
+  const detectedBaseCommit =
+    msg.base_commit ||
+    extractBaseCommit(msg.body_plain) ||
+    activeDetail?.base_commit ||
+    activeDetail?.parsed_diff?.base_commit ||
+    extractBaseCommit(activeDetail?.message?.body_plain) ||
+    "";
+  const defaultBaseCommit = detectedBaseCommit || "HEAD";
 
   const backdrop = document.createElement("div");
   backdrop.className = "apply-modal-backdrop";
@@ -149,13 +170,15 @@ export function openApplyPatchDialog(msg, onApplySuccess = null) {
             type="text"
             class="apply-input"
             id="apply-base-commit-input"
-            value="HEAD"
+            value="${escapeAttr(defaultBaseCommit)}"
             placeholder="e.g. HEAD, origin/master, v6.12, commit SHA"
             autocomplete="off"
             spellcheck="false"
           />
           <div class="apply-hint">
-            Commit, tag, or branch to start the new branch from (default: <code>HEAD</code>).
+            ${detectedBaseCommit
+              ? `Auto-populated from <code>base-commit: ${escapeHtml(detectedBaseCommit)}</code> in email.`
+              : `Commit, tag, or branch to start the new branch from (default: <code>HEAD</code>).`}
           </div>
         </div>
 

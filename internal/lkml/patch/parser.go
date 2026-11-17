@@ -11,10 +11,30 @@ import (
 )
 
 var (
-	hunkHeaderRegex = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: ?(.*))?$`)
-	diffGitRegex    = regexp.MustCompile(`^diff --git (?:a/)?(\S+) (?:b/)?(\S+)`)
-	gitVersionRegex = regexp.MustCompile(`^(?:git version\s+)?v?\d+\.\d+(?:\.\d+)*(?:[\.-][a-zA-Z0-9]+)*$`)
+	hunkHeaderRegex      = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: ?(.*))?$`)
+	diffGitRegex         = regexp.MustCompile(`^diff --git (?:a/)?(\S+) (?:b/)?(\S+)`)
+	gitVersionRegex      = regexp.MustCompile(`^(?:git version\s+)?v?\d+\.\d+(?:\.\d+)*(?:[\.-][a-zA-Z0-9]+)*$`)
+	baseCommitLineRegex  = regexp.MustCompile(`(?i)^base-commit:\s*([0-9a-fA-F]{7,64}|[a-zA-Z0-9._\-+/~^:]+)\s*$`)
+	patchFooterMetaRegex = regexp.MustCompile(`(?i)^(?:base-commit|prerequisite-patch-id|prerequisite-message-id|change-id):\s*\S+$`)
 )
+
+// ExtractBaseCommit scans an email or patch body for a git format-patch / b4
+// "base-commit: <ref>" line and returns the sanitized commit SHA or ref.
+func ExtractBaseCommit(text string) string {
+	if text == "" {
+		return ""
+	}
+	for _, rawLine := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(rawLine)
+		if m := baseCommitLineRegex.FindStringSubmatch(trimmed); len(m) > 1 {
+			candidate := strings.TrimSpace(m[1])
+			if candidate != "" && !strings.HasPrefix(candidate, "-") {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
 
 func isSignatureSeparator(line string) bool {
 	trimmed := strings.TrimRight(line, " \t\r")
@@ -71,6 +91,7 @@ type ParsedEmailDiff struct {
 	IsPatch            bool        `json:"is_patch"`
 	IsCorrupted        bool        `json:"is_corrupted"`
 	CorruptedReason    string      `json:"corrupted_reason,omitempty"`
+	BaseCommit         string      `json:"base_commit,omitempty"`
 	Preamble           string      `json:"preamble"`
 	Files              []*DiffFile `json:"files"`
 	Postscript         string      `json:"postscript"`
@@ -78,7 +99,8 @@ type ParsedEmailDiff struct {
 }
 
 // HasBodyAfterDiff checks if lines after a diff contain substantive email body text
-// (such as review discussion, quoted lines, or paragraphs) rather than standard git signatures.
+// (such as review discussion, quoted lines, or paragraphs) rather than standard git signatures
+// or git format-patch / b4 base-tree trailers (e.g. "base-commit:", "prerequisite-patch-id:").
 func HasBodyAfterDiff(lines []string) bool {
 	firstNonEmpty := ""
 	for _, line := range lines {
@@ -89,6 +111,10 @@ func HasBodyAfterDiff(lines []string) bool {
 		// Quoted reply lines (e.g. "> ...") anywhere after the diff strictly indicate email discussion
 		if strings.HasPrefix(trimmed, ">") {
 			return true
+		}
+		// Skip standard git format-patch --base / b4 footer metadata lines preceding the signature
+		if firstNonEmpty == "" && patchFooterMetaRegex.MatchString(trimmed) {
+			continue
 		}
 		if firstNonEmpty == "" {
 			firstNonEmpty = line
@@ -480,11 +506,16 @@ func Parse(text string) *ParsedEmailDiff {
 
 	bodyContinuesAfter := HasBodyAfterDiff(postscriptLines)
 	isPatch := len(files) > 0 && (hasHunks || isCorrupted) && !bodyContinuesAfter
+	baseCommit := ExtractBaseCommit(strings.Join(postscriptLines, "\n"))
+	if baseCommit == "" {
+		baseCommit = ExtractBaseCommit(strings.Join(preambleLines, "\n"))
+	}
 
 	return &ParsedEmailDiff{
 		IsPatch:            isPatch,
 		IsCorrupted:        isCorrupted,
 		CorruptedReason:    corruptedReason,
+		BaseCommit:         baseCommit,
 		Preamble:           strings.TrimSpace(strings.Join(preambleLines, "\n")),
 		Files:              files,
 		Postscript:         strings.TrimSpace(strings.Join(postscriptLines, "\n")),

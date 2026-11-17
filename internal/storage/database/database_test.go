@@ -1057,3 +1057,54 @@ func TestReconcileSentRepliesAndPreserveRepliedAcrossFolders(t *testing.T) {
 		t.Errorf("inboxMsgAfterSync.IsReplied = false, want true preserved on conflict")
 	}
 }
+
+func TestReconcileBaseCommitPatchesOnStartup(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "base_commit_reconcile.db")
+	db, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase failed: %v", err)
+	}
+
+	b4Folder, err := db.GetOrCreateFolder(constants.FolderB4Imports, false)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder failed: %v", err)
+	}
+
+	patchBody := "Commit description.\n\nSigned-off-by: Kernel Developer <dev@example.com>\n---\n" +
+		"diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c\n" +
+		"--- a/kernel/trace/trace.c\n" +
+		"+++ b/kernel/trace/trace.c\n" +
+		"@@ -1,3 +1,4 @@\n" +
+		" int a;\n" +
+		"+int b;\n\n" +
+		"base-commit: 6628e7d4c6b25c8d18f1345e3a20d21829aae7e4\n" +
+		"-- \n2.56.1\n"
+
+	res, err := db.DB.Exec(`
+		INSERT INTO messages (message_id, folder_id, file_path, subject, from_addr, to_addr, body_plain, is_patch, is_read)
+		VALUES ('20261117-base-commit@example.com', ?, '', '[PATCH] trace: lock reader', 'dev@example.com', 'linux-trace-kernel@vger.kernel.org', ?, 0, 1);
+	`, b4Folder.ID, patchBody)
+	if err != nil {
+		t.Fatalf("INSERT message failed: %v", err)
+	}
+	msgID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("res.LastInsertId() failed: %v", err)
+	}
+	db.Close()
+
+	db2, err := NewDatabase(dbPath)
+	if err != nil {
+		t.Fatalf("NewDatabase(reopen) failed: %v", err)
+	}
+	defer db2.Close()
+
+	reconciled, err := db2.GetMessageByID(msgID)
+	if err != nil {
+		t.Fatalf("GetMessageByID failed: %v", err)
+	}
+	if !reconciled.IsPatch {
+		t.Errorf("reconciled.IsPatch = false, want true after reconcileBaseCommitPatches")
+	}
+}

@@ -909,6 +909,27 @@ class UndineDStore {
 
   setActiveMessageDetail(detail) {
     this.state.activeMessageDetail = detail;
+    if (detail?.message?.id != null && typeof detail.message.is_patch === "boolean") {
+      const targetId = Number(detail.message.id);
+      const isPatchVal = detail.message.is_patch;
+      let patchFlagChanged = false;
+      for (const rawMsg of this.state.rawMessages) {
+        if (Number(rawMsg.id) === targetId && Boolean(rawMsg.is_patch) !== isPatchVal) {
+          rawMsg.is_patch = isPatchVal;
+          patchFlagChanged = true;
+        }
+      }
+      for (const computedMsg of this.state.messages) {
+        if (Number(computedMsg.id) === targetId && Boolean(computedMsg.is_patch) !== isPatchVal) {
+          computedMsg.is_patch = isPatchVal;
+          patchFlagChanged = true;
+        }
+      }
+      if (patchFlagChanged && this.state.parsedFilter) {
+        this.recomputeMessages();
+        this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
+      }
+    }
     this.state.activeNotes = {};
     const rawComments = Array.isArray(detail?.comments)
       ? detail.comments

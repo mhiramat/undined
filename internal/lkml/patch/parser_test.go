@@ -230,6 +230,16 @@ func TestHasBodyAfterDiff(t *testing.T) {
 			lines:    []string{"--- ", "Kernel Developer"},
 			expected: false,
 		},
+		{
+			name:     "BaseCommitBeforeGitSignature",
+			lines:    []string{"", "base-commit: 6628e7d4c6b25c8d18f1345e3a20d21829aae7e4", "-- ", "2.56.1.703.gf848ed807c-goog"},
+			expected: false,
+		},
+		{
+			name:     "BaseCommitAndPrerequisitesBeforeGitSignature",
+			lines:    []string{"base-commit: 6628e7d4c6b25c8d18f1345e3a20d21829aae7e4", "prerequisite-patch-id: 1111111111111111111111111111111111111111", "change-id: 20261117-ring-buffer-fix-abc123", "-- ", "2.43.0"},
+			expected: false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -379,5 +389,58 @@ diff --git a/net/core/filter.c b/net/core/filter.c
 	}
 	if parsedBare.BodyContinuesAfter {
 		t.Fatalf("expected BodyContinuesAfter=false with bare git version below patch")
+	}
+}
+
+func TestParsePatch_BaseCommitBeforeFooter(t *testing.T) {
+	patchWithBaseCommit := `tracing_buffers_ioctl() calls ring_buffer_map_get_reader() without
+trace_access_lock, breaking concurrent readers.
+
+Signed-off-by: Kernel Developer <dev@example.com>
+---
+ kernel/trace/trace.c | 8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/kernel/trace/trace.c b/kernel/trace/trace.c
+index e8c4efa8107b..456fc388a31f 100644
+--- a/kernel/trace/trace.c
++++ b/kernel/trace/trace.c
+@@ -7404,8 +7404,12 @@ static long tracing_buffers_ioctl(struct file *file, unsigned int cmd, unsigned
+ 				return err;
+ 		}
+ 
+-		return ring_buffer_map_get_reader(iter->array_buffer->buffer,
+-						  iter->cpu_file);
++		trace_access_lock(iter->cpu_file);
++		err = ring_buffer_map_get_reader(iter->array_buffer->buffer,
++						 iter->cpu_file);
++		trace_access_unlock(iter->cpu_file);
++
++		return err;
+ 	} else if (cmd) {
+ 		return -ENOTTY;
+ 	}
+
+base-commit: 6628e7d4c6b25c8d18f1345e3a20d21829aae7e4
+-- 
+2.56.1.703.gf848ed807c-goog
+`
+
+	parsed := ParsePatch(patchWithBaseCommit)
+	if !parsed.IsPatch {
+		t.Fatalf("parsed.IsPatch = false, want true when base-commit precedes footer signature")
+	}
+	if parsed.BodyContinuesAfter {
+		t.Fatalf("parsed.BodyContinuesAfter = true, want false")
+	}
+	wantBase := "6628e7d4c6b25c8d18f1345e3a20d21829aae7e4"
+	if parsed.BaseCommit != wantBase {
+		t.Errorf("parsed.BaseCommit = %q, want %q", parsed.BaseCommit, wantBase)
+	}
+	if got := ExtractBaseCommit(patchWithBaseCommit); got != wantBase {
+		t.Errorf("ExtractBaseCommit() = %q, want %q", got, wantBase)
+	}
+	if gotNeg := ExtractBaseCommit("base-commit: -malicious-flag"); gotNeg != "" {
+		t.Errorf("ExtractBaseCommit(-malicious-flag) = %q, want empty string", gotNeg)
 	}
 }
