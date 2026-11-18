@@ -75,6 +75,79 @@ export async function getTags() {
 }
 
 /**
+ * Returns numeric priority rank for a tag key:
+ * $cl_1..$cl_99 -> 1..99, $label1..$label99 -> 11..109, other custom tags -> 50, untagged -> 9999.
+ */
+export function getTagPriorityRank(key) {
+  if (!key) return 9999;
+  const lower = String(key).trim().toLowerCase();
+  if (!lower) return 9999;
+  if (lower.startsWith("$cl_")) {
+    const n = parseInt(lower.slice(4), 10);
+    if (!isNaN(n) && n >= 1 && n <= 99) return n;
+  }
+  if (lower.startsWith("$label")) {
+    const n = parseInt(lower.slice(6), 10);
+    if (!isNaN(n) && n >= 1 && n <= 99) return 10 + n;
+  }
+  return 50;
+}
+
+/**
+ * Returns all resolved tags attached to a message object, ordered by priority rank.
+ */
+export function getMessageTags(msg) {
+  if (!msg) return [];
+  if (Array.isArray(msg.tags) && msg.tags.length > 0) {
+    return [...msg.tags].sort((a, b) => {
+      const ra = getTagPriorityRank(a?.key);
+      const rb = getTagPriorityRank(b?.key);
+      if (ra !== rb) return ra - rb;
+      return String(a?.key || "").localeCompare(String(b?.key || ""));
+    });
+  }
+  if (msg.tag_key || msg.tag_name) {
+    return [
+      {
+        key: msg.tag_key || "",
+        tag: msg.tag_name || msg.tag_key || "",
+        color: msg.tag_color || "",
+      },
+    ];
+  }
+  if (msg.flags && typeof msg.flags === "string") {
+    const available = getCachedTags();
+    const lowerMap = new Map();
+    for (const [k, v] of Object.entries(available)) {
+      lowerMap.set(k.toLowerCase(), { key: k, tag: v.tag || k, color: v.color || "" });
+    }
+    const found = [];
+    const seen = new Set();
+    for (const tok of msg.flags.replace(/,/g, " ").split(/\s+/)) {
+      const entry = lowerMap.get(tok.toLowerCase());
+      if (entry && !seen.has(entry.key.toLowerCase())) {
+        seen.add(entry.key.toLowerCase());
+        found.push(entry);
+      }
+    }
+    if (found.length > 0) {
+      return found.sort((a, b) => getTagPriorityRank(a.key) - getTagPriorityRank(b.key));
+    }
+  }
+  return [];
+}
+
+/**
+ * Checks whether a message currently has a given tag key attached (case-insensitive).
+ */
+export function hasMessageTag(msg, tagKey) {
+  if (!msg || !tagKey) return false;
+  const target = String(tagKey).trim().toLowerCase();
+  if (!target) return false;
+  return getMessageTags(msg).some((t) => String(t?.key || "").trim().toLowerCase() === target);
+}
+
+/**
  * Helper to test whether a tag key or definition matches any target in a list of query tags.
  */
 export function isTagMatch(key, tagDef, targetList) {

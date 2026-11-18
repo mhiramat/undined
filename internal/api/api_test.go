@@ -2099,3 +2099,150 @@ func TestSMTPSendMarksAllFolderCopiesReplied(t *testing.T) {
 		t.Errorf("b4Msg.FilePath = %q, want suffix :2,RS", b4Msg.FilePath)
 	}
 }
+
+func TestMultiTagToggleCrossFolderSyncAndPrioritySort(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+
+	inboxFolder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(INBOX) failed: %v", err)
+	}
+	todoFolder, err := db.GetOrCreateFolder(constants.FolderTODO, false)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder(TODO) failed: %v", err)
+	}
+
+	rawP1 := "Subject: [PATCH 1/3] trace: urgent fix\r\nMessage-ID: <todo-prio-1@kernel.org>\r\nFrom: Kernel Developer <dev@example.com>\r\nDate: Mon, 16 Nov 2026 10:00:00 +0000\r\n\r\n--- a/a.c\n+++ b/a.c\n@@ -1 +1 @@\n-a\n+b\n"
+	rawP2 := "Subject: [PATCH 2/3] trace: medium fix\r\nMessage-ID: <todo-prio-2@kernel.org>\r\nFrom: Kernel Developer <dev@example.com>\r\nDate: Mon, 16 Nov 2026 11:00:00 +0000\r\n\r\n--- a/b.c\n+++ b/b.c\n@@ -1 +1 @@\n-a\n+b\n"
+	rawUntagged := "Subject: [PATCH 3/3] trace: cleanup\r\nMessage-ID: <todo-untagged@kernel.org>\r\nFrom: Kernel Developer <dev@example.com>\r\nDate: Mon, 16 Nov 2026 12:00:00 +0000\r\n\r\n--- a/c.c\n+++ b/c.c\n@@ -1 +1 @@\n-a\n+b\n"
+
+	inboxFile1, err := server.Maildir.AddMessage("INBOX", []byte(rawP1), constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("AddMessage(INBOX) failed: %v", err)
+	}
+	inboxID1, err := db.IndexEmailFile(inboxFolder.ID, inboxFile1)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(INBOX) failed: %v", err)
+	}
+
+	todoFile1, err := server.Maildir.AddMessage(constants.FolderTODO, []byte(rawP1), constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("AddMessage(TODO 1) failed: %v", err)
+	}
+	todoID1, err := db.IndexEmailFile(todoFolder.ID, todoFile1)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(TODO 1) failed: %v", err)
+	}
+
+	todoFile2, err := server.Maildir.AddMessage(constants.FolderTODO, []byte(rawP2), constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("AddMessage(TODO 2) failed: %v", err)
+	}
+	todoID2, err := db.IndexEmailFile(todoFolder.ID, todoFile2)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(TODO 2) failed: %v", err)
+	}
+
+	todoFile3, err := server.Maildir.AddMessage(constants.FolderTODO, []byte(rawUntagged), constants.FlagSeen)
+	if err != nil {
+		t.Fatalf("AddMessage(TODO 3) failed: %v", err)
+	}
+	todoID3, err := db.IndexEmailFile(todoFolder.ID, todoFile3)
+	if err != nil {
+		t.Fatalf("IndexEmailFile(TODO 3) failed: %v", err)
+	}
+
+	client := &http.Client{}
+	postTag := func(id int64, payload string) map[string]any {
+		t.Helper()
+		req, err := http.NewRequest("POST", fmt.Sprintf("%s/api/messages/%d/tag", ts.URL, id), strings.NewReader(payload))
+		if err != nil {
+			t.Fatalf("http.NewRequest failed: %v", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("POST /tag failed: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("resp.StatusCode = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		var out map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			t.Fatalf("Decode /tag response failed: %v", err)
+		}
+		return out
+	}
+
+	// 1. Tag INBOX copy with $cl_3 (Green) and then $cl_1 (Red); both must remain attached with $cl_1 as primary
+	res1 := postTag(inboxID1, `{"tag": "$cl_3"}`)
+	if res1["tag_key"] != "$cl_3" {
+		t.Errorf("res1[tag_key] = %v, want $cl_3", res1["tag_key"])
+	}
+
+	res2 := postTag(inboxID1, `{"tag": "$cl_1"}`)
+	if res2["tag_key"] != "$cl_1" {
+		t.Errorf("res2[tag_key] = %v, want $cl_1 (highest priority)", res2["tag_key"])
+	}
+	tagsSlice, ok := res2["tags"].([]any)
+	if !ok || len(tagsSlice) != 2 {
+		t.Fatalf("res2[tags] = %#v, want 2 attached tags", res2["tags"])
+	}
+
+	// 2. Verify cross-folder sync updated the TODO copy of <todo-prio-1@kernel.org>
+	todoMsg1, err := db.GetMessageByID(todoID1)
+	if err != nil {
+		t.Fatalf("GetMessageByID(todoID1) failed: %v", err)
+	}
+	if !strings.Contains(todoMsg1.Flags, "$cl_1") || !strings.Contains(todoMsg1.Flags, "$cl_3") {
+		t.Errorf("todoMsg1.Flags = %q, want both $cl_1 and $cl_3 synced from INBOX copy", todoMsg1.Flags)
+	}
+
+	// 3. Tag TODO patch 2 with $cl_2 (Blue) and verify GET /api/messages?sort_by=tag&sort_order=asc orders $cl_1, $cl_2, untagged
+	postTag(todoID2, `{"tag": "$cl_2"}`)
+
+	listReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/messages?folder_id=%d&sort_by=tag&sort_order=asc&threaded=false", ts.URL, todoFolder.ID), nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	listReq.Header.Set("Authorization", "Bearer "+token)
+	listResp, err := client.Do(listReq)
+	if err != nil {
+		t.Fatalf("GET /api/messages failed: %v", err)
+	}
+	defer listResp.Body.Close()
+	var listed []database.Message
+	if err := json.NewDecoder(listResp.Body).Decode(&listed); err != nil {
+		t.Fatalf("Decode listed messages failed: %v", err)
+	}
+	if len(listed) != 3 {
+		t.Fatalf("len(listed) = %d, want 3", len(listed))
+	}
+	if listed[0].ID != todoID1 || listed[1].ID != todoID2 || listed[2].ID != todoID3 {
+		t.Errorf("sorted IDs = [%d, %d, %d], want [%d ($cl_1), %d ($cl_2), %d (untagged)]",
+			listed[0].ID, listed[1].ID, listed[2].ID, todoID1, todoID2, todoID3)
+	}
+	if len(listed[0].Tags) != 2 {
+		t.Errorf("len(listed[0].Tags) = %d, want 2", len(listed[0].Tags))
+	}
+
+	// 4. Toggle $cl_1 off on TODO copy and verify $cl_3 remains on both TODO and INBOX copies
+	resToggleOff := postTag(todoID1, `{"tag": "$cl_1"}`)
+	if resToggleOff["tag_key"] != "$cl_3" {
+		t.Errorf("resToggleOff[tag_key] = %v, want $cl_3 remaining after toggling $cl_1 off", resToggleOff["tag_key"])
+	}
+	inboxAfterToggle, err := db.GetMessageByID(inboxID1)
+	if err != nil {
+		t.Fatalf("GetMessageByID(inboxID1) failed: %v", err)
+	}
+	if strings.Contains(inboxAfterToggle.Flags, "$cl_1") || !strings.Contains(inboxAfterToggle.Flags, "$cl_3") {
+		t.Errorf("inboxAfterToggle.Flags = %q, want $cl_3 only", inboxAfterToggle.Flags)
+	}
+}

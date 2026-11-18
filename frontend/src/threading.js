@@ -11,6 +11,10 @@
  * 5. Generates visual thread branch guides (├─, └─, │  ).
  */
 
+import { getTagPriorityRank, getMessageTags } from "./tags.js";
+
+const UNTAGGED_PRIORITY_RANK = 9999;
+
 export function cleanMsgId(msgid) {
   if (!msgid) return "";
   return String(msgid).trim().replace(/^<+|>+$/g, "").trim();
@@ -120,10 +124,61 @@ function getThreadLatestTimestamp(node) {
   return latest;
 }
 
+function getMessageBestTagRank(msg) {
+  if (!msg) return UNTAGGED_PRIORITY_RANK;
+  const tags = getMessageTags(msg);
+  let best = UNTAGGED_PRIORITY_RANK;
+  for (const t of tags) {
+    const r = getTagPriorityRank(t.key || t.tag);
+    if (r < best) best = r;
+  }
+  if (best === UNTAGGED_PRIORITY_RANK && (msg.tag_key || msg.tag_name)) {
+    best = getTagPriorityRank(msg.tag_key || msg.tag_name);
+  }
+  return best;
+}
+
+function getThreadBestTagRank(node) {
+  let best = getMessageBestTagRank(node.message);
+  if (node.children && node.children.length > 0) {
+    for (const child of node.children) {
+      const childBest = getThreadBestTagRank(child);
+      if (childBest < best) {
+        best = childBest;
+      }
+    }
+  }
+  return best;
+}
+
+function compareByTagPriority(rankA, rankB, tsA, tsB, isDesc) {
+  const aTagged = rankA < UNTAGGED_PRIORITY_RANK;
+  const bTagged = rankB < UNTAGGED_PRIORITY_RANK;
+  if (aTagged !== bTagged) {
+    // Tagged messages always sort ahead of untagged messages
+    return aTagged ? -1 : 1;
+  }
+  if (!aTagged && !bTagged) {
+    return tsB - tsA;
+  }
+  if (rankA !== rankB) {
+    return isDesc ? rankB - rankA : rankA - rankB;
+  }
+  return tsB - tsA;
+}
+
 function createNodeComparator(sortKey, sortOrder, isRoot = false) {
   const isDesc = String(sortOrder).toLowerCase() === "desc";
 
   return function compareNodes(a, b) {
+    if (sortKey === "tag") {
+      const rankA = isRoot ? getThreadBestTagRank(a) : getMessageBestTagRank(a.message);
+      const rankB = isRoot ? getThreadBestTagRank(b) : getMessageBestTagRank(b.message);
+      const tsA = isRoot ? getThreadLatestTimestamp(a) : getSortValue(a.message, "date");
+      const tsB = isRoot ? getThreadLatestTimestamp(b) : getSortValue(b.message, "date");
+      return compareByTagPriority(rankA, rankB, tsA, tsB, isDesc);
+    }
+
     const valA = isRoot && sortKey === "date" ? getThreadLatestTimestamp(a) : getSortValue(a.message, sortKey);
     const valB = isRoot && sortKey === "date" ? getThreadLatestTimestamp(b) : getSortValue(b.message, sortKey);
 
@@ -290,6 +345,14 @@ export function flatSortMessages(messages, sortKey = "date", sortOrder = "desc")
   const isDesc = String(sortOrder).toLowerCase() === "desc";
 
   return [...messages].sort((a, b) => {
+    if (sortKey === "tag") {
+      const rankA = getMessageBestTagRank(a);
+      const rankB = getMessageBestTagRank(b);
+      const tsA = getSortValue(a, "date");
+      const tsB = getSortValue(b, "date");
+      return compareByTagPriority(rankA, rankB, tsA, tsB, isDesc);
+    }
+
     const valA = getSortValue(a, sortKey);
     const valB = getSortValue(b, sortKey);
 

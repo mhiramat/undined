@@ -5,7 +5,7 @@
 
 import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment, translateMessage, getCachedTranslation, getInFlightTranslation } from "../api.js";
 import { store } from "../store.js";
-import { getTags } from "../tags.js";
+import { getTags, getMessageTags, hasMessageTag } from "../tags.js";
 import { renderSideDiff, renderSavedNoteRowHtml } from "./SideDiff.js";
 import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNewMessage } from "./InternalEditor.js";
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
@@ -237,8 +237,14 @@ export function renderViewerPane(container) {
           </div>
           <div class="header-actions">
             <div class="header-tag-menu-wrapper" style="position: relative; display: inline-block;">
-              <button type="button" class="header-action-btn" id="btn-change-tag" title="Set or change color tag (Keys 1-9 to set, 0 to clear)">
-                🏷️ Tag${m.tag_name ? `: ${escapeHtml(m.tag_name)}` : ""} ▾
+              <button type="button" class="header-action-btn" id="btn-change-tag" title="Toggle or clear color tags (Keys 1-9 to toggle, 0 to clear all)">
+                🏷️ Tag${(() => {
+                  const attached = getMessageTags(m);
+                  if (attached.length > 0) {
+                    return `: ${attached.map((t) => escapeHtml(t.tag || t.key)).join(", ")}`;
+                  }
+                  return m.tag_name ? `: ${escapeHtml(m.tag_name)}` : "";
+                })()} ▾
               </button>
               <div class="header-tag-dropdown" id="header-tag-dropdown" style="display: none;"></div>
             </div>
@@ -1211,7 +1217,7 @@ export function renderViewerPane(container) {
             const isCl = key.startsWith("$cl_");
             const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
             const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";
-            const isSelected = m.tag_key?.toLowerCase() === key.toLowerCase() ? "✓" : "";
+            const isSelected = hasMessageTag(m, key) ? "✓" : "";
             itemsHtml += `
               <button type="button" class="header-tag-item" data-tag-key="${escapeHtml(key)}">
                 <span class="tag-color-dot" style="background-color: ${escapeAttr(val.color)};"></span>
@@ -1229,10 +1235,11 @@ export function renderViewerPane(container) {
               const selectedKey = btn.getAttribute("data-tag-key") || null;
               try {
                 const res = await setMessageTag(m.id, selectedKey);
-                store.updateMessageTag(m.id, res.tag_key, res.tag_name, res.tag_color);
+                store.updateMessageTag(m.id, res.tag_key, res.tag_name, res.tag_color, res.tags);
                 m.tag_key = res.tag_key;
                 m.tag_name = res.tag_name;
                 m.tag_color = res.tag_color;
+                m.tags = Array.isArray(res.tags) ? res.tags : [];
                 render(detail);
               } catch (err) {
                 showToast(`Failed to update tag: ${err.message}`, "error");
@@ -1744,10 +1751,20 @@ export function renderViewerPane(container) {
         render(currentDetail);
       }
     } else if (event === EVENT_MESSAGE_TAG_UPDATED) {
-      if (currentDetail && currentDetail.message && currentDetail.message.id === payload.messageId) {
+      if (
+        currentDetail &&
+        currentDetail.message &&
+        (currentDetail.message.id === payload.messageId ||
+          (payload.message_id &&
+            currentDetail.message.message_id &&
+            currentDetail.message.message_id.replace(/^<+|>+$/g, "") === String(payload.message_id).replace(/^<+|>+$/g, "")))
+      ) {
         currentDetail.message.tag_key = payload.tagKey;
         currentDetail.message.tag_name = payload.tagName;
         currentDetail.message.tag_color = payload.tagColor;
+        if (Array.isArray(payload.tags)) {
+          currentDetail.message.tags = payload.tags;
+        }
         render(currentDetail);
       }
     } else if (event === EVENT_MESSAGE_REPLIED_UPDATED) {

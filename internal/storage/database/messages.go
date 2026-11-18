@@ -12,6 +12,13 @@ import (
 	"undined-go/internal/storage/parser"
 )
 
+// MessageTag represents a resolved custom color tag attached to an email.
+type MessageTag struct {
+	Key   string `json:"key"`
+	Tag   string `json:"tag"`
+	Color string `json:"color"`
+}
+
 // Message represents an indexed email row from the SQLite messages table.
 type Message struct {
 	ID                   int64   `json:"id"`
@@ -39,9 +46,10 @@ type Message struct {
 	ReviewCommitIDHyphen string  `json:"review-commit-id,omitempty"`
 	CreatedAt            string  `json:"created_at"`
 
-	TagKey   *string `json:"tag_key"`
-	TagName  *string `json:"tag_name"`
-	TagColor *string `json:"tag_color"`
+	TagKey   *string      `json:"tag_key"`
+	TagName  *string      `json:"tag_name"`
+	TagColor *string      `json:"tag_color"`
+	Tags     []MessageTag `json:"tags"`
 
 	ThreadDepth     int                  `json:"thread_depth"`
 	ThreadPrefix    string               `json:"thread_prefix,omitempty"`
@@ -55,22 +63,66 @@ type Message struct {
 
 // SearchResult represents full-text search match from FTS5.
 type SearchResult struct {
-	ID               int64   `json:"id"`
-	MessageID        string  `json:"message_id"`
-	Subject          string  `json:"subject"`
-	FromName         string  `json:"from_name"`
-	FromAddr         string  `json:"from_addr"`
-	Date             string  `json:"date"`
-	IsPatch          bool    `json:"is_patch"`
-	IsRead           bool    `json:"is_read"`
-	IsReplied        bool    `json:"is_replied"`
-	Flags            string  `json:"flags"`
-	InReplyTo        string  `json:"in_reply_to"`
-	ReferencesHeader string  `json:"references_header"`
-	TagKey           *string `json:"tag_key"`
-	TagName          *string `json:"tag_name"`
-	TagColor         *string `json:"tag_color"`
-	Snippet          string  `json:"snippet"`
+	ID               int64        `json:"id"`
+	MessageID        string       `json:"message_id"`
+	Subject          string       `json:"subject"`
+	FromName         string       `json:"from_name"`
+	FromAddr         string       `json:"from_addr"`
+	Date             string       `json:"date"`
+	IsPatch          bool         `json:"is_patch"`
+	IsRead           bool         `json:"is_read"`
+	IsReplied        bool         `json:"is_replied"`
+	Flags            string       `json:"flags"`
+	InReplyTo        string       `json:"in_reply_to"`
+	ReferencesHeader string       `json:"references_header"`
+	TagKey           *string      `json:"tag_key"`
+	TagName          *string      `json:"tag_name"`
+	TagColor         *string      `json:"tag_color"`
+	Tags             []MessageTag `json:"tags"`
+	Snippet          string       `json:"snippet"`
+}
+
+func (d *Database) inheritCustomTags(msgID, currentFlags string) string {
+	cleanID := parser.CleanMsgID(msgID)
+	if cleanID == "" {
+		return currentFlags
+	}
+	rows, err := d.DB.Query(`
+		SELECT m.flags
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE (m.message_id = ? OR m.message_id = ?)
+		  AND m.flags IS NOT NULL
+		  AND m.flags != ''
+		  AND f.name NOT IN (?, ?);
+	`, cleanID, "<"+cleanID+">", constants.FolderDrafts, constants.FolderAIReviews)
+	if err != nil {
+		return currentFlags
+	}
+	defer rows.Close()
+
+	tokens := strings.Fields(currentFlags)
+	seenLower := make(map[string]bool, len(tokens))
+	for _, t := range tokens {
+		seenLower[strings.ToLower(t)] = true
+	}
+
+	for rows.Next() {
+		var existingFlags string
+		if err := rows.Scan(&existingFlags); err != nil {
+			continue
+		}
+		for _, tok := range strings.Fields(existingFlags) {
+			if !isStandardSystemFlagToken(tok) {
+				lower := strings.ToLower(tok)
+				if !seenLower[lower] {
+					seenLower[lower] = true
+					tokens = append(tokens, tok)
+				}
+			}
+		}
+	}
+	return strings.Join(tokens, " ")
 }
 
 // IndexEmailFile reads a raw .eml file from disk, parses it, and indexes it into the messages table.
@@ -109,6 +161,7 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 			}
 		}
 	}
+	flags = d.inheritCustomTags(msgID, flags)
 
 	query := `
 	INSERT INTO messages (
@@ -224,6 +277,7 @@ func scanMessage(row interface {
 	m.IsRead = toBool(isRead)
 	m.IsReplied = toBool(isReplied)
 	m.HasNotes = toBool(hasNotes)
+	m.Tags = []MessageTag{}
 
 	if m.FolderName == "AI-reviews" || m.FromName == "AI review" {
 		m.IsAIReview = true
@@ -397,6 +451,10 @@ func (d *Database) ListMessagesWithOptions(folderID *int64, limit, offset int, s
 
 	if threaded {
 		return ThreadMessages(messages, sortBy, sortOrder), nil
+	}
+	if strings.EqualFold(sortBy, "tag") {
+		isDesc := strings.ToLower(sortOrder) != "asc"
+		sortMessagesByTagPriority(messages, isDesc)
 	}
 	return messages, nil
 }
@@ -591,6 +649,7 @@ func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
 		r.IsPatch = toBool(isPatch)
 		r.IsRead = toBool(isRead)
 		r.IsReplied = toBool(isReplied)
+		r.Tags = []MessageTag{}
 		results = append(results, &r)
 	}
 	if err := rows.Err(); err != nil {
@@ -622,6 +681,7 @@ func (d *Database) InsertHeaderSummary(
 		isReplied = true
 		flags = ensureRepliedFlagToken(flags, imapUID > 0)
 	}
+	flags = d.inheritCustomTags(msgID, flags)
 
 	// Check Review-Commit-ID
 	revCommit, _ := d.GetReviewCommit(msgID)

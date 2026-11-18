@@ -843,43 +843,74 @@ class UndineDStore {
     }
   }
 
-  updateMessageTag(messageId, tagKey, tagName, tagColor) {
-    const rawMsg = this.state.rawMessages.find((m) => m.id === messageId);
-    if (rawMsg) {
-      rawMsg.tag_key = tagKey;
-      rawMsg.tag_name = tagName;
-      rawMsg.tag_color = tagColor;
+  updateMessageTag(messageId, tagKey, tagName, tagColor, tags = undefined) {
+    const resolvedTags = Array.isArray(tags)
+      ? tags
+      : (tagKey ? [{ key: tagKey, tag: tagName || tagKey, color: tagColor || "" }] : []);
+
+    const targetRaw = this.state.rawMessages.find((m) => m.id === messageId);
+    const cleanTargetMid = cleanMsgId(targetRaw?.message_id || (typeof messageId === "string" ? messageId : ""));
+
+    const matchesTarget = (m) => {
+      if (!m) return false;
+      if (m.id === messageId || String(m.id) === String(messageId)) return true;
+      if (cleanTargetMid && m.message_id && cleanMsgId(m.message_id) === cleanTargetMid) return true;
+      return false;
+    };
+
+    for (const rawMsg of this.state.rawMessages) {
+      if (matchesTarget(rawMsg)) {
+        rawMsg.tag_key = tagKey;
+        rawMsg.tag_name = tagName;
+        rawMsg.tag_color = tagColor;
+        rawMsg.tags = resolvedTags;
+      }
     }
-    const computedMsg = this.state.messages.find((m) => m.id === messageId);
-    if (computedMsg) {
-      computedMsg.tag_key = tagKey;
-      computedMsg.tag_name = tagName;
-      computedMsg.tag_color = tagColor;
+    for (const computedMsg of this.state.messages) {
+      if (matchesTarget(computedMsg)) {
+        computedMsg.tag_key = tagKey;
+        computedMsg.tag_name = tagName;
+        computedMsg.tag_color = tagColor;
+        computedMsg.tags = resolvedTags;
+      }
     }
     if (
       this.state.activeMessageDetail &&
       this.state.activeMessageDetail.message &&
-      this.state.activeMessageDetail.message.id === messageId
+      matchesTarget(this.state.activeMessageDetail.message)
     ) {
       this.state.activeMessageDetail.message.tag_key = tagKey;
       this.state.activeMessageDetail.message.tag_name = tagName;
       this.state.activeMessageDetail.message.tag_color = tagColor;
+      this.state.activeMessageDetail.message.tags = resolvedTags;
     }
-    if (this.state.parsedFilter) {
+    if (this.state.parsedFilter || this.state.sortKey === "tag") {
       this.recomputeMessages();
     }
-    this.notify(EVENT_MESSAGE_TAG_UPDATED, { messageId, tagKey, tagName, tagColor });
+    this.notify(EVENT_MESSAGE_TAG_UPDATED, {
+      messageId,
+      message_id: cleanTargetMid || null,
+      tagKey,
+      tagName,
+      tagColor,
+      tags: resolvedTags,
+    });
     this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
   }
 
-  updateMessagesTag(messageIds, tagKey, tagName, tagColor) {
+  updateMessagesTag(messageIds, tagKey, tagName, tagColor, tags = undefined) {
     const idSet = new Set(Array.from(messageIds || []).map((id) => Number(id)));
     if (idSet.size === 0) return;
+    const resolvedTags = Array.isArray(tags)
+      ? tags
+      : (tagKey ? [{ key: tagKey, tag: tagName || tagKey, color: tagColor || "" }] : []);
+
     for (const rawMsg of this.state.rawMessages) {
       if (idSet.has(Number(rawMsg.id))) {
         rawMsg.tag_key = tagKey;
         rawMsg.tag_name = tagName;
         rawMsg.tag_color = tagColor;
+        rawMsg.tags = resolvedTags;
       }
     }
     for (const computedMsg of this.state.messages) {
@@ -887,6 +918,7 @@ class UndineDStore {
         computedMsg.tag_key = tagKey;
         computedMsg.tag_name = tagName;
         computedMsg.tag_color = tagColor;
+        computedMsg.tags = resolvedTags;
       }
     }
     if (
@@ -897,12 +929,19 @@ class UndineDStore {
       this.state.activeMessageDetail.message.tag_key = tagKey;
       this.state.activeMessageDetail.message.tag_name = tagName;
       this.state.activeMessageDetail.message.tag_color = tagColor;
+      this.state.activeMessageDetail.message.tags = resolvedTags;
     }
-    if (this.state.parsedFilter) {
+    if (this.state.parsedFilter || this.state.sortKey === "tag") {
       this.recomputeMessages();
     }
     for (const id of idSet) {
-      this.notify(EVENT_MESSAGE_TAG_UPDATED, { messageId: id, tagKey, tagName, tagColor });
+      this.notify(EVENT_MESSAGE_TAG_UPDATED, {
+        messageId: id,
+        tagKey,
+        tagName,
+        tagColor,
+        tags: resolvedTags,
+      });
     }
     this.notify(EVENT_MESSAGES_UPDATED, this.state.messages);
   }

@@ -210,21 +210,29 @@ export function matchMessageFilter(msg, filter) {
   }
 
   if (filter.tags && filter.tags.length > 0) {
-    const msgKey = (msg.tag_key || "").toLowerCase();
-    const msgName = (msg.tag_name || "").toLowerCase();
-    const msgColor = (msg.tag_color || "").toLowerCase();
+    const attachedTags = Array.isArray(msg.tags) && msg.tags.length > 0
+      ? msg.tags
+      : ((msg.tag_key || msg.tag_name || msg.tag_color)
+          ? [{ key: msg.tag_key || "", tag: msg.tag_name || "", color: msg.tag_color || "" }]
+          : []);
 
     const hasTagMatch = filter.tags.some((t) => {
       const target = (t || "").trim().toLowerCase();
       if (!target) return false;
       if (target === "none" || target === "untagged") {
-        return !msgKey && !msgName;
+        return attachedTags.length === 0;
       }
-      return (
-        (msgKey && (msgKey === target || msgKey.replace(/^\$/, "") === target.replace(/^\$/, ""))) ||
-        (msgName && msgName === target) ||
-        (msgColor && msgColor === target)
-      );
+      const targetBare = target.replace(/^\$/, "");
+      return attachedTags.some((at) => {
+        const k = String(at.key || "").toLowerCase();
+        const n = String(at.tag || "").toLowerCase();
+        const c = String(at.color || "").toLowerCase();
+        return (
+          (k && (k === target || k.replace(/^\$/, "") === targetBare)) ||
+          (n && n === target) ||
+          (c && c === target)
+        );
+      });
     });
 
     if (!hasTagMatch) {

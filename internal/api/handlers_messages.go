@@ -73,12 +73,25 @@ func (s *Server) attachTagInfo(m *database.Message) {
 	if m == nil {
 		return
 	}
+	m.Tags = make([]database.MessageTag, 0)
 	if s.Config != nil {
-		tagInfo := s.Config.ResolveTag(m.Flags)
-		if tagInfo != nil {
-			m.TagKey = &tagInfo.Key
-			m.TagName = &tagInfo.Tag
-			m.TagColor = &tagInfo.Color
+		resolved := s.Config.ResolveTags(m.Flags)
+		for _, rt := range resolved {
+			m.Tags = append(m.Tags, database.MessageTag{
+				Key:   rt.Key,
+				Tag:   rt.Tag,
+				Color: rt.Color,
+			})
+		}
+		if len(m.Tags) > 0 {
+			primary := m.Tags[0]
+			m.TagKey = &primary.Key
+			m.TagName = &primary.Tag
+			m.TagColor = &primary.Color
+		} else {
+			m.TagKey = nil
+			m.TagName = nil
+			m.TagColor = nil
 		}
 	}
 	if m.ReviewCommitID != "" {
@@ -697,138 +710,188 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentTokens := strings.Fields(msg.Flags)
-	existingTagKeys := make(map[string]bool)
+	isRecognizedTagToken := func(tok string) (string, bool) {
+		if _, ok := allTags[tok]; ok {
+			return tok, true
+		}
+		if k, ok := lowerTagMap[strings.ToLower(tok)]; ok {
+			return k, true
+		}
+		return "", false
+	}
+
+	var currentCustomTags []string
+	seenCustomLower := make(map[string]bool)
 	for _, t := range currentTokens {
-		if _, ok := allTags[t]; ok {
-			existingTagKeys[t] = true
-		} else if _, ok := lowerTagMap[strings.ToLower(t)]; ok {
-			existingTagKeys[t] = true
+		if canonKey, ok := isRecognizedTagToken(t); ok {
+			lower := strings.ToLower(canonKey)
+			if !seenCustomLower[lower] {
+				seenCustomLower[lower] = true
+				currentCustomTags = append(currentCustomTags, canonKey)
+			}
 		}
 	}
 
-	var newFlags string
-	if body.Action != "" && body.Tag != nil {
-		// Legacy action support ("set", "toggle", "clear") using exact token matching
-		tagVal := strings.TrimSpace(*body.Tag)
-		hasToken := false
-		for _, tok := range currentTokens {
-			if tok == tagVal {
-				hasToken = true
-				break
-			}
-		}
-		switch body.Action {
-		case "set":
-			if !hasToken && tagVal != "" {
-				newFlags = strings.Join(append(currentTokens, tagVal), " ")
-			} else {
-				newFlags = strings.Join(currentTokens, " ")
-			}
-		case "toggle":
-			if hasToken {
-				var filtered []string
-				for _, tok := range currentTokens {
-					if tok != tagVal {
-						filtered = append(filtered, tok)
-					}
-				}
-				newFlags = strings.Join(filtered, " ")
-			} else if tagVal != "" {
-				newFlags = strings.Join(append(currentTokens, tagVal), " ")
-			} else {
-				newFlags = strings.Join(currentTokens, " ")
-			}
-		case "clear":
-			var filtered []string
-			for _, tok := range currentTokens {
-				if tok != tagVal {
-					filtered = append(filtered, tok)
-				}
-			}
-			newFlags = strings.Join(filtered, " ")
+	var newCustomTags []string
+	if body.Tag == nil || strings.TrimSpace(*body.Tag) == "" {
+		if strings.EqualFold(body.Action, "set") || strings.EqualFold(body.Action, "toggle") {
+			// Legacy action with empty tag is a no-op
+			newCustomTags = currentCustomTags
+		} else {
+			// Clear all custom tags
+			newCustomTags = nil
 		}
 	} else {
-		// Standard UndineD set tag logic: replace existing recognized tag with new tag
-		var newTagKey string
-		if body.Tag != nil && strings.TrimSpace(*body.Tag) != "" {
-			reqClean := strings.TrimSpace(*body.Tag)
-			if matchedKey, ok := lowerTagMap[strings.ToLower(reqClean)]; ok {
-				newTagKey = matchedKey
-			} else {
-				newTagKey = reqClean
-			}
+		reqClean := strings.TrimSpace(*body.Tag)
+		targetKey := reqClean
+		if matchedKey, ok := lowerTagMap[strings.ToLower(reqClean)]; ok {
+			targetKey = matchedKey
 		}
-
-		var remainingTokens []string
-		for _, t := range currentTokens {
-			if !existingTagKeys[t] {
-				remainingTokens = append(remainingTokens, t)
-			}
-		}
-		if newTagKey != "" {
-			remainingTokens = append(remainingTokens, newTagKey)
-		}
-		newFlags = strings.Join(remainingTokens, " ")
-	}
-
-	_ = s.DB.SetMessageFlags(msg.ID, newFlags)
-
-	if s.IMAP != nil && msg.IMAPUID != nil && *msg.IMAPUID > 0 && msg.FolderName != "" {
-		oldTokens := strings.Fields(msg.Flags)
-		newTokens := strings.Fields(newFlags)
-
-		oldMap := make(map[string]bool)
-		for _, t := range oldTokens {
-			oldMap[t] = true
-		}
-		newMap := make(map[string]bool)
-		for _, t := range newTokens {
-			newMap[t] = true
-		}
-
-		var addFlags, removeFlags []string
-		for _, t := range newTokens {
-			if !oldMap[t] {
-				addFlags = append(addFlags, t)
-			}
-		}
-		for _, t := range oldTokens {
-			if !newMap[t] {
-				removeFlags = append(removeFlags, t)
-			}
-		}
-
-		if len(addFlags) > 0 || len(removeFlags) > 0 {
-			folderName := msg.FolderName
-			uid := *msg.IMAPUID
-			go func() {
-				if err := s.IMAP.UpdateIMAPMessageCustomTags(folderName, uid, addFlags, removeFlags); err != nil {
-					log.Printf("Warning: failed to update IMAP custom tags for message %d (UID %d in %s): %v", msg.ID, uid, folderName, err)
+		targetLower := strings.ToLower(targetKey)
+		hasTarget := seenCustomLower[targetLower]
+		if !hasTarget {
+			for _, tok := range currentTokens {
+				if strings.EqualFold(tok, targetKey) {
+					hasTarget = true
+					break
 				}
-			}()
+			}
+		}
+
+		switch strings.ToLower(strings.TrimSpace(body.Action)) {
+		case "replace":
+			newCustomTags = []string{targetKey}
+		case "set", "add":
+			newCustomTags = append(newCustomTags, currentCustomTags...)
+			if !hasTarget {
+				newCustomTags = append(newCustomTags, targetKey)
+			}
+		case "clear", "remove":
+			for _, ct := range currentCustomTags {
+				if !strings.EqualFold(ct, targetKey) {
+					newCustomTags = append(newCustomTags, ct)
+				}
+			}
+		default: // "" or "toggle": toggle targetKey while keeping other attached custom tags
+			if hasTarget {
+				for _, ct := range currentCustomTags {
+					if !strings.EqualFold(ct, targetKey) {
+						newCustomTags = append(newCustomTags, ct)
+					}
+				}
+			} else {
+				newCustomTags = append(newCustomTags, currentCustomTags...)
+				newCustomTags = append(newCustomTags, targetKey)
+			}
 		}
 	}
+
+	buildUpdatedFlags := func(origFlags string) string {
+		var kept []string
+		for _, tok := range strings.Fields(origFlags) {
+			if _, isTag := isRecognizedTagToken(tok); !isTag {
+				if body.Tag != nil && strings.EqualFold(tok, strings.TrimSpace(*body.Tag)) {
+					continue
+				}
+				kept = append(kept, tok)
+			}
+		}
+		kept = append(kept, newCustomTags...)
+		return strings.Join(kept, " ")
+	}
+
+	targets := []*database.Message{msg}
+	seenIDs := map[int64]bool{msg.ID: true}
+	if msg.MessageID != "" && !msg.IsAIReview && msg.FolderName != constants.FolderDrafts && msg.FolderName != constants.FolderAIReviews {
+		if copies, err := s.DB.GetMessagesByMsgID(msg.MessageID); err == nil {
+			for _, c := range copies {
+				if c == nil || seenIDs[c.ID] {
+					continue
+				}
+				if c.IsAIReview || c.FolderName == constants.FolderDrafts || c.FolderName == constants.FolderAIReviews {
+					continue
+				}
+				seenIDs[c.ID] = true
+				targets = append(targets, c)
+			}
+		}
+	}
+
+	newFlags := buildUpdatedFlags(msg.Flags)
 
 	var tagKey, tagName, tagColor any
+	msgTags := make([]database.MessageTag, 0)
 	if s.Config != nil {
-		if tagInfo := s.Config.ResolveTag(newFlags); tagInfo != nil {
-			tagKey = tagInfo.Key
-			tagName = tagInfo.Tag
-			tagColor = tagInfo.Color
+		for _, rt := range s.Config.ResolveTags(newFlags) {
+			msgTags = append(msgTags, database.MessageTag{
+				Key:   rt.Key,
+				Tag:   rt.Tag,
+				Color: rt.Color,
+			})
+		}
+		if len(msgTags) > 0 {
+			tagKey = msgTags[0].Key
+			tagName = msgTags[0].Tag
+			tagColor = msgTags[0].Color
 		}
 	}
 
-	if s.Events != nil {
-		s.Events.Publish("message.updated", map[string]any{
-			"message_id":    msg.MessageID,
-			"message_db_id": msg.ID,
-			"folder":        msg.FolderName,
-			"folder_id":     msg.FolderID,
-			"tag":           tagKey,
-			"tag_name":      tagName,
-			"tag_color":     tagColor,
-			"flags":         strings.Fields(newFlags),
-		})
+	for _, targetMsg := range targets {
+		targetNewFlags := buildUpdatedFlags(targetMsg.Flags)
+		if err := s.DB.SetMessageFlags(targetMsg.ID, targetNewFlags); err != nil {
+			log.Printf("Warning: failed to update flags for message %d: %v", targetMsg.ID, err)
+		}
+
+		if s.IMAP != nil && targetMsg.IMAPUID != nil && *targetMsg.IMAPUID > 0 && targetMsg.FolderName != "" {
+			oldTokens := strings.Fields(targetMsg.Flags)
+			newTokens := strings.Fields(targetNewFlags)
+
+			oldMap := make(map[string]bool, len(oldTokens))
+			for _, t := range oldTokens {
+				oldMap[t] = true
+			}
+			newMap := make(map[string]bool, len(newTokens))
+			for _, t := range newTokens {
+				newMap[t] = true
+			}
+
+			var addFlags, removeFlags []string
+			for _, t := range newTokens {
+				if !oldMap[t] {
+					addFlags = append(addFlags, t)
+				}
+			}
+			for _, t := range oldTokens {
+				if !newMap[t] {
+					removeFlags = append(removeFlags, t)
+				}
+			}
+
+			if len(addFlags) > 0 || len(removeFlags) > 0 {
+				tID := targetMsg.ID
+				folderName := targetMsg.FolderName
+				uid := *targetMsg.IMAPUID
+				go func() {
+					if err := s.IMAP.UpdateIMAPMessageCustomTags(folderName, uid, addFlags, removeFlags); err != nil {
+						log.Printf("Warning: failed to update IMAP custom tags for message %d (UID %d in %s): %v", tID, uid, folderName, err)
+					}
+				}()
+			}
+		}
+
+		if s.Events != nil {
+			s.Events.Publish("message.updated", map[string]any{
+				"message_id":    targetMsg.MessageID,
+				"message_db_id": targetMsg.ID,
+				"folder":        targetMsg.FolderName,
+				"folder_id":     targetMsg.FolderID,
+				"tag":           tagKey,
+				"tag_name":      tagName,
+				"tag_color":     tagColor,
+				"tags":          msgTags,
+				"flags":         strings.Fields(targetNewFlags),
+			})
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -840,6 +903,7 @@ func (s *Server) handleSetMessageTag(w http.ResponseWriter, r *http.Request) {
 		"tag_key":    tagKey,
 		"tag_name":   tagName,
 		"tag_color":  tagColor,
+		"tags":       msgTags,
 	})
 }
 
@@ -1014,10 +1078,20 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Config != nil {
 		for _, item := range results {
-			if tagInfo := s.Config.ResolveTag(item.Flags); tagInfo != nil {
-				item.TagKey = &tagInfo.Key
-				item.TagName = &tagInfo.Tag
-				item.TagColor = &tagInfo.Color
+			resolved := s.Config.ResolveTags(item.Flags)
+			item.Tags = make([]database.MessageTag, 0, len(resolved))
+			for _, rt := range resolved {
+				item.Tags = append(item.Tags, database.MessageTag{
+					Key:   rt.Key,
+					Tag:   rt.Tag,
+					Color: rt.Color,
+				})
+			}
+			if len(item.Tags) > 0 {
+				primary := item.Tags[0]
+				item.TagKey = &primary.Key
+				item.TagName = &primary.Tag
+				item.TagColor = &primary.Color
 			}
 		}
 	}

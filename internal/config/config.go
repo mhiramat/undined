@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -396,16 +398,34 @@ func DefaultTags() map[string]TagDefinition {
 	}
 }
 
-// ResolveTag checks tokens in flags against configured tag definitions (case-insensitive)
-// and returns the first matching tag info, or nil if no match.
-func (c *Config) ResolveTag(flags string) *ResolvedTag {
+// TagPriorityRank returns a numeric priority rank for a tag key:
+// $cl_1..$cl_10 -> 1..10, $label1..$label5 -> 11..15, other custom tags -> 50.
+func TagPriorityRank(key string) int {
+	lower := strings.ToLower(strings.TrimSpace(key))
+	if strings.HasPrefix(lower, "$cl_") {
+		if n, err := strconv.Atoi(lower[4:]); err == nil && n >= 1 && n <= 99 {
+			return n
+		}
+	}
+	if strings.HasPrefix(lower, "$label") {
+		if n, err := strconv.Atoi(lower[6:]); err == nil && n >= 1 && n <= 99 {
+			return 10 + n
+		}
+	}
+	return 50
+}
+
+// ResolveTags checks all tokens in flags against configured tag definitions (case-insensitive)
+// and returns all matched tags ordered by priority rank (never nil).
+func (c *Config) ResolveTags(flags string) []ResolvedTag {
+	result := make([]ResolvedTag, 0)
 	if strings.TrimSpace(flags) == "" || c == nil || len(c.Tags) == 0 {
-		return nil
+		return result
 	}
 	cleanFlags := strings.ReplaceAll(flags, ",", " ")
 	tokens := strings.Fields(cleanFlags)
 	if len(tokens) == 0 {
-		return nil
+		return result
 	}
 
 	lowerMap := make(map[string]struct {
@@ -419,17 +439,44 @@ func (c *Config) ResolveTag(flags string) *ResolvedTag {
 		}{origKey: k, tagDef: v}
 	}
 
+	seen := make(map[string]bool)
 	for _, tok := range tokens {
 		tokLower := strings.ToLower(tok)
 		if entry, ok := lowerMap[tokLower]; ok {
-			return &ResolvedTag{
+			canonLower := strings.ToLower(entry.origKey)
+			if seen[canonLower] {
+				continue
+			}
+			seen[canonLower] = true
+			result = append(result, ResolvedTag{
 				Key:   entry.origKey,
 				Tag:   entry.tagDef.Tag,
 				Color: entry.tagDef.Color,
-			}
+			})
 		}
 	}
-	return nil
+
+	sort.SliceStable(result, func(i, j int) bool {
+		ri := TagPriorityRank(result[i].Key)
+		rj := TagPriorityRank(result[j].Key)
+		if ri != rj {
+			return ri < rj
+		}
+		return strings.ToLower(result[i].Key) < strings.ToLower(result[j].Key)
+	})
+
+	return result
+}
+
+// ResolveTag checks tokens in flags against configured tag definitions (case-insensitive)
+// and returns the highest-priority matching tag info, or nil if no match.
+func (c *Config) ResolveTag(flags string) *ResolvedTag {
+	tags := c.ResolveTags(flags)
+	if len(tags) == 0 {
+		return nil
+	}
+	primary := tags[0]
+	return &primary
 }
 
 // NewDefaultConfig returns a Config initialized with standard defaults.

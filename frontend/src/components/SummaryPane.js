@@ -5,7 +5,7 @@
 
 import { store } from "../store.js";
 import { cancelFolderSync, deleteMessagesBatch, fetchFolders, markMessageRead, setMessagesTagBatch } from "../api.js";
-import { getTags } from "../tags.js";
+import { getTags, getMessageTags } from "../tags.js";
 import { openFilterDialog } from "./FilterDialog.js";
 import { isDraftFolder, triggerNewMessage } from "./ViewerPane.js";
 import {
@@ -183,7 +183,13 @@ export function renderSummaryPane(container) {
                 const tagKey = res?.tag_key !== undefined ? res.tag_key : (selectedKey || "");
                 const tagName = res?.tag_name !== undefined ? res.tag_name : (tagDef ? tagDef.tag : "");
                 const tagColor = res?.tag_color !== undefined ? res.tag_color : (tagDef ? tagDef.color : "");
-                store.updateMessagesTag(ids, tagKey, tagName, tagColor);
+                store.updateMessagesTag(
+                  ids,
+                  tagKey,
+                  tagName,
+                  tagColor,
+                  Array.isArray(res?.tags) ? res.tags : undefined
+                );
                 showToast(
                   selectedKey
                     ? `Tagged ${ids.length} message(s) as ${tagName || selectedKey}.`
@@ -425,10 +431,17 @@ export function renderSummaryPane(container) {
           ? `<span class="thread-prefix">${escapeHtml(m.thread_prefix)}</span>`
           : (!isAiReview && m.in_reply_to && !threaded ? `<span style="color: #64748b; margin-right: 4px;">↳</span>` : "");
 
-        const tagColor = escapeHtml(m.tag_color || "");
-        const tagName = m.tag_name || m.tag_key || "";
-        const tagBadgeHtml = tagName
-          ? `<span class="summary-tag-badge" style="color: ${tagColor || "inherit"}; border-color: ${tagColor || "currentColor"};">${escapeHtml(tagName)}</span>`
+        const msgTags = getMessageTags(m);
+        const primaryTag = msgTags[0] || null;
+        const tagColor = escapeHtml(m.tag_color || primaryTag?.color || "");
+        const tagBadgeHtml = msgTags.length > 0
+          ? msgTags
+              .map((t) => {
+                const c = escapeHtml(t.color || tagColor || "");
+                const label = escapeHtml(t.tag || t.key || "");
+                return `<span class="summary-tag-badge" style="color: ${c || "inherit"}; border-color: ${c || "currentColor"};">${label}</span>`;
+              })
+              .join(" ")
           : "";
 
         const rowColorStyle = tagColor ? `color: ${tagColor};` : "";

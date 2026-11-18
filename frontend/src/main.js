@@ -196,7 +196,8 @@ async function init() {
               ids,
               res?.tag_key !== undefined ? res.tag_key : (tagTarget || ""),
               res?.tag_name !== undefined ? res.tag_name : (tagDef ? tagDef.tag : ""),
-              res?.tag_color !== undefined ? res.tag_color : (tagDef ? tagDef.color : "")
+              res?.tag_color !== undefined ? res.tag_color : (tagDef ? tagDef.color : ""),
+              Array.isArray(res?.tags) ? res.tags : undefined
             );
           })
           .catch((err) => {
@@ -206,18 +207,10 @@ async function init() {
       }
       const current = activeMessageDetail?.message;
       if (current && !isAiReviewMessage(current)) {
-        let tagTarget = null;
-        if (num > 0) {
-          const targetCl = `$cl_${num}`;
-          if (current.tag_key?.toLowerCase() === targetCl.toLowerCase() || current.tag_key?.toLowerCase() === `$label${num}`) {
-            tagTarget = null;
-          } else {
-            tagTarget = targetCl;
-          }
-        }
+        const tagTarget = num > 0 ? `$cl_${num}` : null;
         setMessageTag(current.id, tagTarget)
           .then((res) => {
-            store.updateMessageTag(current.id, res.tag_key, res.tag_name, res.tag_color);
+            store.updateMessageTag(current.id, res.tag_key, res.tag_name, res.tag_color, res.tags);
           })
           .catch((err) => {
             console.error("Failed to update message tag:", err);

@@ -174,16 +174,19 @@ export class NotificationChannel {
           }
         }
 
-        if (data.tag !== undefined) {
+        if (data.tag !== undefined || data.tags !== undefined) {
           const targetTag = data.tag || null;
           const currentTag = localMsg.tag_key || null;
-          if (targetTag !== currentTag) {
+          const targetTagsJson = Array.isArray(data.tags) ? JSON.stringify(data.tags) : null;
+          const currentTagsJson = Array.isArray(localMsg.tags) ? JSON.stringify(localMsg.tags) : null;
+          if (targetTag !== currentTag || (targetTagsJson !== null && targetTagsJson !== currentTagsJson)) {
             hasChanges = true;
             this.store.updateMessageTag(
               localMsg.id,
               targetTag,
               data.tag_name || null,
-              data.tag_color || null
+              data.tag_color || null,
+              Array.isArray(data.tags) ? data.tags : undefined
             );
           }
         }

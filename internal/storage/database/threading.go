@@ -9,6 +9,76 @@ import (
 	"undined-go/internal/storage/parser"
 )
 
+const untaggedPriorityRank = 9999
+
+func flagTokenPriorityRank(tok string) int {
+	lower := strings.ToLower(strings.TrimSpace(tok))
+	if lower == "" || isStandardSystemFlagToken(tok) {
+		return untaggedPriorityRank
+	}
+	if strings.HasPrefix(lower, "$cl_") {
+		if n, err := strconv.Atoi(lower[4:]); err == nil && n >= 1 && n <= 99 {
+			return n
+		}
+	}
+	if strings.HasPrefix(lower, "$label") {
+		if n, err := strconv.Atoi(lower[6:]); err == nil && n >= 1 && n <= 99 {
+			return 10 + n
+		}
+	}
+	return 50
+}
+
+func messageBestTagRank(m *Message) int {
+	if m == nil {
+		return untaggedPriorityRank
+	}
+	best := untaggedPriorityRank
+	for _, t := range m.Tags {
+		if r := flagTokenPriorityRank(t.Key); r < best {
+			best = r
+		}
+	}
+	if m.TagKey != nil && *m.TagKey != "" {
+		if r := flagTokenPriorityRank(*m.TagKey); r < best {
+			best = r
+		}
+	}
+	for _, tok := range strings.Fields(m.Flags) {
+		if r := flagTokenPriorityRank(tok); r < best {
+			best = r
+		}
+	}
+	return best
+}
+
+func compareMessagesByTagPriority(rankI, rankJ int, tsI, tsJ int64, isDesc bool) bool {
+	iTagged := rankI < untaggedPriorityRank
+	jTagged := rankJ < untaggedPriorityRank
+	if iTagged != jTagged {
+		// Tagged messages always sort ahead of untagged messages
+		return iTagged
+	}
+	if !iTagged && !jTagged {
+		return tsI > tsJ
+	}
+	if rankI != rankJ {
+		if isDesc {
+			return rankI > rankJ
+		}
+		return rankI < rankJ
+	}
+	return tsI > tsJ
+}
+
+func sortMessagesByTagPriority(messages []*Message, isDesc bool) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		mI := messages[i]
+		mJ := messages[j]
+		return compareMessagesByTagPriority(messageBestTagRank(mI), messageBestTagRank(mJ), mI.EpochTimestamp, mJ.EpochTimestamp, isDesc)
+	})
+}
+
 // ThreadNode represents a node in the message conversation tree.
 type ThreadNode struct {
 	Message  *Message
@@ -116,12 +186,34 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 		return maxTS
 	}
 
+	getThreadBestTagRank := func(root *ThreadNode) int {
+		best := messageBestTagRank(root.Message)
+		var walk func(n *ThreadNode)
+		walk = func(n *ThreadNode) {
+			if r := messageBestTagRank(n.Message); r < best {
+				best = r
+			}
+			for _, child := range n.Children {
+				walk(child)
+			}
+		}
+		walk(root)
+		return best
+	}
+
 	isDesc := strings.ToLower(sortOrder) != "asc"
 
 	// Sort root nodes
 	sort.SliceStable(rootNodes, func(i, j int) bool {
 		mI := rootNodes[i].Message
 		mJ := rootNodes[j].Message
+		if strings.EqualFold(sortBy, "tag") {
+			rankI := getThreadBestTagRank(rootNodes[i])
+			rankJ := getThreadBestTagRank(rootNodes[j])
+			tsI := getThreadTimestamp(rootNodes[i])
+			tsJ := getThreadTimestamp(rootNodes[j])
+			return compareMessagesByTagPriority(rankI, rankJ, tsI, tsJ, isDesc)
+		}
 		var less bool
 		switch strings.ToLower(sortBy) {
 		case "subject":
@@ -136,16 +228,6 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 				fromJ = strings.ToLower(mJ.FromAddr)
 			}
 			less = fromI < fromJ
-		case "tag":
-			tagI := ""
-			if mI.TagName != nil {
-				tagI = *mI.TagName
-			}
-			tagJ := ""
-			if mJ.TagName != nil {
-				tagJ = *mJ.TagName
-			}
-			less = strings.ToLower(tagI) < strings.ToLower(tagJ)
 		default: // "date"
 			tsI := getThreadTimestamp(rootNodes[i])
 			tsJ := getThreadTimestamp(rootNodes[j])
@@ -163,6 +245,11 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 		sort.SliceStable(n.Children, func(i, j int) bool {
 			mI := n.Children[i].Message
 			mJ := n.Children[j].Message
+			if strings.EqualFold(sortBy, "tag") {
+				rankI := messageBestTagRank(mI)
+				rankJ := messageBestTagRank(mJ)
+				return compareMessagesByTagPriority(rankI, rankJ, mI.EpochTimestamp, mJ.EpochTimestamp, isDesc)
+			}
 			var less bool
 			switch strings.ToLower(sortBy) {
 			case "subject":
@@ -177,16 +264,6 @@ func ThreadMessages(messages []*Message, sortBy, sortOrder string) []*Message {
 					fromJ = strings.ToLower(mJ.FromAddr)
 				}
 				less = fromI < fromJ
-			case "tag":
-				tagI := ""
-				if mI.TagName != nil {
-					tagI = *mI.TagName
-				}
-				tagJ := ""
-				if mJ.TagName != nil {
-					tagJ = *mJ.TagName
-				}
-				less = strings.ToLower(tagI) < strings.ToLower(tagJ)
 			default: // "date"
 				less = mI.EpochTimestamp < mJ.EpochTimestamp
 			}

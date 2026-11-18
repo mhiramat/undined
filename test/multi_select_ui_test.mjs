@@ -352,3 +352,100 @@ test("Multi-selection: 'Trash them' deletes selected messages and exits selectio
   assert.equal(store.getState().selectedMessageIds.size, 0);
   assert.equal(selectionSlot.innerHTML, "");
 });
+
+test("Multi-tag badges, priority sorting by Tag column, and multi-tag filtering", () => {
+  const container = createSummaryMockContainer();
+  store.clearMultiSelection();
+  store.clearFilter();
+  store.setThreaded(false);
+  store.setSort("date", "desc");
+
+  const todoMessages = [
+    {
+      id: 201,
+      message_id: "todo-untagged@kernel.org",
+      subject: "[PATCH 1/3] trace: untagged newest",
+      from_name: "Alice",
+      from_addr: "alice@example.com",
+      date: "2026-11-18T12:00:00Z",
+      epoch_timestamp: 1795003200,
+      is_read: 1,
+      is_patch: 1,
+      tag_key: null,
+      tag_name: null,
+      tag_color: null,
+      tags: [],
+    },
+    {
+      id: 202,
+      message_id: "todo-p2@kernel.org",
+      subject: "[PATCH 2/3] trace: priority 2",
+      from_name: "Bob",
+      from_addr: "bob@example.com",
+      date: "2026-11-18T11:00:00Z",
+      epoch_timestamp: 1794999600,
+      is_read: 1,
+      is_patch: 1,
+      tag_key: "$cl_2",
+      tag_name: "Blue",
+      tag_color: "#3333FF",
+      tags: [{ key: "$cl_2", tag: "Blue", color: "#3333FF" }],
+    },
+    {
+      id: 203,
+      message_id: "todo-p1-multi@kernel.org",
+      subject: "[PATCH 3/3] trace: priority 1 with multiple tags",
+      from_name: "Carol",
+      from_addr: "carol@example.com",
+      date: "2026-11-18T10:00:00Z",
+      epoch_timestamp: 1794996000,
+      is_read: 1,
+      is_patch: 1,
+      tag_key: "$cl_1",
+      tag_name: "Red",
+      tag_color: "#CC0000",
+      tags: [
+        { key: "$cl_1", tag: "Red", color: "#CC0000" },
+        { key: "$label1", tag: "Important", color: "#FF2600" },
+      ],
+    },
+  ];
+
+  store.setMessages(todoMessages);
+  renderSummaryPane(container);
+
+  // 1. Both tags ("Red" and "Important") should render as badges in SummaryPane
+  const tableHtml = container.querySelector(".summary-table-container").innerHTML;
+  assert.ok(tableHtml.includes("Red"), "Expected primary tag badge 'Red'");
+  assert.ok(tableHtml.includes("Important"), "Expected secondary tag badge 'Important'");
+
+  // 2. Sort by Tag column (asc): $cl_1 (203) -> $cl_2 (202) -> untagged (201)
+  store.toggleSort("tag");
+  assert.equal(store.getState().sortKey, "tag");
+  assert.equal(store.getState().sortOrder, "asc");
+  assert.deepEqual(
+    store.getState().messages.map((m) => m.id),
+    [203, 202, 201],
+    "Expected Tag asc sort to order $cl_1 first, $cl_2 second, and untagged last"
+  );
+
+  // 3. Sort by Tag column (desc): $cl_2 (202) -> $cl_1 (203) -> untagged (201) (untagged stays at bottom)
+  store.toggleSort("tag");
+  assert.equal(store.getState().sortOrder, "desc");
+  assert.deepEqual(
+    store.getState().messages.map((m) => m.id),
+    [202, 203, 201],
+    "Expected Tag desc sort to reverse tagged priority while keeping untagged at bottom"
+  );
+
+  // 4. Filter by secondary tag 'tag:Important' matches message 203
+  store.setFilter("tag:Important");
+  assert.deepEqual(
+    store.getState().messages.map((m) => m.id),
+    [203],
+    "Filtering by secondary tag should match multi-tagged message"
+  );
+  store.clearFilter();
+  store.setSort("date", "desc");
+  store.setThreaded(true);
+});

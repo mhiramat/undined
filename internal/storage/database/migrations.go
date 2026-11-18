@@ -113,8 +113,116 @@ func initDB(db *sql.DB) error {
 	if err := reconcileBaseCommitPatches(db); err != nil {
 		log.Printf("[database] warning: failed to reconcile base-commit patches: %v", err)
 	}
+	if err := reconcileCrossFolderTags(db); err != nil {
+		log.Printf("[database] warning: failed to reconcile cross-folder tags: %v", err)
+	}
 
 	return nil
+}
+
+func reconcileCrossFolderTags(db *sql.DB) error {
+	rows, err := db.Query(`
+		SELECT m.id, m.message_id, COALESCE(m.flags, '')
+		FROM messages m
+		JOIN folders f ON m.folder_id = f.id
+		WHERE m.message_id IS NOT NULL
+		  AND m.message_id != ''
+		  AND f.name NOT IN (?, ?);
+	`, constants.FolderDrafts, constants.FolderAIReviews)
+	if err != nil {
+		return err
+	}
+
+	type msgRow struct {
+		id      int64
+		cleanID string
+		flags   string
+	}
+	var allRows []msgRow
+	tagsByMsgID := make(map[string][]string)
+	seenByMsgID := make(map[string]map[string]bool)
+
+	for rows.Next() {
+		var id int64
+		var rawMid, flags string
+		if err := rows.Scan(&id, &rawMid, &flags); err != nil {
+			continue
+		}
+		cleanID := parser.CleanMsgID(rawMid)
+		if cleanID == "" {
+			continue
+		}
+		allRows = append(allRows, msgRow{id: id, cleanID: cleanID, flags: flags})
+		for _, tok := range strings.Fields(flags) {
+			if !isStandardSystemFlagToken(tok) {
+				lower := strings.ToLower(tok)
+				if seenByMsgID[cleanID] == nil {
+					seenByMsgID[cleanID] = make(map[string]bool)
+				}
+				if !seenByMsgID[cleanID][lower] {
+					seenByMsgID[cleanID][lower] = true
+					tagsByMsgID[cleanID] = append(tagsByMsgID[cleanID], tok)
+				}
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close() // Safe to ignore close error when returning prior iteration error.
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	type flagUpdate struct {
+		id    int64
+		flags string
+	}
+	var updates []flagUpdate
+	for _, r := range allRows {
+		sharedTags := tagsByMsgID[r.cleanID]
+		if len(sharedTags) == 0 {
+			continue
+		}
+		curTokens := strings.Fields(r.flags)
+		hasLower := make(map[string]bool, len(curTokens))
+		for _, t := range curTokens {
+			hasLower[strings.ToLower(t)] = true
+		}
+		changed := false
+		for _, st := range sharedTags {
+			if !hasLower[strings.ToLower(st)] {
+				curTokens = append(curTokens, st)
+				changed = true
+			}
+		}
+		if changed {
+			updates = append(updates, flagUpdate{id: r.id, flags: strings.Join(curTokens, " ")})
+		}
+	}
+
+	if len(updates) == 0 {
+		return nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("UPDATE messages SET flags = ? WHERE id = ?;")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, u := range updates {
+		if _, err := stmt.Exec(u.flags, u.id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func reconcileBaseCommitPatches(db *sql.DB) error {

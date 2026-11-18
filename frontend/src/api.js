@@ -505,12 +505,16 @@ export async function fetchTags() {
   return res.json();
 }
 
-export async function setMessageTag(messageDbId, tagKey = null) {
+export async function setMessageTag(messageDbId, tagKey = null, action = "") {
   suppressEventForMessage(messageDbId, 1000);
+  const payload = { tag: tagKey };
+  if (action) {
+    payload.action = action;
+  }
   const res = await fetch(`${BASE_URL}/api/messages/${messageDbId}/tag`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tag: tagKey }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) throw new Error("Failed to update message tag");
   const data = await res.json();
@@ -519,6 +523,12 @@ export async function setMessageTag(messageDbId, tagKey = null) {
     cached.message.tag_key = data.tag_key;
     cached.message.tag_name = data.tag_name;
     cached.message.tag_color = data.tag_color;
+    if (Array.isArray(data.tags)) {
+      cached.message.tags = data.tags;
+    }
+    if (typeof data.flags === "string") {
+      cached.message.flags = data.flags;
+    }
   }
   return data;
 }
