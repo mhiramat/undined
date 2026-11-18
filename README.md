@@ -327,11 +327,19 @@ token_eval = "pass show api/patchwork.kernel.org"
 todo_states = ["new", "under-review"]
 
 [translate]
-enabled = true
+# Disabled by default; set to true to show the 🌐 Translate button in the Web UI
+enabled = false
 url = "http://127.0.0.1:8787"
 source_lang = "en"
 target_lang = "ja"
 style = "default"
+
+# Optional: customize built-in color tags ($cl_1..$cl_10, $label1..$label5) or add custom tags
+[tags]
+"$cl_1" = { tag = "P1-Urgent", color = "#FF7B72" }
+"$cl_2" = { tag = "P2-High",   color = "#FFA657" }
+"$cl_3" = { tag = "P3-Normal", color = "#3FB950" }
+"$cl_4" = { tag = "Needs-Ack", color = "#79C0FF" }
 ```
 
 ---
@@ -468,18 +476,24 @@ agy mcp add undine ./bin/undined --mcp-stdio
 
 1. **Browsing & Thread Navigation**:
    * Navigate message summaries with keyboard shortcuts `j` (down) and `k` (up).
-   * Search message bodies and subjects with SQLite FTS5 using `/`.
-2. **Side-by-Side Patch Review**:
-   * Patch emails automatically render in dual-column pre-image and post-image diff view.
+   * Search message bodies and subjects with SQLite FTS5 using `/`, or filter the current folder with `tag:<name>`, `from:<author>`, `is:unread`, or `is:patch`.
+2. **Multi-Tag Prioritization & Cross-Folder Sync**:
+   * Attach multiple custom color tags to any email via the **🏷️ Tag** menu or keyboard shortcuts `1`–`9` (toggles `$cl_1`..`$cl_9` on/off; press `0` to clear all tags).
+   * Click the **Tag** column header in `TODO` (or any folder) to sort patches by tag priority rank (`$cl_1`..`$cl_10`, `$label1`..`$label5`, custom tags), keeping untagged messages below tagged ones.
+   * Tags automatically synchronize across folders (`TODO`, `INBOX`, `b4-imports`) for copies sharing the same `Message-ID`.
+   * Hold `Ctrl+Click` (or `Meta+Click`) on rows in the message list to enter multi-selection mode and bulk-tag (**🏷️ Tag them**) or bulk-delete (**🗑️ Trash them**) messages.
+3. **Side-by-Side Patch Review & Applying Patches**:
+   * Patch emails (including patches with `base-commit:` trailers) automatically render in dual-column pre-image and post-image diff view.
    * Hover over any line number in the diff gutter and click `+` to open an inline review note.
-3. **One-Click Draft Merging**:
-   * Click **Reply** or press `r` to aggregate inline notes into standard LKML quoted plain text with 2–3 lines of context.
+   * Click **Apply Patch with git am** to apply the patch or series to your local kernel tree; when a `base-commit:` trailer is present, the base commit input is pre-populated automatically.
+4. **One-Click Draft Merging**:
+   * Click **Reply** or press `r` to aggregate inline notes into standard LKML quoted plain text with 2–3 lines of context (auto-wrapped at 75 columns with undo/redo support).
    * Edit using the built-in tab-preserving editor or launch your external `$EDITOR` via `Ctrl+E`.
-4. **Patchwork Synchronization**:
+5. **Patchwork Synchronization**:
    * View CI check results directly in the email header drawer.
    * Update patch state (e.g. *Under Review*, *Accepted*, *Changes Requested*) or click `👤 Delegate to Me`.
-5. **Local Email Reflow & Translation**:
-   * Click **🌐 Translate (JA)** in the message viewer toolbar to unwrap 80-column hard-wrapped lines and `>` quoted replies into natural sentences and translate them locally via `local-jp-translate`.
+6. **Local Email Reflow & Translation**:
+   * When enabled (`[translate] enabled = true`), click **🌐 Translate (JA)** in the message viewer toolbar to unwrap 80-column hard-wrapped lines and `>` quoted replies into natural sentences and translate them locally in batched paragraphs via `local-jp-translate`.
 
 ---
 

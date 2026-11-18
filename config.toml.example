@@ -139,7 +139,9 @@ timeout_seconds = 10.0
 # Local Message Translation (local-jp-translate)
 # ==============================================================================
 [translate]
-enabled = true
+# Translation is disabled by default (hides the 🌐 Translate button in the Web UI).
+# Set enabled = true when running a local-jp-translate server.
+enabled = false
 url = "http://127.0.0.1:8787"
 source_lang = "en"
 target_lang = "ja"
@@ -149,8 +151,23 @@ max_tokens = 2048
 timeout_seconds = 180.0
 
 # ==============================================================================
-# Message Color Tags (IMAP Custom Flags / Thunderbird Compatible)
+# Message Color Tags (IMAP Custom Flags / Claws Mail & Thunderbird Compatible)
 # ==============================================================================
+# Multiple tags can be attached to a single email (toggle with keys 1-9, clear all with 0),
+# and tags are synchronized across folders (e.g. TODO, INBOX, b4-imports) by Message-ID.
+# Clicking the "Tag" column header sorts messages by tag priority rank:
+#   1. $cl_1 .. $cl_10   (Rank 1..10, keyboard shortcuts 1..9 for $cl_1..$cl_9)
+#   2. $label1 .. $label5 (Rank 11..15, Thunderbird compatible labels)
+#   3. Custom tag keys    (Rank 50)
+#   4. Untagged messages  (Always placed after tagged messages)
+#
 # Built-in defaults:
 #   $cl_1..$cl_10: Red, Blue, Green, Gray, Purple, Light green, Orange, Pink, Light blue, Yellow
 #   $label1..$label5: Important, Work, Personal, To Do, Later
+#
+# You can override built-in labels/colors or define additional custom tags under [tags]:
+# [tags]
+# "$cl_1" = { tag = "P1-Urgent", color = "#FF7B72" }
+# "$cl_2" = { tag = "P2-High",   color = "#FFA657" }
+# "$cl_3" = { tag = "P3-Normal", color = "#3FB950" }
+# "$cl_4" = { tag = "Needs-Ack", color = "#79C0FF" }
