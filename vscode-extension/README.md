@@ -31,6 +31,7 @@ An official VS Code extension for the **Undine** Linux kernel mail workstation. 
 |---|---|---|---|
 | `undine.serverUrl` | `string` | `http://127.0.0.1:8080` | UndineD REST API server URL |
 | `undine.authTokenPath` | `string` | `~/.local/share/undined/auth_token` | Path to Undine auth token |
+| `undine.targetGitRepo` | `string` | `${workspaceFolder}` | Workspace-scoped target Git repository path for `Apply (b4 am)` and `Apply (stg import)` (supports `${workspaceFolder}`, `~`, or a relative sub-repository path such as `linux`) |
 | `undine.pollIntervalSeconds` | `number` | `30` | Auto-refresh interval in seconds (0 to disable) |
 | `undine.tabSize` | `number` | `8` | Tab size for patch diffs and commit descriptions |
 | `undine.autoOpenDiff` | `boolean` | `false` | Automatically open diff on message selection (default: false, diff is opened on-demand via the Message Header pane) |

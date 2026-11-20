@@ -449,8 +449,9 @@
         },
         "undine.targetGitRepo": {
           "type": "string",
+          "scope": "resource",
           "default": "${workspaceFolder}",
-          "description": "Target Git repository path for b4/git patch application."
+          "description": "Target Git repository path for b4/git and StGit patch application (supports ${workspaceFolder}, ~, or a path relative to the workspace root, e.g. 'linux')."
         },
         "undine.tabSize": {
           "type": "number",

@@ -360,3 +360,41 @@ func TestApplyPatch_LocalFallbackWithGitSignature(t *testing.T) {
 		t.Errorf("expected recorded commit %s, got %s (err: %v)", res.CommitID, recordedCommit, err)
 	}
 }
+
+func TestResolveGitDir_SubRepoAndGitdirFile(t *testing.T) {
+	wrapperDir := t.TempDir()
+
+	// 1. Wrapper root without .git is not a git repo
+	if _, ok := resolveGitDir(wrapperDir); ok {
+		t.Errorf("expected wrapper directory without .git to return ok=false")
+	}
+
+	// 2. Sub-repository with a standard .git directory
+	subRepoDir := filepath.Join(wrapperDir, "linux")
+	subGitDir := filepath.Join(subRepoDir, ".git")
+	if err := os.MkdirAll(subGitDir, 0755); err != nil {
+		t.Fatalf("failed to create subRepo .git dir: %v", err)
+	}
+	gotDir, ok := resolveGitDir(subRepoDir)
+	if !ok || gotDir != subGitDir {
+		t.Errorf("resolveGitDir(%q) = (%q, %v), want (%q, true)", subRepoDir, gotDir, ok, subGitDir)
+	}
+
+	// 3. Submodule / worktree where .git is a regular file containing "gitdir: ..."
+	worktreeRepo := filepath.Join(wrapperDir, "linux-worktree")
+	actualGitMeta := filepath.Join(wrapperDir, ".git-modules-linux")
+	if err := os.MkdirAll(worktreeRepo, 0755); err != nil {
+		t.Fatalf("failed to create worktreeRepo: %v", err)
+	}
+	if err := os.MkdirAll(actualGitMeta, 0755); err != nil {
+		t.Fatalf("failed to create actualGitMeta: %v", err)
+	}
+	gitFile := filepath.Join(worktreeRepo, ".git")
+	if err := os.WriteFile(gitFile, []byte("gitdir: ../.git-modules-linux\n"), 0644); err != nil {
+		t.Fatalf("failed to write .git file: %v", err)
+	}
+	gotMeta, ok := resolveGitDir(worktreeRepo)
+	if !ok || gotMeta != actualGitMeta {
+		t.Errorf("resolveGitDir(%q) = (%q, %v), want (%q, true)", worktreeRepo, gotMeta, ok, actualGitMeta)
+	}
+}

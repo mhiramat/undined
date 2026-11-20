@@ -244,6 +244,88 @@ export async function importPatchWithStgit(
   };
 }
 
+/**
+ * Expands a configured `undine.targetGitRepo` setting against an optional workspace folder path.
+ * Supports:
+ * - "${workspaceFolder}" or "${workspaceFolder}/linux" (and "${workspaceRoot}")
+ * - Relative sub-repository paths such as "linux" or "./kernel/linux" (resolved against workspaceFolderPath)
+ * - Home directory prefix "~" or "~/..."
+ * - Absolute filesystem paths
+ */
+export function expandTargetGitRepoPath(
+  configuredPath: string | undefined,
+  workspaceFolderPath?: string
+): string {
+  const trimmed = (configuredPath || "").trim();
+  const wsPath = (workspaceFolderPath || "").trim();
+
+  if (!trimmed) {
+    return wsPath ? path.resolve(wsPath) : "";
+  }
+
+  let expanded = trimmed;
+  if (expanded.includes("${workspaceFolder}") || expanded.includes("${workspaceRoot}")) {
+    if (!wsPath) {
+      return "";
+    }
+    expanded = expanded
+      .replace(/\$\{workspaceFolder\}/g, wsPath)
+      .replace(/\$\{workspaceRoot\}/g, wsPath);
+  }
+
+  if (expanded === "~") {
+    expanded = os.homedir();
+  } else if (expanded.startsWith("~/") || expanded.startsWith("~\\")) {
+    expanded = path.join(os.homedir(), expanded.slice(2));
+  }
+
+  if (!path.isAbsolute(expanded)) {
+    if (!wsPath) {
+      return "";
+    }
+    expanded = path.resolve(wsPath, expanded);
+  } else {
+    expanded = path.resolve(expanded);
+  }
+
+  return expanded;
+}
+
+/**
+ * Resolves the workspace-scoped `undine.targetGitRepo` setting, prompting the user
+ * if no workspace folder or valid path can be determined.
+ */
+export async function resolveTargetGitRepo(promptText?: string): Promise<string | undefined> {
+  const activeUri = (vscode.window as any).activeTextEditor?.document?.uri;
+  const getWsFolder = (vscode.workspace as any).getWorkspaceFolder;
+  const activeFolder =
+    activeUri && typeof getWsFolder === "function" ? getWsFolder.call(vscode.workspace, activeUri) : undefined;
+  const folders = vscode.workspace.workspaceFolders;
+  const targetFolder = activeFolder || (folders && folders.length > 0 ? folders[0] : undefined);
+  const wsPath: string | undefined = targetFolder?.uri?.fsPath || targetFolder?.uri?.path;
+
+  const cfg = vscode.workspace.getConfiguration("undine", targetFolder?.uri);
+  const configured = cfg.get<string>("targetGitRepo");
+  let targetRepo = expandTargetGitRepoPath(configured, wsPath);
+
+  if (!targetRepo && promptText) {
+    const input = await vscode.window.showInputBox({
+      prompt: promptText,
+      placeHolder: "/path/to/linux",
+    });
+    if (input && input.trim()) {
+      const rawInput = input.trim();
+      if (rawInput === "~" || rawInput.startsWith("~/") || rawInput.startsWith("~\\") || path.isAbsolute(rawInput) || wsPath) {
+        targetRepo = expandTargetGitRepoPath(rawInput, wsPath);
+      } else {
+        targetRepo = rawInput;
+      }
+    }
+  }
+
+  return targetRepo || undefined;
+}
+
 export function registerB4Commands(
   context: vscode.ExtensionContext,
   client: UndineRestClient,
@@ -329,20 +411,7 @@ export function registerB4Commands(
         if (!msgId) return;
 
         const cleanId = msgId.replace(/^<|>$/g, "");
-        const cfg = vscode.workspace.getConfiguration("undine");
-        let targetRepo = cfg.get<string>("targetGitRepo");
-
-        if (!targetRepo || targetRepo === "${workspaceFolder}") {
-          const folders = vscode.workspace.workspaceFolders;
-          if (folders && folders.length > 0) {
-            targetRepo = folders[0].uri.fsPath;
-          } else {
-            targetRepo = await vscode.window.showInputBox({
-              prompt: "Target Git repository path to apply patch to:",
-              placeHolder: "/path/to/linux",
-            });
-          }
-        }
+        const targetRepo = await resolveTargetGitRepo("Target Git repository path to apply patch to:");
 
         if (!targetRepo) return;
 
@@ -425,20 +494,9 @@ export function registerB4Commands(
         const cleanId = (msgId || "").replace(/^<|>$/g, "").trim();
         const lookupTarget: string | number = targetDbId || cleanId;
 
-        const cfg = vscode.workspace.getConfiguration("undine");
-        let targetRepo = cfg.get<string>("targetGitRepo");
-
-        if (!targetRepo || targetRepo === "${workspaceFolder}") {
-          const folders = vscode.workspace.workspaceFolders;
-          if (folders && folders.length > 0) {
-            targetRepo = folders[0].uri.fsPath;
-          } else {
-            targetRepo = await vscode.window.showInputBox({
-              prompt: "Target StGit repository path to import patch into:",
-              placeHolder: "/path/to/linux",
-            });
-          }
-        }
+        const targetRepo = await resolveTargetGitRepo(
+          "Target StGit repository path to import patch into:"
+        );
 
         if (!targetRepo) return;
 
@@ -536,7 +594,10 @@ export function registerB4Commands(
   context.subscriptions.push(
     vscode.commands.registerCommand("undine.abortApplyPatch", async () => {
       try {
-        const res = await client.abortPatchApply();
+        const targetRepo = await resolveTargetGitRepo();
+        const res = await client.abortPatchApply(
+          targetRepo ? { target_git_repo: targetRepo } : {}
+        );
         if (res.success) {
           vscode.window.showInformationMessage("Patch application aborted successfully.");
         } else {

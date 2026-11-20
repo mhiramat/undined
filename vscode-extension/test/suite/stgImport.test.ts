@@ -7,7 +7,11 @@ import {
   resolveLkmlLink,
   insertLinkIntoStgTemplate,
   importPatchWithStgit,
+  expandTargetGitRepoPath,
+  resolveTargetGitRepo,
+  registerB4Commands,
 } from "../../src/commands/b4Commands";
+import { mockVscode } from "../vscodeMock";
 
 describe("StGit Patch Import (importpatch.sh logic)", () => {
   it("should extract Message-ID from raw mail headers matching getlkmllink.sh", () => {
@@ -181,6 +185,112 @@ describe("StGit Patch Import (importpatch.sh logic)", () => {
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("should expand workspace-relative, variable, and tilde targetGitRepo paths", () => {
+    const wsRoot = "/workspace/wrapper";
+
+    // Default "${workspaceFolder}"
+    assert.strictEqual(
+      expandTargetGitRepoPath("${workspaceFolder}", wsRoot),
+      path.resolve("/workspace/wrapper")
+    );
+
+    // Sub-repository via "${workspaceFolder}/linux"
+    assert.strictEqual(
+      expandTargetGitRepoPath("${workspaceFolder}/linux", wsRoot),
+      path.resolve("/workspace/wrapper/linux")
+    );
+
+    // Relative sub-repository path "linux" or "./linux"
+    assert.strictEqual(
+      expandTargetGitRepoPath("linux", wsRoot),
+      path.resolve("/workspace/wrapper/linux")
+    );
+    assert.strictEqual(
+      expandTargetGitRepoPath("./sub/linux", wsRoot),
+      path.resolve("/workspace/wrapper/sub/linux")
+    );
+
+    // Home directory expansion "~" and "~/..."
+    assert.strictEqual(
+      expandTargetGitRepoPath("~/ksrc/linux", wsRoot),
+      path.join(os.homedir(), "ksrc/linux")
+    );
+
+    // Absolute path
+    assert.strictEqual(
+      expandTargetGitRepoPath("/opt/src/linux", wsRoot),
+      path.resolve("/opt/src/linux")
+    );
+
+    // Missing workspace folder with relative or ${workspaceFolder} setting returns ""
+    assert.strictEqual(expandTargetGitRepoPath("${workspaceFolder}/linux", undefined), "");
+    assert.strictEqual(expandTargetGitRepoPath("linux", undefined), "");
+  });
+
+  it("should resolve workspace-scoped targetGitRepo for applyPatch and importPatchStg", async () => {
+    const origFolders = (mockVscode.workspace as any).workspaceFolders;
+    const origGetConfig = mockVscode.workspace.getConfiguration;
+
+    const folderUri = { fsPath: "/workspace/wrapper", path: "/workspace/wrapper" };
+    let passedResourceScope: any = undefined;
+    let configuredTargetRepo = "linux";
+
+    (mockVscode.workspace as any).workspaceFolders = [{ uri: folderUri, name: "wrapper", index: 0 }];
+    (mockVscode.workspace as any).getConfiguration = (_section?: string, scope?: any) => {
+      passedResourceScope = scope;
+      return {
+        get: (key: string, defaultValue?: any) => {
+          if (key === "targetGitRepo") {
+            return configuredTargetRepo;
+          }
+          return defaultValue;
+        },
+      };
+    };
+
+    try {
+      const resolved = await resolveTargetGitRepo();
+      assert.strictEqual(resolved, path.resolve("/workspace/wrapper/linux"));
+      assert.strictEqual(passedResourceScope, folderUri);
+
+      configuredTargetRepo = "${workspaceFolder}/kernel/linux";
+      const resolvedSub = await resolveTargetGitRepo();
+      assert.strictEqual(resolvedSub, path.resolve("/workspace/wrapper/kernel/linux"));
+
+      // Verify applyPatch command passes the resolved sub-repository path to client.applyPatch
+      let appliedMsgId = "";
+      let appliedRepo: string | undefined;
+      const fakeClient: any = {
+        applyPatch: async (mid: string, repo?: string) => {
+          appliedMsgId = mid;
+          appliedRepo = repo;
+          return { success: true, branch: "review/test", head: "1234567890abcdef" };
+        },
+        abortPatchApply: async (params: any) => {
+          appliedRepo = params?.target_git_repo;
+          return { success: true };
+        },
+      };
+
+      const fakeContext: any = { subscriptions: [] };
+      registerB4Commands(fakeContext, fakeClient);
+
+      await mockVscode.commands.executeCommand(
+        "undine.applyPatch",
+        "<20261108.111-1-dev@kernel.org>"
+      );
+      assert.strictEqual(appliedMsgId, "20261108.111-1-dev@kernel.org");
+      assert.strictEqual(appliedRepo, path.resolve("/workspace/wrapper/kernel/linux"));
+
+      appliedRepo = undefined;
+      await mockVscode.commands.executeCommand("undine.abortApplyPatch");
+      assert.strictEqual(appliedRepo, path.resolve("/workspace/wrapper/kernel/linux"));
+    } finally {
+      (mockVscode.workspace as any).workspaceFolders = origFolders;
+      mockVscode.workspace.getConfiguration = origGetConfig;
     }
   });
 });

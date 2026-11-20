@@ -199,6 +199,43 @@ type ApplyResult struct {
 	AMInProgress   bool     `json:"am_in_progress,omitempty"`
 }
 
+// resolveGitDir checks whether repoPath contains a valid .git directory or .git gitdir file
+// (such as a git submodule or git worktree under a wrapper directory) and returns the
+// resolved git metadata directory path.
+func resolveGitDir(repoPath string) (string, bool) {
+	if repoPath == "" {
+		return "", false
+	}
+	gitPath := filepath.Join(repoPath, ".git")
+	fi, err := os.Stat(gitPath)
+	if err != nil {
+		return "", false
+	}
+	if fi.IsDir() {
+		return gitPath, true
+	}
+	if fi.Mode().IsRegular() {
+		data, err := os.ReadFile(gitPath)
+		if err != nil {
+			return "", false
+		}
+		line := strings.TrimSpace(string(data))
+		if after, found := strings.CutPrefix(line, "gitdir:"); found {
+			target := strings.TrimSpace(after)
+			if target != "" {
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(repoPath, target)
+				}
+				if info, statErr := os.Stat(target); statErr == nil && info.IsDir() {
+					return filepath.Clean(target), true
+				}
+			}
+		}
+		return gitPath, true
+	}
+	return "", false
+}
+
 // ApplyPatch runs `b4 am -o - <msgid> | git -C <repo> am`.
 func (b *B4Runner) ApplyPatch(
 	msgID string,
@@ -214,8 +251,8 @@ func (b *B4Runner) ApplyPatch(
 	}
 	repoPath = config.ExpandPath(repoPath)
 
-	gitDir := filepath.Join(repoPath, ".git")
-	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+	gitDir, ok := resolveGitDir(repoPath)
+	if !ok {
 		return &ApplyResult{
 			Success:       false,
 			ExitCode:      1,
@@ -589,8 +626,7 @@ func (b *B4Runner) AbortApply(targetGitRepo, branchName, baseCommit, originalBra
 	}
 	repoPath = config.ExpandPath(repoPath)
 
-	gitDir := filepath.Join(repoPath, ".git")
-	if fi, err := os.Stat(gitDir); err != nil || !fi.IsDir() {
+	if _, ok := resolveGitDir(repoPath); !ok {
 		return &AbortResult{
 			Success: false,
 			Error:   fmt.Sprintf("target directory is not a git repository: %s", repoPath),
