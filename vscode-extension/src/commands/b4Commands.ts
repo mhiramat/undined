@@ -19,18 +19,100 @@ export type ExecFileRunner = (
   cwd?: string
 ) => Promise<{ stdout: string; stderr: string }>;
 
+/**
+ * Builds a PATH string and resolves bare executable names across standard user/system
+ * binary directories so commands like `stg`, `git`, and `curl` succeed even when the
+ * VS Code extension host starts with a minimal PATH.
+ */
+export function resolveCommandExecutable(
+  cmd: string,
+  envPath: string = process.env.PATH || ""
+): { resolvedCmd: string; augmentedPath: string } {
+  const home = os.homedir();
+  const extraDirs = [
+    path.join(home, ".cargo", "bin"),
+    path.join(home, ".local", "bin"),
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+  const existingDirs = envPath.split(path.delimiter).filter(Boolean);
+  const searchDirs = [...existingDirs];
+  for (const dir of extraDirs) {
+    if (!searchDirs.includes(dir)) {
+      searchDirs.push(dir);
+    }
+  }
+  const augmentedPath = searchDirs.join(path.delimiter);
+
+  if (cmd.includes("/") || cmd.includes("\\") || path.isAbsolute(cmd)) {
+    return { resolvedCmd: cmd, augmentedPath };
+  }
+
+  for (const dir of searchDirs) {
+    const candidate = path.join(dir, cmd);
+    try {
+      const st = fs.statSync(candidate);
+      if (st.isFile()) {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return { resolvedCmd: candidate, augmentedPath };
+      }
+    } catch {
+      // Continue searching
+    }
+  }
+
+  return { resolvedCmd: cmd, augmentedPath };
+}
+
 export function defaultExecFileRunner(
   cmd: string,
   args: string[],
   cwd?: string
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    if (cwd !== undefined) {
+      let cwdStat: fs.Stats | undefined;
+      try {
+        cwdStat = fs.statSync(cwd);
+      } catch {
+        cwdStat = undefined;
+      }
+      if (!cwdStat || !cwdStat.isDirectory()) {
+        reject(
+          new Error(
+            `${cmd} ${args.join(" ")} failed: target repository directory "${cwd}" does not exist (check undine.targetGitRepo)`
+          )
+        );
+        return;
+      }
+    }
+
+    const { resolvedCmd, augmentedPath } = resolveCommandExecutable(cmd);
+    const childEnv = { ...process.env, PATH: augmentedPath };
+
     execFile(
-      cmd,
+      resolvedCmd,
       args,
-      { cwd, maxBuffer: 10 * 1024 * 1024 },
+      { cwd, env: childEnv, maxBuffer: 10 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            if (cwd && !fs.existsSync(cwd)) {
+              reject(
+                new Error(
+                  `${cmd} ${args.join(" ")} failed: target repository directory "${cwd}" does not exist (check undine.targetGitRepo)`
+                )
+              );
+              return;
+            }
+            reject(
+              new Error(
+                `${cmd} ${args.join(" ")} failed: executable "${cmd}" not found in PATH (${augmentedPath})`
+              )
+            );
+            return;
+          }
           const detail = (stderr || stdout || err.message || "").trim();
           reject(new Error(`${cmd} ${args.join(" ")} failed: ${detail}`));
           return;
@@ -248,15 +330,23 @@ export async function importPatchWithStgit(
  * Expands a configured `undine.targetGitRepo` setting against an optional workspace folder path.
  * Supports:
  * - "${workspaceFolder}" or "${workspaceFolder}/linux" (and "${workspaceRoot}")
+ * - "${workspaceFolder:folderName}" for multi-root workspaces
  * - Relative sub-repository paths such as "linux" or "./kernel/linux" (resolved against workspaceFolderPath)
- * - Home directory prefix "~" or "~/..."
+ * - Home directory prefix "~", "~/...", "${userHome}", "$HOME", and "${env:VAR}"
  * - Absolute filesystem paths
  */
 export function expandTargetGitRepoPath(
   configuredPath: string | undefined,
-  workspaceFolderPath?: string
+  workspaceFolderPath?: string,
+  workspaceFolders?: ReadonlyArray<{ name?: string; uri?: { fsPath?: string; path?: string } }>
 ): string {
-  const trimmed = (configuredPath || "").trim();
+  let trimmed = (configuredPath || "").trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
   const wsPath = (workspaceFolderPath || "").trim();
 
   if (!trimmed) {
@@ -264,6 +354,46 @@ export function expandTargetGitRepoPath(
   }
 
   let expanded = trimmed;
+  const home = os.homedir();
+
+  // Expand ${userHome}, $HOME, and ${env:VAR}
+  expanded = expanded.replace(/\$\{userHome\}/g, home);
+  expanded = expanded.replace(/\$\{env:([^}]+)\}/g, (_m, varName: string) => {
+    if (varName === "HOME") {
+      return process.env.HOME || home;
+    }
+    return process.env[varName] || "";
+  });
+  if (expanded === "$HOME") {
+    expanded = home;
+  } else if (expanded.startsWith("$HOME/") || expanded.startsWith("$HOME\\")) {
+    expanded = path.join(home, expanded.slice("$HOME/".length));
+  }
+
+  // Expand ${workspaceFolder:name}
+  if (/\$\{workspaceFolder:[^}]+\}/.test(expanded)) {
+    let unresolvedNamedFolder = false;
+    expanded = expanded.replace(/\$\{workspaceFolder:([^}]+)\}/g, (_m, folderName: string) => {
+      const targetName = folderName.trim();
+      const matched = (workspaceFolders || []).find((f) => {
+        const fPath = f.uri?.fsPath || f.uri?.path || "";
+        return f.name === targetName || (fPath && path.basename(fPath) === targetName);
+      });
+      const matchedPath = (matched?.uri?.fsPath || matched?.uri?.path || "").trim();
+      if (matchedPath) {
+        return matchedPath;
+      }
+      if (wsPath && path.basename(wsPath) === targetName) {
+        return wsPath;
+      }
+      unresolvedNamedFolder = true;
+      return "";
+    });
+    if (unresolvedNamedFolder) {
+      return "";
+    }
+  }
+
   if (expanded.includes("${workspaceFolder}") || expanded.includes("${workspaceRoot}")) {
     if (!wsPath) {
       return "";
@@ -274,9 +404,9 @@ export function expandTargetGitRepoPath(
   }
 
   if (expanded === "~") {
-    expanded = os.homedir();
+    expanded = home;
   } else if (expanded.startsWith("~/") || expanded.startsWith("~\\")) {
-    expanded = path.join(os.homedir(), expanded.slice(2));
+    expanded = path.join(home, expanded.slice(2));
   }
 
   if (!path.isAbsolute(expanded)) {
@@ -291,6 +421,22 @@ export function expandTargetGitRepoPath(
   return expanded;
 }
 
+function isExistingGitRepoOrDir(dirPath: string): { isGitRepo: boolean; isDir: boolean } {
+  if (!dirPath) {
+    return { isGitRepo: false, isDir: false };
+  }
+  try {
+    const st = fs.statSync(dirPath);
+    if (!st.isDirectory()) {
+      return { isGitRepo: false, isDir: false };
+    }
+    const gitEntry = path.join(dirPath, ".git");
+    return { isGitRepo: fs.existsSync(gitEntry), isDir: true };
+  } catch {
+    return { isGitRepo: false, isDir: false };
+  }
+}
+
 /**
  * Resolves the workspace-scoped `undine.targetGitRepo` setting, prompting the user
  * if no workspace folder or valid path can be determined.
@@ -300,13 +446,50 @@ export async function resolveTargetGitRepo(promptText?: string): Promise<string 
   const getWsFolder = (vscode.workspace as any).getWorkspaceFolder;
   const activeFolder =
     activeUri && typeof getWsFolder === "function" ? getWsFolder.call(vscode.workspace, activeUri) : undefined;
-  const folders = vscode.workspace.workspaceFolders;
-  const targetFolder = activeFolder || (folders && folders.length > 0 ? folders[0] : undefined);
-  const wsPath: string | undefined = targetFolder?.uri?.fsPath || targetFolder?.uri?.path;
+  const folders: ReadonlyArray<any> = vscode.workspace.workspaceFolders || [];
 
-  const cfg = vscode.workspace.getConfiguration("undine", targetFolder?.uri);
-  const configured = cfg.get<string>("targetGitRepo");
-  let targetRepo = expandTargetGitRepoPath(configured, wsPath);
+  const candidateFolders = activeFolder
+    ? [activeFolder, ...folders.filter((f) => f !== activeFolder)]
+    : [...folders];
+
+  let targetRepo = "";
+
+  if (candidateFolders.length > 0) {
+    let firstExpanded = "";
+    let firstExistingDir = "";
+
+    for (const folder of candidateFolders) {
+      const wsPath: string | undefined = folder?.uri?.fsPath || folder?.uri?.path;
+      const cfg = vscode.workspace.getConfiguration("undine", folder?.uri);
+      const configured = cfg.get<string>("targetGitRepo");
+      const expanded = expandTargetGitRepoPath(configured, wsPath, folders);
+      if (!expanded) {
+        continue;
+      }
+      if (!firstExpanded) {
+        firstExpanded = expanded;
+      }
+      const check = isExistingGitRepoOrDir(expanded);
+      if (check.isGitRepo) {
+        targetRepo = expanded;
+        break;
+      }
+      if (check.isDir && !firstExistingDir) {
+        firstExistingDir = expanded;
+      }
+    }
+
+    if (!targetRepo) {
+      targetRepo = firstExistingDir || firstExpanded;
+    }
+  } else {
+    const cfg = vscode.workspace.getConfiguration("undine");
+    const configured = cfg.get<string>("targetGitRepo");
+    targetRepo = expandTargetGitRepoPath(configured, undefined, folders);
+  }
+
+  const defaultWsPath: string | undefined =
+    candidateFolders[0]?.uri?.fsPath || candidateFolders[0]?.uri?.path;
 
   if (!targetRepo && promptText) {
     const input = await vscode.window.showInputBox({
@@ -315,11 +498,8 @@ export async function resolveTargetGitRepo(promptText?: string): Promise<string 
     });
     if (input && input.trim()) {
       const rawInput = input.trim();
-      if (rawInput === "~" || rawInput.startsWith("~/") || rawInput.startsWith("~\\") || path.isAbsolute(rawInput) || wsPath) {
-        targetRepo = expandTargetGitRepoPath(rawInput, wsPath);
-      } else {
-        targetRepo = rawInput;
-      }
+      const expanded = expandTargetGitRepoPath(rawInput, defaultWsPath, folders);
+      targetRepo = expanded || rawInput;
     }
   }
 

@@ -9,6 +9,8 @@ import {
   importPatchWithStgit,
   expandTargetGitRepoPath,
   resolveTargetGitRepo,
+  resolveCommandExecutable,
+  defaultExecFileRunner,
   registerB4Commands,
 } from "../../src/commands/b4Commands";
 import { mockVscode } from "../vscodeMock";
@@ -228,6 +230,45 @@ describe("StGit Patch Import (importpatch.sh logic)", () => {
     // Missing workspace folder with relative or ${workspaceFolder} setting returns ""
     assert.strictEqual(expandTargetGitRepoPath("${workspaceFolder}/linux", undefined), "");
     assert.strictEqual(expandTargetGitRepoPath("linux", undefined), "");
+
+    // ${userHome}, $HOME, ${workspaceFolder:name}, and quoted paths
+    assert.strictEqual(
+      expandTargetGitRepoPath('"${userHome}/ksrc/linux"', wsRoot),
+      path.join(os.homedir(), "ksrc/linux")
+    );
+    assert.strictEqual(
+      expandTargetGitRepoPath("$HOME/ksrc/linux", wsRoot),
+      path.join(os.homedir(), "ksrc/linux")
+    );
+    assert.strictEqual(
+      expandTargetGitRepoPath("${workspaceFolder:kernel}/linux", wsRoot, [
+        { name: "wrapper", uri: { fsPath: "/workspace/wrapper" } },
+        { name: "kernel", uri: { fsPath: "/workspace/kernel-root" } },
+      ]),
+      path.resolve("/workspace/kernel-root/linux")
+    );
+  });
+
+  it("should report a clear missing directory error instead of spawn stg ENOENT when targetRepo does not exist", async () => {
+    const missingDir = path.join(os.tmpdir(), `undine-nonexistent-repo-${process.pid}-${Date.now()}`);
+    await assert.rejects(
+      async () => {
+        await defaultExecFileRunner("stg", ["import", "-m", "/tmp/test.eml"], missingDir);
+      },
+      (err: Error) => {
+        assert.ok(
+          err.message.includes(`target repository directory "${missingDir}" does not exist`),
+          `unexpected error message: ${err.message}`
+        );
+        return true;
+      }
+    );
+
+    const resolved = resolveCommandExecutable("stg", "");
+    assert.ok(
+      resolved.augmentedPath.includes("/usr/bin"),
+      "augmentedPath should include /usr/bin even when input PATH is empty"
+    );
   });
 
   it("should resolve workspace-scoped targetGitRepo for applyPatch and importPatchStg", async () => {
