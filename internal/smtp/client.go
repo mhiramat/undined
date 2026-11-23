@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -169,6 +170,145 @@ func encodeAddressList(addrs string) string {
 		}
 	}
 	return strings.Join(encodedParts, ", ")
+}
+
+// HeaderField represents an additional RFC 5322 header name/value pair.
+type HeaderField struct {
+	Name  string
+	Value string
+}
+
+// PlainTextMessageOptions configures BuildPlainTextMessage for strict LKML plain-text emails.
+type PlainTextMessageOptions struct {
+	To           string
+	Cc           string
+	Subject      string
+	Body         string
+	InReplyTo    string
+	References   string
+	CustomFrom   string
+	MessageID    string
+	Date         time.Time
+	ExtraHeaders []HeaderField
+}
+
+// GenerateGitSendEmailMessageID generates a deterministic git-send-email style Message-ID:
+// <YYYYMMDDHHMMSS.<token>-<seq>-<fromEmail>>.
+func GenerateGitSendEmailMessageID(ts time.Time, token int, seq int, fromEmail string) string {
+	if ts.IsZero() {
+		ts = time.Now().UTC()
+	}
+	if seq <= 0 {
+		seq = 1
+	}
+	if token < 0 {
+		token = -token
+	}
+	addr := sanitizeHeaderValue(fromEmail)
+	if addr == "" || !strings.Contains(addr, "@") {
+		addr = "dev@undined.local"
+	}
+	return fmt.Sprintf("<%s.%05d-%d-%s>", ts.UTC().Format("20060102150405"), token%100000, seq, addr)
+}
+
+// RandomSeriesToken returns a cryptographically random 5-digit integer in [10000, 99999]
+// suitable for git-send-email style Message-IDs.
+func RandomSeriesToken() int {
+	var b [4]byte
+	// crypto/rand.Read never returns an error on supported platforms (Go 1.24+).
+	_, _ = rand.Read(b[:])
+	return 10000 + int(binary.BigEndian.Uint32(b[:])%90000)
+}
+
+// BuildPlainTextMessage constructs a strict 8-bit UTF-8 plain-text RFC 5322 email
+// preserving tabs and line breaks verbatim, returning the raw message and its Message-ID.
+func (c *Client) BuildPlainTextMessage(opts PlainTextMessageOptions) (string, string) {
+	fromEmail := ""
+	fromName := ""
+	if c != nil && c.Config != nil {
+		fromEmail = sanitizeHeaderValue(c.Config.SMTP.FromEmail)
+		fromName = sanitizeHeaderValue(c.Config.SMTP.FromName)
+	}
+	if fromEmail == "" {
+		fromEmail = constants.DefaultFromEmail
+	}
+
+	fromHdr := opts.CustomFrom
+	if fromHdr == "" {
+		if fromName != "" {
+			fromHdr = encodeAddressList(fmt.Sprintf("%s <%s>", fromName, fromEmail))
+		} else {
+			fromHdr = fromEmail
+		}
+	} else {
+		fromHdr = encodeAddressList(fromHdr)
+	}
+
+	toAddr := encodeAddressList(opts.To)
+	ccAddr := encodeAddressList(opts.Cc)
+	subject := encodeHeaderValue(opts.Subject)
+	inReplyTo := sanitizeHeaderValue(opts.InReplyTo)
+	references := sanitizeHeaderValue(opts.References)
+
+	dateVal := opts.Date
+	if dateVal.IsZero() {
+		dateVal = time.Now()
+	}
+	dateStr := dateVal.Format("Mon, 02 Jan 2006 15:04:05 -0700")
+
+	msgID := sanitizeHeaderValue(opts.MessageID)
+	if cleaned := parser.CleanMsgID(msgID); cleaned != "" {
+		msgID = "<" + cleaned + ">"
+	} else {
+		msgID = GenerateGitSendEmailMessageID(dateVal, RandomSeriesToken(), 1, fromEmail)
+	}
+
+	lines := []string{
+		fmt.Sprintf("From: %s", fromHdr),
+		fmt.Sprintf("To: %s", toAddr),
+	}
+	if strings.TrimSpace(ccAddr) != "" {
+		lines = append(lines, fmt.Sprintf("Cc: %s", ccAddr))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Subject: %s", subject),
+		fmt.Sprintf("Date: %s", dateStr),
+		fmt.Sprintf("Message-ID: %s", msgID),
+		fmt.Sprintf("X-Mailer: %s", constants.DefaultXMailer),
+	)
+
+	if strings.TrimSpace(inReplyTo) != "" {
+		cleanedInReply := parser.CleanMsgID(inReplyTo)
+		if cleanedInReply != "" {
+			lines = append(lines, fmt.Sprintf("In-Reply-To: <%s>", cleanedInReply))
+		}
+	}
+	if strings.TrimSpace(references) != "" {
+		lines = append(lines, fmt.Sprintf("References: %s", strings.TrimSpace(references)))
+	}
+
+	for _, hdr := range opts.ExtraHeaders {
+		name := sanitizeHeaderValue(hdr.Name)
+		val := sanitizeHeaderValue(hdr.Value)
+		if name == "" || strings.Contains(name, ":") {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s", name, val))
+	}
+
+	lines = append(lines,
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=utf-8",
+		"Content-Transfer-Encoding: 8bit",
+		"",
+	)
+
+	headerBlock := strings.Join(lines, "\r\n") + "\r\n"
+	body := opts.Body
+	if !strings.HasSuffix(body, "\n") {
+		body += "\n"
+	}
+	return headerBlock + body, msgID
 }
 
 // BuildMessage constructs an RFC822 email enforcing LKML plaintext rules and project identity.
