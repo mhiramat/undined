@@ -804,10 +804,12 @@ export function openInternalEditor({
       }
 
       if (isStandalone) {
+        savedSnapshot = getDraftSnapshot();
         setTimeout(() => {
           window.close();
         }, 500);
       } else {
+        savedSnapshot = getDraftSnapshot();
         closeInternalEditor();
 
         // Refresh folder counts and message list
@@ -832,8 +834,32 @@ export function openInternalEditor({
 
   sendBtn.addEventListener("click", triggerSend);
 
-  // Event: Save Draft
-  saveDraftBtn.addEventListener("click", async () => {
+  function getDraftSnapshot() {
+    return JSON.stringify({
+      to: toInput.value,
+      cc: ccInput.value,
+      subject: subjectInput.value,
+      body: bodyTextarea.value,
+      attachments: sessionAttachments.map((att) => ({
+        filename: att.filename || "",
+        content_type: att.content_type || "",
+        size: Number(att.size) || 0,
+        content_base64: att.content_base64 || "",
+        source_message_id: att.source_message_id ?? null,
+        source_attachment_index: att.source_attachment_index ?? null,
+      })),
+    });
+  }
+
+  let savedSnapshot = getDraftSnapshot();
+  let isUnsavedPromptOpen = false;
+
+  function isDraftDirty() {
+    return getDraftSnapshot() !== savedSnapshot;
+  }
+
+  // Event: Save Draft (reusable by Save Draft button and Save & Close confirmation)
+  async function performSaveDraft() {
     saveDraftBtn.disabled = true;
     saveDraftBtn.innerText = "⏳ Saving...";
 
@@ -864,6 +890,7 @@ export function openInternalEditor({
         }
       }
 
+      savedSnapshot = getDraftSnapshot();
       showToast("Draft saved to 'Drafts' folder!", "success");
       saveDraftBtn.disabled = false;
       saveDraftBtn.innerText = "💾 Save Draft";
@@ -894,12 +921,16 @@ export function openInternalEditor({
       } catch {
         // Ignored if folders/store not loaded in standalone window
       }
+      return true;
     } catch (err) {
       showToast(`Save draft failed: ${err.message}`, "error");
       saveDraftBtn.disabled = false;
       saveDraftBtn.innerText = "💾 Save Draft";
+      return false;
     }
-  });
+  }
+
+  saveDraftBtn.addEventListener("click", performSaveDraft);
 
   // Event: Hand off to External Editor
   externalBtn.addEventListener("click", async () => {
@@ -914,6 +945,7 @@ export function openInternalEditor({
         ccInput.value.trim() || null,
         subjectInput.value.trim()
       );
+      savedSnapshot = getDraftSnapshot();
       if (isStandalone) {
         window.close();
       } else {
@@ -925,13 +957,100 @@ export function openInternalEditor({
     }
   });
 
-  // Close handlers
-  const handleEditorClose = () => {
+  function forceCloseEditor() {
+    savedSnapshot = getDraftSnapshot();
     if (isStandalone) {
       window.close();
     } else {
       closeInternalEditor();
     }
+  }
+
+  function showUnsavedClosePrompt() {
+    if (isUnsavedPromptOpen) return;
+    isUnsavedPromptOpen = true;
+
+    const promptBackdrop = document.createElement("div");
+    promptBackdrop.className = "composer-unsaved-backdrop";
+    promptBackdrop.id = "composer-unsaved-backdrop";
+    promptBackdrop.innerHTML = `
+      <div class="composer-unsaved-dialog" role="dialog" aria-modal="true" aria-labelledby="composer-unsaved-title">
+        <div class="composer-unsaved-header">
+          <h4 id="composer-unsaved-title">Unsaved Draft Changes</h4>
+        </div>
+        <div class="composer-unsaved-body">
+          This draft has unsaved modifications. Would you like to save it to Drafts before closing?
+        </div>
+        <div class="composer-unsaved-actions">
+          <button type="button" class="composer-btn secondary" id="btn-unsaved-cancel">Cancel</button>
+          <button type="button" class="composer-btn danger" id="btn-unsaved-discard">🗑️ Discard &amp; Close</button>
+          <button type="button" class="composer-btn primary" id="btn-unsaved-save">💾 Save &amp; Close</button>
+        </div>
+      </div>
+    `;
+
+    modalEl.appendChild(promptBackdrop);
+
+    const saveCloseBtn = promptBackdrop.querySelector("#btn-unsaved-save");
+    const discardBtn = promptBackdrop.querySelector("#btn-unsaved-discard");
+    const cancelBtn = promptBackdrop.querySelector("#btn-unsaved-cancel");
+
+    const dismissPrompt = () => {
+      isUnsavedPromptOpen = false;
+      window.removeEventListener("keydown", promptKeyHandler, true);
+      promptBackdrop.remove();
+      bodyTextarea.focus();
+    };
+
+    const promptKeyHandler = (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        dismissPrompt();
+      }
+    };
+    window.addEventListener("keydown", promptKeyHandler, true);
+
+    cancelBtn?.addEventListener("click", dismissPrompt);
+    promptBackdrop.addEventListener("click", (ev) => {
+      if (ev.target === promptBackdrop) {
+        dismissPrompt();
+      }
+    });
+
+    discardBtn?.addEventListener("click", () => {
+      isUnsavedPromptOpen = false;
+      window.removeEventListener("keydown", promptKeyHandler, true);
+      promptBackdrop.remove();
+      forceCloseEditor();
+    });
+
+    saveCloseBtn?.addEventListener("click", async () => {
+      saveCloseBtn.disabled = true;
+      discardBtn.disabled = true;
+      cancelBtn.disabled = true;
+      saveCloseBtn.innerText = "⏳ Saving...";
+      const ok = await performSaveDraft();
+      isUnsavedPromptOpen = false;
+      window.removeEventListener("keydown", promptKeyHandler, true);
+      promptBackdrop.remove();
+      if (ok) {
+        forceCloseEditor();
+      } else {
+        bodyTextarea.focus();
+      }
+    });
+
+    saveCloseBtn?.focus();
+  }
+
+  // Close handlers (guard against losing unsaved changes on Esc or Close click)
+  const handleEditorClose = () => {
+    if (isDraftDirty()) {
+      showUnsavedClosePrompt();
+      return;
+    }
+    forceCloseEditor();
   };
 
   closeBtn.addEventListener("click", handleEditorClose);
@@ -939,19 +1058,35 @@ export function openInternalEditor({
   // Global key listener for Esc inside modal/standalone
   const escHandler = (e) => {
     if (e.key === "Escape") {
+      if (isUnsavedPromptOpen) {
+        return;
+      }
       e.preventDefault();
       handleEditorClose();
     }
   };
   window.addEventListener("keydown", escHandler);
   modalEl._escHandler = escHandler;
-  modalEl._escHandler = escHandler;
+
+  if (isStandalone) {
+    const beforeUnloadHandler = (e) => {
+      if (isDraftDirty()) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnloadHandler);
+    modalEl._beforeUnloadHandler = beforeUnloadHandler;
+  }
 }
 
 export function closeInternalEditor() {
   if (activeModal) {
     if (activeModal._escHandler) {
       window.removeEventListener("keydown", activeModal._escHandler);
+    }
+    if (activeModal._beforeUnloadHandler) {
+      window.removeEventListener("beforeunload", activeModal._beforeUnloadHandler);
     }
     activeModal.remove();
     activeModal = null;
@@ -1707,6 +1842,7 @@ function setupAddressAutocomplete(inputEl, dropdownEl) {
       }
     } else if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
       hideDropdown();
     }
   });

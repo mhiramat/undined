@@ -3940,3 +3940,52 @@ body.composer-standalone-body {
   font-family: var(--font-mono, monospace);
   font-size: 12px;
 }
+
+/* Unsaved Draft Close Confirmation Dialog */
+.composer-unsaved-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10100;
+}
+.composer-unsaved-dialog {
+  width: min(440px, 90vw);
+  background: var(--bg-panel, #1e293b);
+  border: 1px solid var(--border-color, #475569);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+.composer-unsaved-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #334155);
+}
+.composer-unsaved-header h4 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-main, #e2e8f0);
+}
+.composer-unsaved-body {
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted, #cbd5e1);
+}
+.composer-unsaved-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color, #334155);
+}
+.composer-btn.danger {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+.composer-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.3);
+}
