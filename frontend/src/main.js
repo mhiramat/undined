@@ -2,7 +2,7 @@
  * Main application bootstrap for Project Undine.
  */
 
-import { fetchConfig, fetchFolders, fetchMessages, setMessageTag, setMessagesTagBatch } from "./api.js";
+import { fetchConfig, fetchFolders, fetchMessages, fetchSeriesList, setMessageTag, setMessagesTagBatch } from "./api.js";
 import { getCachedTags } from "./tags.js";
 import { renderFolderPane } from "./components/FolderPane.js";
 import { renderSummaryPane } from "./components/SummaryPane.js";
@@ -233,13 +233,37 @@ async function init() {
 
   // Initial load
   try {
-    const folders = await fetchFolders();
+    const [folders, seriesList] = await Promise.all([
+      fetchFolders(),
+      fetchSeriesList().catch(() => []),
+    ]);
     store.setFolders(folders);
+    store.setSeriesList(seriesList);
 
-    const defaultFolderId = store.getState().selectedFolderId;
-    if (defaultFolderId) {
-      const msgs = await fetchMessages(defaultFolderId);
-      store.setMessages(msgs);
+    const handleHashNavigation = () => {
+      const hash = window.location.hash || "";
+      if (hash.startsWith("#series/")) {
+        const sid = decodeURIComponent(hash.slice("#series/".length));
+        if (sid) {
+          const draftsFolder = store.getState().folders.find((f) => f.name === "Drafts");
+          if (draftsFolder && store.getState().selectedFolderId !== draftsFolder.id) {
+            store.selectFolder(draftsFolder.id);
+          }
+          store.selectSeries(sid);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    window.addEventListener("hashchange", handleHashNavigation);
+
+    if (!handleHashNavigation()) {
+      const defaultFolderId = store.getState().selectedFolderId;
+      if (defaultFolderId) {
+        const msgs = await fetchMessages(defaultFolderId);
+        store.setMessages(msgs);
+      }
     }
   } catch (err) {
     console.error("Failed to initialize UndineD:", err);

@@ -19,6 +19,9 @@ import {
   EVENT_MESSAGE_TAG_UPDATED,
   EVENT_NOTES_UPDATED,
   EVENT_SELECTION_CHANGED,
+  EVENT_SERIES_LIST_UPDATED,
+  EVENT_SERIES_PROGRESS_UPDATED,
+  EVENT_SERIES_SELECTED,
   EVENT_WIDTH_RESIZED,
   FOLDER_B4_IMPORTS,
 } from "./constants.js";
@@ -56,6 +59,9 @@ class UndineDStore {
         output: null,
         queue: [],
       },
+      seriesList: [],
+      selectedSeriesId: null,
+      seriesProgress: {},
     };
     this.listeners = new Set();
   }
@@ -602,6 +608,7 @@ class UndineDStore {
 
   selectMessageIndex(index) {
     if (index < 0 || index >= this.state.messages.length) return;
+    this.state.selectedSeriesId = null;
     this.state.selectedMessageIndex = index;
     const msg = this.state.messages[index];
     this.state.selectedMessageId = msg.id;
@@ -1111,6 +1118,41 @@ class UndineDStore {
     if (prevIdx >= 0) {
       this.selectMessageIndex(prevIdx);
     }
+  }
+
+  setSeriesList(list) {
+    this.state.seriesList = Array.isArray(list) ? list : [];
+    this.notify(EVENT_SERIES_LIST_UPDATED, this.state.seriesList);
+  }
+
+  selectSeries(seriesId) {
+    this.state.selectedSeriesId = seriesId || null;
+    if (seriesId) {
+      this.state.selectedMessageId = null;
+      this.state.selectedMessageIndex = -1;
+      this.state.activeMessageDetail = null;
+    }
+    this.notify(EVENT_SERIES_SELECTED, this.state.selectedSeriesId);
+  }
+
+  updateSeriesProgress(progress) {
+    if (!progress || !progress.series_id) return;
+    this.state.seriesProgress[progress.series_id] = progress;
+    const item = this.state.seriesList.find((s) => s.series_id === progress.series_id);
+    if (item && progress.status) {
+      item.status = progress.status;
+      if (Array.isArray(item.items) && progress.seq_index != null) {
+        const target = item.items.find((it) => it.seq_index === progress.seq_index);
+        if (target) {
+          target.status = progress.status;
+          if (progress.error_message) {
+            target.error_message = progress.error_message;
+          }
+        }
+      }
+      this.notify(EVENT_SERIES_LIST_UPDATED, this.state.seriesList);
+    }
+    this.notify(EVENT_SERIES_PROGRESS_UPDATED, progress);
   }
 }
 

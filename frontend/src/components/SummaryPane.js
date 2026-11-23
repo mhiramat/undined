@@ -20,6 +20,9 @@ import {
   EVENT_FOLDER_SYNC_FINISHED,
   EVENT_FOLDER_SYNC_PROGRESS,
   EVENT_SELECTION_CHANGED,
+  EVENT_SERIES_LIST_UPDATED,
+  EVENT_SERIES_SELECTED,
+  EVENT_SERIES_PROGRESS_UPDATED,
 } from "../constants.js";
 
 function showToast(message, type = "info") {
@@ -401,7 +404,27 @@ export function renderSummaryPane(container) {
         <tbody class="summary-tbody">
     `;
 
-    if (messages.length === 0) {
+    const { seriesList, selectedSeriesId } = store.getState();
+    const seriesDraftIdSet = new Set();
+    const activeSeriesRows = [];
+    if (isDraft && Array.isArray(seriesList) && seriesList.length > 0) {
+      for (const ser of seriesList) {
+        if (!ser) continue;
+        const items = Array.isArray(ser.items) ? ser.items : [];
+        for (const it of items) {
+          if (it?.draft_msg_id != null) {
+            seriesDraftIdSet.add(String(it.draft_msg_id));
+          }
+        }
+        activeSeriesRows.push(ser);
+      }
+    }
+
+    const visibleMessages = isDraft && seriesDraftIdSet.size > 0
+      ? messages.filter((m) => !seriesDraftIdSet.has(String(m.id)))
+      : messages;
+
+    if (visibleMessages.length === 0 && activeSeriesRows.length === 0) {
       const emptyMsg = hasFilter
         ? "No messages match the current filter."
         : (isDraft ? "No drafts in this folder." : "No messages in this folder.");
@@ -421,7 +444,37 @@ export function renderSummaryPane(container) {
         </tr>
       `;
     } else {
-      messages.forEach((m, idx) => {
+      for (const ser of activeSeriesRows) {
+        const items = Array.isArray(ser.items) ? ser.items : [];
+        const total = items.length;
+        const sentCount = items.filter((it) => it.status === "sent").length;
+        const primarySubject = items[0]?.subject || ser.series_key;
+        const isActiveSeries = selectedSeriesId === ser.series_id ? "active" : "";
+        let statusLabel = "Draft";
+        if (ser.status === "sending") statusLabel = `Sending ${sentCount}/${total}`;
+        else if (ser.status === "paused") statusLabel = `Paused ${sentCount}/${total}`;
+        else if (ser.status === "failed") statusLabel = `Failed (${sentCount}/${total})`;
+        else if (ser.status === "sent") statusLabel = "Sent ✓";
+
+        html += `
+          <tr class="summary-row series-queue-row ${isActiveSeries}" data-series-id="${escapeHtml(ser.series_id)}">
+            <td class="summary-unread-cell" title="Patch Series Draft Queue">📦</td>
+            <td class="summary-subject-cell">
+              <span class="series-row-prefix">[Series v${escapeHtml(ser.version || 1)} · ${total} msgs]</span>
+              <span class="series-row-subject">${escapeHtml(primarySubject)}</span>
+              ${ser.branch ? `<span class="series-branch-badge">${escapeHtml(ser.branch)}</span>` : ""}
+            </td>
+            <td class="summary-from-cell">${escapeHtml((ser.to_addrs || []).join(", "))}</td>
+            <td class="summary-tag-cell">
+              <span class="series-status-pill ${escapeHtml(ser.status || "draft")}">${escapeHtml(statusLabel)}</span>
+            </td>
+            <td class="summary-date-cell" style="color: var(--text-muted);">${escapeHtml(formatDate(ser.updated_at || ser.created_at))}</td>
+          </tr>
+        `;
+      }
+
+      visibleMessages.forEach((m) => {
+        const idx = messages.indexOf(m);
         const isActive = m.id === selectedMessageId ? "active" : "";
         const isUnread = !m.is_read ? "unread" : "";
         const unreadDot = !m.is_read ? `<span class="unread-dot">●</span>` : "";
@@ -638,6 +691,16 @@ export function renderSummaryPane(container) {
           return;
         }
 
+        const seriesRow = e.target.closest(".series-queue-row");
+        if (seriesRow) {
+          const sid = seriesRow.getAttribute("data-series-id");
+          if (sid) {
+            store.selectSeries(sid);
+            window.location.hash = `#series/${encodeURIComponent(sid)}`;
+          }
+          return;
+        }
+
         const row = e.target.closest(".summary-row");
         if (!row) return;
         const msgId = parseInt(row.getAttribute("data-id"), 10);
@@ -840,6 +903,12 @@ export function renderSummaryPane(container) {
       event === EVENT_FOLDER_SYNC_PROGRESS
     ) {
       renderSyncBanner();
+    } else if (
+      event === EVENT_SERIES_LIST_UPDATED ||
+      event === EVENT_SERIES_SELECTED ||
+      event === EVENT_SERIES_PROGRESS_UPDATED
+    ) {
+      renderTable();
     }
   });
 

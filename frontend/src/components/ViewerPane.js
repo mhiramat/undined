@@ -10,6 +10,7 @@ import { renderSideDiff, renderSavedNoteRowHtml } from "./SideDiff.js";
 import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNewMessage } from "./InternalEditor.js";
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
 import { openReviewResultDialog } from "./ReviewResultDialog.js";
+import { renderSeriesWorkspace } from "./SeriesWorkspace.js";
 import { linkifyUrls, linkifyUrlsWithUnicode } from "../linkify.js";
 import { isMarkdown, renderMarkdown, cleanBodyText } from "../markdown.js";
 import {
@@ -24,6 +25,8 @@ import {
   EVENT_AI_REVIEW_STATE_CHANGED,
   EVENT_MESSAGE_TAG_UPDATED,
   EVENT_MESSAGE_REPLIED_UPDATED,
+  EVENT_SERIES_SELECTED,
+  EVENT_SERIES_PROGRESS_UPDATED,
 } from "../constants.js";
 
 function isPendingAiReviewStatus(status) {
@@ -37,6 +40,7 @@ export function renderViewerPane(container) {
   }
   let showPatchwork = false;
   let currentDetail = null;
+  const seriesWorkspaceState = {};
   const messageTranslationStateMap = new Map();
 
   function getMessageTranslationState(msg) {
@@ -1732,10 +1736,28 @@ export function renderViewerPane(container) {
 
   // Subscribe to store events
   store.subscribe((event, payload) => {
+    if (event === EVENT_SERIES_SELECTED) {
+      if (payload) {
+        currentDetail = null;
+        renderSeriesWorkspace(container, payload, seriesWorkspaceState);
+      } else {
+        loadDetail(null);
+      }
+      return;
+    }
+    if (event === EVENT_SERIES_PROGRESS_UPDATED) {
+      const activeSid = store.getState().selectedSeriesId;
+      if (activeSid && payload?.series_id === activeSid) {
+        renderSeriesWorkspace(container, activeSid, seriesWorkspaceState);
+      }
+      return;
+    }
     if (event === EVENT_FOLDER_SELECTED) {
-      loadDetail(null);
+      if (!store.getState().selectedSeriesId) {
+        loadDetail(null);
+      }
     } else if (event === EVENT_MESSAGES_UPDATED) {
-      if (store.getState().messages.length === 0) {
+      if (store.getState().messages.length === 0 && !store.getState().selectedSeriesId) {
         loadDetail(null);
       }
     } else if (event === EVENT_MESSAGE_SELECTED) {

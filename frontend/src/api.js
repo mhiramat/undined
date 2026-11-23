@@ -769,6 +769,99 @@ export async function translateMessage(messageId, { targetLang = "", sourceLang 
   return flightPromise;
 }
 
+// ==============================================================================
+// Patch Series Drafts & Controlled Sequential Send API
+// ==============================================================================
+
+export async function fetchSeriesList() {
+  const res = await fetch(`${BASE_URL}/api/series`);
+  if (!res.ok) throw new Error("Failed to fetch patch series list");
+  const data = await res.json();
+  return Array.isArray(data?.series) ? data.series : [];
+}
+
+export async function fetchSeriesDetail(seriesId) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to load patch series" }));
+    throw new Error(err.detail || err.error || "Failed to load patch series");
+  }
+  return res.json();
+}
+
+export async function updateSeriesHeaders(seriesId, { to_addrs, cc_addrs, in_reply_to, send_delay_sec }) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}/headers`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to_addrs, cc_addrs, in_reply_to, send_delay_sec }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to update series headers" }));
+    throw new Error(err.detail || err.error || "Failed to update series headers");
+  }
+  return res.json();
+}
+
+export async function updateSeriesItem(seriesId, index, { subject, body, extra_to = [], extra_cc = [] }) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}/items/${encodeURIComponent(index)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subject, body, extra_to, extra_cc }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to save series item" }));
+    throw new Error(err.detail || err.error || "Failed to save series item");
+  }
+  return res.json();
+}
+
+export async function testSendSeriesSelf(seriesId) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}/test-send-self`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Test send failed" }));
+    throw new Error(err.detail || err.error || "Test send failed");
+  }
+  return res.json();
+}
+
+export async function sendSeries(seriesId) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to start series send" }));
+    throw new Error(err.detail || err.error || "Failed to start series send");
+  }
+  return res.json();
+}
+
+export async function cancelSeriesSend(seriesId) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to pause series send" }));
+    throw new Error(err.detail || err.error || "Failed to pause series send");
+  }
+  return res.json();
+}
+
+export async function deleteSeries(seriesId) {
+  const res = await fetch(`${BASE_URL}/api/series/${encodeURIComponent(seriesId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to discard series" }));
+    throw new Error(err.detail || err.error || "Failed to discard series");
+  }
+  return res.json();
+}
+
 
 
 

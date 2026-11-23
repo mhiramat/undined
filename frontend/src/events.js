@@ -3,7 +3,7 @@
  * Receives real-time invalidation events and triggers debounced REST re-fetching.
  */
 
-import { fetchConfig, fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
+import { fetchConfig, fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, fetchSeriesList, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
 
 function showToast(message, type = "info") {
   if (typeof document === "undefined") return;
@@ -312,6 +312,40 @@ export class NotificationChannel {
       this.debouncedSyncFolders("Drafts");
     });
 
+    this.es.addEventListener("series_draft_updated", (e) => {
+      fetchSeriesList()
+        .then((list) => this.store.setSeriesList(list))
+        .catch(() => {});
+      this.debouncedSyncFolders("Drafts");
+      try {
+        const data = JSON.parse(e.data);
+        if (data?.deleted && this.store.getState().selectedSeriesId === data.series_id) {
+          this.store.selectSeries(null);
+        }
+      } catch (_) {}
+    });
+
+    this.es.addEventListener("series_send_progress", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (!data) return;
+        this.store.updateSeriesProgress(data);
+        if (data.seq_index === undefined && data.status === "sent") {
+          showToast(`Series sent (${data.sent_count}/${data.total_count})!`, "success");
+          fetchSeriesList().then((list) => this.store.setSeriesList(list)).catch(() => {});
+          this.debouncedSyncFolders("Drafts");
+        } else if (data.status === "failed") {
+          showToast(`Series send failed at item ${data.seq_index}: ${data.error_message || "SMTP error"}`, "error");
+          fetchSeriesList().then((list) => this.store.setSeriesList(list)).catch(() => {});
+        } else if (data.status === "paused") {
+          showToast(`Series send paused (${data.sent_count}/${data.total_count} sent).`, "info");
+          fetchSeriesList().then((list) => this.store.setSeriesList(list)).catch(() => {});
+        }
+      } catch (err) {
+        console.warn("[UndineD SSE] Error handling series_send_progress:", err);
+      }
+    });
+
     this.es.addEventListener("patch.applied", () => {
       clearMessageDetailCache();
       this.debouncedSyncFolders();
@@ -321,6 +355,9 @@ export class NotificationChannel {
       clearMessageDetailCache();
       fetchConfig()
         .then((cfg) => this.store.setConfig(cfg))
+        .catch(() => {});
+      fetchSeriesList()
+        .then((list) => this.store.setSeriesList(list))
         .catch(() => {});
       this.debouncedSyncFolders();
       const activeDetail = this.store.getState().activeMessageDetail;

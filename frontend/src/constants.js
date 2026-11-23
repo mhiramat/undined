@@ -45,3 +45,6 @@ export const EVENT_NOTES_UPDATED = "notes_updated";
 export const EVENT_AI_REVIEW_STATE_CHANGED = "ai_review_state_changed";
 export const EVENT_WIDTH_RESIZED = "width_resized";
 export const EVENT_SELECTION_CHANGED = "selection_changed";
+export const EVENT_SERIES_LIST_UPDATED = "series_list_updated";
+export const EVENT_SERIES_SELECTED = "series_selected";
+export const EVENT_SERIES_PROGRESS_UPDATED = "series_progress_updated";
