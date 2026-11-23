@@ -99,6 +99,9 @@ data: {"folder":"INBOX","new_count":3,"timestamp":1761722400}
 | `series_draft_updated` | MCP (`stage_patch_series`) / Series Manager | `{"series_id": "string", "series_key": "string", "message_count": int, "root_message_id": "string", "status": "string"}` | Refresh `Drafts` folder and active series queue view.
 
  |
+| `series_send_progress` | Series Manager (`internal/series/sender.go`) | `{"series_id": "string", "seq_index": int, "status": "string", "sent_count": int, "total_count": int, "error_message": "string"}` | Update live send progress bar, item status badges, and pause/resume controls in the Series Workspace.
+
+ |
 | `patch.applied` | Patch Runner (`git am`) | `{"message_id": "string", "success": bool, "output": "string"}` | Display toast notification with patch application status.
 
  |

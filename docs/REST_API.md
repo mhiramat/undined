@@ -102,6 +102,14 @@ Real-time SSE notification stream broadcasting state invalidations to web client
     ```json
     { "draft_id": 15, "subject": "Re: [PATCH] fix", "recipient": "dev@example.com" }
     ```
+  - `series_draft_updated`: Emitted when a patch series draft queue is staged, updated, or discarded.
+    ```json
+    { "series_id": "ser_...", "series_key": "topic/fprobe-cleanup:v2", "message_count": 4, "status": "draft" }
+    ```
+  - `series_send_progress`: Emitted during human-initiated sequential SMTP transmission of a patch series (`sending`, `sent`, `paused`, `failed`).
+    ```json
+    { "series_id": "ser_...", "seq_index": 1, "status": "sent", "sent_count": 2, "total_count": 4 }
+    ```
   - `message.updated`: Emitted when flags, tags, or read/replied status change.
     ```json
     { "message_id": "<patch@kernel.org>", "folder": "INBOX", "is_read": true, "tag": "$cl_1" }
@@ -993,4 +1001,172 @@ Triggers a re-scan of all indexed emails in the `messages` table, extracting and
     "total": 58
   }
   ```
+
+---
+
+## 14. Patch Series Drafts & Controlled Sequential Send Endpoints
+
+All endpoints in this section require standard UndineD Web UI authentication (`undine_session` cookie or `Authorization: Bearer <token>`, plus CSRF Origin validation on mutating requests) and are **never** exposed over MCP.
+
+### `GET /api/series`
+Lists active and recently sent patch series draft queues ordered by `updated_at DESC`, including their ordered `items`.
+
+- **Response `200 OK`**:
+  ```json
+  {
+    "series": [
+      {
+        "series_id": "ser_...",
+        "series_key": "topic/fprobe-cleanup:v2",
+        "branch": "topic/fprobe-cleanup",
+        "version": 2,
+        "base_commit": "a1b2c3d4e5f6...",
+        "to_addrs": ["linux-kernel@vger.kernel.org"],
+        "cc_addrs": ["linux-trace-kernel@vger.kernel.org"],
+        "in_reply_to": "",
+        "status": "draft",
+        "send_delay_sec": 2,
+        "created_at": "2026-11-23T11:25:00Z",
+        "updated_at": "2026-11-23T11:25:00Z",
+        "items": [
+          {
+            "series_id": "ser_...",
+            "seq_index": 0,
+            "is_cover_letter": true,
+            "draft_msg_id": "101",
+            "rfc_message_id": "<20261123112500.41022-1-dev@kernel.org>",
+            "subject": "[PATCH v2 0/2] fprobe: cleanup",
+            "commit_sha": "",
+            "extra_to": [],
+            "extra_cc": [],
+            "status": "draft",
+            "error_message": ""
+          }
+        ]
+      }
+    ]
+  }
+  ```
+
+### `GET /api/series/{id}`
+Retrieves full metadata, live Maildir bodies for each item, deduplicated recipient lists, SMTP account info, and non-blocking validation warnings (`missing_signed_off_by`, `diff_hunk_mismatch`, `spaces_instead_of_tabs`) for a patch series queue.
+
+- **Path Parameters**: `id` (string): Series identifier (`series_id`).
+- **Response `200 OK`**:
+  ```json
+  {
+    "series_id": "ser_...",
+    "series_key": "topic/fprobe-cleanup:v2",
+    "status": "draft",
+    "send_delay_sec": 2,
+    "sent_count": 0,
+    "total_count": 3,
+    "all_to_addrs": ["linux-kernel@vger.kernel.org"],
+    "all_cc_addrs": ["linux-trace-kernel@vger.kernel.org"],
+    "from_email": "dev@kernel.org",
+    "smtp_host": "smtp.example.com",
+    "is_sending_now": false,
+    "warnings": [],
+    "items": [
+      {
+        "seq_index": 0,
+        "is_cover_letter": true,
+        "draft_msg_id": "101",
+        "rfc_message_id": "<20261123112500.41022-1-dev@kernel.org>",
+        "subject": "[PATCH v2 0/2] fprobe: cleanup",
+        "body": "Overview of changes...\n",
+        "status": "draft"
+      }
+    ]
+  }
+  ```
+- **Error Responses**: `404 Not Found` if `id` does not exist.
+
+### `PUT /api/series/{id}/headers`
+Bulk-updates shared `to_addrs`, `cc_addrs`, `in_reply_to`, and `send_delay_sec` across the series record and rewrites headers on all unsent Maildir `Drafts` files verbatim (preserving bodies byte-for-byte). Emits `series_draft_updated`.
+
+- **Request Body**:
+  ```json
+  {
+    "to_addrs": ["maintainer@kernel.org"],
+    "cc_addrs": ["linux-kernel@vger.kernel.org"],
+    "in_reply_to": "<prev-v1@kernel.org>",
+    "send_delay_sec": 2
+  }
+  ```
+- **Response `200 OK`**: Updated `GET /api/series/{id}` detail payload.
+- **Error Responses**: `400 Bad Request` (empty `to_addrs`), `404 Not Found`, `409 Conflict` (series currently sending).
+
+### `PUT /api/series/{id}/items/{index}`
+Saves human edits to a specific unsent cover letter or patch item, updating its Maildir `Drafts` file verbatim (preserving `\t` tabs and line endings) and running non-blocking diff integrity checks for non-cover patches. Emits `series_draft_updated`.
+
+- **Path Parameters**: `id` (string), `index` (integer `seq_index`).
+- **Request Body**:
+  ```json
+  {
+    "subject": "[PATCH v2 1/2] fprobe: simplify entry",
+    "body": "Commit message...\n\nSigned-off-by: Kernel Developer <dev@kernel.org>\n---\n...",
+    "extra_to": [],
+    "extra_cc": ["reviewer@example.com"]
+  }
+  ```
+- **Response `200 OK`**:
+  ```json
+  {
+    "item": { "seq_index": 1, "subject": "...", "body": "...", "status": "draft" },
+    "warnings": [
+      { "seq_index": 1, "code": "diff_hunk_mismatch", "message": "Patch 1 has unified diff hunk line counts that do not match its @@ header." }
+    ]
+  }
+  ```
+- **Error Responses**: `400 Bad Request`, `404 Not Found`, `409 Conflict` (item already sent or series currently sending).
+
+### `POST /api/series/{id}/test-send-self`
+Dry-run transmission that sends the series **only** to `smtp.from_email` with a `[TEST]` subject prefix and internal `X-Undine-Series-*` headers stripped. Never marks any items as `sent` and never deletes `Drafts` files.
+
+- **Response `200 OK`**:
+  ```json
+  {
+    "success": true,
+    "sent_count": 3
+  }
+  ```
+
+### `POST /api/series/{id}/send`
+Starts or resumes human-initiated sequential SMTP transmission (`0/N` -> `1/N` -> ... -> `N/N`) for all remaining unsent (`draft`/`failed`) items. Enforces a per-series single-flight lock, strips `X-Undine-Series-*` headers, persists each item as `sent` immediately upon SMTP `250 OK` (moving it out of `Drafts` into `Sent`), waits `send_delay_sec` between messages, and broadcasts live `series_send_progress` SSE events.
+
+- **Response `202 Accepted`**:
+  ```json
+  {
+    "success": true,
+    "series_id": "ser_...",
+    "status": "sending"
+  }
+  ```
+- **Error Responses**: `404 Not Found`, `409 Conflict` (already sending or all items already sent).
+
+### `POST /api/series/{id}/cancel`
+Gracefully pauses an active sequential send after the currently transmitting email finishes, transitioning the series to `status = "paused"` and emitting `series_send_progress`.
+
+- **Response `200 OK`**:
+  ```json
+  {
+    "success": true,
+    "series_id": "ser_...",
+    "cancelled": true
+  }
+  ```
+
+### `DELETE /api/series/{id}`
+Discards a patch series draft queue and deletes its remaining unsent Maildir `Drafts` files and SQLite records. Emits `series_draft_updated`.
+
+- **Response `200 OK`**:
+  ```json
+  {
+    "success": true,
+    "series_id": "ser_..."
+  }
+  ```
+- **Error Responses**: `404 Not Found`, `409 Conflict` (series currently sending).
+
 
