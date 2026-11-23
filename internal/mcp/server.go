@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -326,7 +327,8 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		{
 			"name": "create_review_draft",
 			"description": "Convert structured review comments into an LKML quoted reply in the local Drafts folder.\n\n        " +
-				"inline_notes format: [{\"file\": \"path/file.c\" (or \"DESCRIPTION\"), \"line_no\": 123, \"comment\": \"Review text...\"}]\n        ",
+				"inline_notes format: [{\"file\": \"path/file.c\" (or \"DESCRIPTION\"), \"line_no\": 123, \"comment\": \"Review text...\"}]\n        " +
+				"attachments format: array of file path strings or objects {\"path\": \"/path/to/artifact\", \"filename\": \"...\", \"content_type\": \"...\", \"content\": \"...\", \"content_base64\": \"...\"}\n        ",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "create_review_draftArguments",
@@ -337,6 +339,17 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"title": "Inline Notes",
 						"type":  "array",
 						"items": map[string]interface{}{"type": "object", "additionalProperties": true},
+					},
+					"attachments": map[string]interface{}{
+						"title":       "Attachments",
+						"type":        "array",
+						"description": "Optional MIME attachments to encode into the draft (file path strings or objects with path/file_path, content, or content_base64).",
+						"items": map[string]interface{}{
+							"anyOf": []map[string]interface{}{
+								{"type": "string"},
+								{"type": "object", "additionalProperties": true},
+							},
+						},
 					},
 				},
 				"required": []string{"target_message_id"},
@@ -359,7 +372,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 			"description": "Write a draft email message into the local Maildir Drafts folder for user review, editing, and dispatch.\n\n" +
 				"Supports drafting replies to existing messages (auto-deriving To, Cc, Subject, In-Reply-To, References) or composing new standalone messages.\n" +
 				"If in_reply_to (or target_message_id) is provided, recipient addresses and subject are automatically derived from the target message if omitted.\n" +
-				"Optionally accepts inline_notes to automatically format and merge line-specific review comments into LKML quote format.\n\n" +
+				"Optionally accepts inline_notes to automatically format and merge line-specific review comments into LKML quote format, and attachments to attach MIME-encoded files or artifacts.\n\n" +
 				"Args:\n" +
 				"  body: Plain-text body of the draft email (or use body_text / general_feedback).\n" +
 				"  in_reply_to: Message-ID (or DB ID) of the message being replied to (optional, alias: target_message_id).\n" +
@@ -368,6 +381,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 				"  cc: CC recipient email address(es) (optional, alias: cc_addr).\n" +
 				"  references: References header value (optional, auto-derived if replying).\n" +
 				"  inline_notes: Optional array of [{\"file\": \"...\", \"line_no\": 123, \"comment\": \"...\"}] to merge as LKML quotes into the draft.\n" +
+				"  attachments: Optional array of MIME attachments. Each item may be a local file path string or an object with {\"path\" (or \"file_path\"), optional \"filename\", optional \"content_type\"} or inline {\"filename\", \"content\" or \"content_base64\", optional \"content_type\"}.\n" +
 				"  append_signature: Boolean, whether to append configured ~/.signature (default: false).\n",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
@@ -389,6 +403,17 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"title": "Inline Notes",
 						"type":  "array",
 						"items": map[string]interface{}{"type": "object", "additionalProperties": true},
+					},
+					"attachments": map[string]interface{}{
+						"title":       "Attachments",
+						"type":        "array",
+						"description": "Optional MIME attachments to encode into the draft (file path strings or objects with path/file_path, content, or content_base64).",
+						"items": map[string]interface{}{
+							"anyOf": []map[string]interface{}{
+								{"type": "string"},
+								{"type": "object", "additionalProperties": true},
+							},
+						},
 					},
 					"append_signature": map[string]interface{}{"title": "Append Signature", "type": "boolean", "default": false},
 				},
@@ -419,6 +444,16 @@ func (s *Server) getToolsList() []map[string]interface{} {
 					"to":                map[string]interface{}{"title": "To", "type": "string"},
 					"subject":           map[string]interface{}{"title": "Subject", "type": "string"},
 					"cc":                map[string]interface{}{"title": "Cc", "type": "string"},
+					"attachments": map[string]interface{}{
+						"title": "Attachments",
+						"type":  "array",
+						"items": map[string]interface{}{
+							"anyOf": []map[string]interface{}{
+								{"type": "string"},
+								{"type": "object", "additionalProperties": true},
+							},
+						},
+					},
 				},
 			},
 			"outputSchema": map[string]interface{}{
@@ -447,6 +482,16 @@ func (s *Server) getToolsList() []map[string]interface{} {
 					"to":                map[string]interface{}{"title": "To", "type": "string"},
 					"subject":           map[string]interface{}{"title": "Subject", "type": "string"},
 					"cc":                map[string]interface{}{"title": "Cc", "type": "string"},
+					"attachments": map[string]interface{}{
+						"title": "Attachments",
+						"type":  "array",
+						"items": map[string]interface{}{
+							"anyOf": []map[string]interface{}{
+								{"type": "string"},
+								{"type": "object", "additionalProperties": true},
+							},
+						},
+					},
 				},
 			},
 			"outputSchema": map[string]interface{}{
@@ -800,6 +845,15 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		}, nil
 	}
 
+	attachments := make([]*parser.Attachment, 0)
+	if msg.FilePath != "" {
+		if rawBytes, readErr := os.ReadFile(msg.FilePath); readErr == nil {
+			if atts, parseErr := parser.ExtractAttachments(rawBytes); parseErr == nil && len(atts) > 0 {
+				attachments = atts
+			}
+		}
+	}
+
 	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_email(%q) -> SUCCESS (id=%d, subject=%q) (%.1fms)",
 		msgID, msg.ID, msg.Subject, durMs))
 
@@ -825,6 +879,7 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		"has_notes":        msg.HasNotes,
 		"file_path":        msg.FilePath,
 		"review_commit_id": msg.ReviewCommitID,
+		"attachments":      attachments,
 	}, nil
 }
 
@@ -918,6 +973,107 @@ func (s *Server) toolImportPatchSeriesB4(ctx context.Context, args map[string]in
 	}, nil
 }
 
+func parseMCPAttachments(raw []interface{}) ([]smtp.Attachment, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+
+	attachments := make([]smtp.Attachment, 0, len(raw))
+	var totalBytes int64
+
+	for idx, item := range raw {
+		var filePath, fileName, contentType, contentB64, contentText string
+		var hasInlineContent bool
+
+		switch v := item.(type) {
+		case string:
+			filePath = strings.TrimSpace(v)
+		case map[string]interface{}:
+			filePath = strings.TrimSpace(getString(v, "path", "file_path"))
+			fileName = strings.TrimSpace(getString(v, "filename", "name"))
+			contentType = strings.TrimSpace(getString(v, "content_type", "mime_type"))
+			contentB64 = strings.TrimSpace(getString(v, "content_base64", "base64", "data_base64"))
+			if _, ok := v["content"]; ok {
+				contentText = getString(v, "content")
+				hasInlineContent = true
+			} else if _, ok := v["text"]; ok {
+				contentText = getString(v, "text")
+				hasInlineContent = true
+			}
+		default:
+			return nil, fmt.Errorf("attachment %d must be a file path string or attachment object", idx+1)
+		}
+
+		var data []byte
+		if filePath != "" {
+			expandedPath := config.ExpandPath(filePath)
+			f, err := os.Open(expandedPath)
+			if err != nil {
+				return nil, fmt.Errorf("attachment %d: cannot open %q: %w", idx+1, filePath, err)
+			}
+			info, statErr := f.Stat()
+			if statErr != nil {
+				_ = f.Close()
+				return nil, fmt.Errorf("attachment %d: cannot stat %q: %w", idx+1, filePath, statErr)
+			}
+			if !info.Mode().IsRegular() {
+				_ = f.Close()
+				return nil, fmt.Errorf("attachment %d: %q is not a regular file", idx+1, filePath)
+			}
+			remaining := smtp.MaxAttachmentTotalBytes - totalBytes
+			if info.Size() > remaining {
+				_ = f.Close()
+				return nil, fmt.Errorf("total attachment size exceeds maximum limit of %d bytes", smtp.MaxAttachmentTotalBytes)
+			}
+			fileData, readErr := io.ReadAll(io.LimitReader(f, remaining+1))
+			_ = f.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("attachment %d: failed to read %q: %w", idx+1, filePath, readErr)
+			}
+			if int64(len(fileData)) > remaining {
+				return nil, fmt.Errorf("total attachment size exceeds maximum limit of %d bytes", smtp.MaxAttachmentTotalBytes)
+			}
+			data = fileData
+			if fileName == "" {
+				fileName = filepath.Base(expandedPath)
+			}
+		} else if contentB64 != "" {
+			if strings.HasPrefix(contentB64, "data:") {
+				if comma := strings.Index(contentB64, ","); comma != -1 {
+					contentB64 = contentB64[comma+1:]
+				}
+			}
+			decoded, err := base64.StdEncoding.DecodeString(contentB64)
+			if err != nil {
+				return nil, fmt.Errorf("attachment %d: invalid content_base64: %w", idx+1, err)
+			}
+			data = decoded
+		} else if hasInlineContent {
+			data = []byte(contentText)
+		} else {
+			return nil, fmt.Errorf("attachment %d: must provide path, content_base64, or content", idx+1)
+		}
+
+		totalBytes += int64(len(data))
+		if totalBytes > smtp.MaxAttachmentTotalBytes {
+			return nil, fmt.Errorf("total attachment size exceeds maximum limit of %d bytes", smtp.MaxAttachmentTotalBytes)
+		}
+
+		if contentType == "" {
+			contentType = smtp.DetectAttachmentContentType(fileName, data)
+		}
+		fileName = parser.SanitizeAttachmentFileName(fileName, idx, contentType)
+
+		attachments = append(attachments, smtp.Attachment{
+			FileName:    fileName,
+			ContentType: contentType,
+			Data:        data,
+		})
+	}
+
+	return attachments, nil
+}
+
 func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interface{}) (interface{}, error) {
 	t0 := time.Now()
 	targetMsgID := getString(args, "in_reply_to", "target_message_id", "reply_to", "reply_to_message_id", "message_id")
@@ -928,6 +1084,7 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 	references := getString(args, "references")
 	customFrom := getString(args, "custom_from", "from")
 	rawNotes := getSlice(args, "inline_notes")
+	rawAttachments := getSlice(args, "attachments")
 	appendSig := getBool(args, "append_signature", false)
 
 	if s.DB == nil || s.Maildir == nil {
@@ -1038,7 +1195,14 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 		}
 	}
 
-	if strings.TrimSpace(bodyText) == "" {
+	attachments, err := parseMCPAttachments(rawAttachments)
+	if err != nil {
+		durMs := time.Since(t0).Seconds() * 1000.0
+		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s() -> REJECTED (%v) (%.1fms)", toolName, err, durMs))
+		return map[string]interface{}{"success": false, "error": err.Error()}, nil
+	}
+
+	if strings.TrimSpace(bodyText) == "" && len(attachments) == 0 {
 		durMs := time.Since(t0).Seconds() * 1000.0
 		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s() -> REJECTED (Empty body) (%.1fms)", toolName, durMs))
 		return map[string]interface{}{"success": false, "error": "Draft body text is required"}, nil
@@ -1048,9 +1212,9 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 		subject = "(no subject)"
 	}
 
-	// Construct RFC 822 email via SMTP Client's BuildMessage
+	// Construct RFC 822 / MIME email via SMTP Client's BuildMessageWithAttachments
 	smtpClient := smtp.NewClient(s.Config, s.Maildir, s.DB)
-	rawMsg := smtpClient.BuildMessage(toAddr, subject, bodyText, ccAddr, inReplyToHdr, references, customFrom)
+	rawMsg := smtpClient.BuildMessageWithAttachments(toAddr, subject, bodyText, ccAddr, inReplyToHdr, references, customFrom, attachments)
 
 	_ = s.Maildir.EnsureFolder(constants.FolderDrafts)
 	draftFolder, err := s.DB.GetOrCreateFolder(constants.FolderDrafts, false)
@@ -1073,18 +1237,30 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 		msgID = savedMsg.MessageID
 	}
 
+	attMeta := make([]*parser.Attachment, 0, len(attachments))
+	for i, att := range attachments {
+		attMeta = append(attMeta, &parser.Attachment{
+			Index:       i,
+			FileName:    att.FileName,
+			ContentType: att.ContentType,
+			Size:        int64(len(att.Data)),
+		})
+	}
+
 	durMs := time.Since(t0).Seconds() * 1000.0
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: %s(subject=%q, to=%q) -> SUCCESS (draft_id=%d, msg_id=%q) (%.1fms)",
-		toolName, subject, toAddr, dbID, msgID, durMs))
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: %s(subject=%q, to=%q, attachments=%d) -> SUCCESS (draft_id=%d, msg_id=%q) (%.1fms)",
+		toolName, subject, toAddr, len(attachments), dbID, msgID, durMs))
 
 	return map[string]interface{}{
-		"success":    true,
-		"draft_id":   dbID,
-		"message_id": msgID,
-		"subject":    subject,
-		"to":         toAddr,
-		"cc":         ccAddr,
-		"file_path":  savedPath,
+		"success":          true,
+		"draft_id":         dbID,
+		"message_id":       msgID,
+		"subject":          subject,
+		"to":               toAddr,
+		"cc":               ccAddr,
+		"file_path":        savedPath,
+		"attachment_count": len(attMeta),
+		"attachments":      attMeta,
 	}, nil
 }
 

@@ -14,6 +14,7 @@ import (
 	"undined-go/internal/constants"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
+	"undined-go/internal/storage/parser"
 )
 
 func TestBuildMessageStrictHeaders(t *testing.T) {
@@ -562,3 +563,75 @@ func TestSendMessageUnquotedCommaInDisplayName(t *testing.T) {
 	}
 }
 
+func TestBuildMessageWithAttachmentsRoundTrip(t *testing.T) {
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+
+	binaryPayload := make([]byte, 256)
+	for i := range binaryPayload {
+		binaryPayload[i] = byte(i)
+	}
+	patchPayload := []byte("diff --git a/foo.c b/foo.c\n--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-old();\n+new();\n")
+
+	raw := client.BuildMessageWithAttachments(
+		"reviewer@example.com",
+		"[PATCH] test MIME attachments",
+		"Please find the attached artifacts.\n",
+		"list@example.com",
+		"<parent-msg@example.com>",
+		"<parent-msg@example.com>",
+		"",
+		[]Attachment{
+			{
+				FileName:    "../evil/0001-fix.patch",
+				ContentType: "",
+				Data:        patchPayload,
+			},
+			{
+				FileName:    "trace-dump.bin",
+				ContentType: "application/octet-stream",
+				Data:        binaryPayload,
+			},
+		},
+	)
+
+	if !strings.Contains(raw, `Content-Type: multipart/mixed; boundary="`) {
+		t.Fatalf("raw message missing multipart/mixed Content-Type:\n%s", raw)
+	}
+	if !strings.Contains(raw, "Content-Transfer-Encoding: base64") {
+		t.Fatalf("raw message missing base64 Content-Transfer-Encoding:\n%s", raw)
+	}
+
+	parsed, err := parser.ParseEmail([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseEmail failed: %v", err)
+	}
+	if !strings.Contains(parsed.BodyPlain, "Please find the attached artifacts.") {
+		t.Errorf("BodyPlain = %q, want substring %q", parsed.BodyPlain, "Please find the attached artifacts.")
+	}
+	if len(parsed.Attachments) != 2 {
+		t.Fatalf("len(parsed.Attachments) = %d, want 2", len(parsed.Attachments))
+	}
+
+	if parsed.Attachments[0].FileName != "0001-fix.patch" {
+		t.Errorf("Attachments[0].FileName = %q, want %q", parsed.Attachments[0].FileName, "0001-fix.patch")
+	}
+	if string(parsed.Attachments[0].Payload) != string(patchPayload) {
+		t.Errorf("Attachments[0].Payload = %q, want %q", parsed.Attachments[0].Payload, patchPayload)
+	}
+
+	if parsed.Attachments[1].FileName != "trace-dump.bin" {
+		t.Errorf("Attachments[1].FileName = %q, want %q", parsed.Attachments[1].FileName, "trace-dump.bin")
+	}
+	if len(parsed.Attachments[1].Payload) != len(binaryPayload) {
+		t.Fatalf("len(Attachments[1].Payload) = %d, want %d", len(parsed.Attachments[1].Payload), len(binaryPayload))
+	}
+	for i := range binaryPayload {
+		if parsed.Attachments[1].Payload[i] != binaryPayload[i] {
+			t.Fatalf("Attachments[1].Payload[%d] = %d, want %d", i, parsed.Attachments[1].Payload[i], binaryPayload[i])
+		}
+	}
+}

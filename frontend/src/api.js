@@ -328,20 +328,25 @@ export async function sendEmail({
   references = null,
   orig_msg_id = null,
   draft_id = null,
+  attachments = [],
 }) {
+  const payload = {
+    to_addr,
+    cc_addr,
+    subject,
+    body_text,
+    in_reply_to,
+    references,
+    orig_msg_id,
+    draft_id,
+  };
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    payload.attachments = attachments;
+  }
   const res = await fetch(`${BASE_URL}/api/smtp/send`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      to_addr,
-      cc_addr,
-      subject,
-      body_text,
-      in_reply_to,
-      references,
-      orig_msg_id,
-      draft_id,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Failed to send email" }));
@@ -352,6 +357,9 @@ export async function sendEmail({
   }
   if (in_reply_to) {
     invalidateMessageDetailCache(in_reply_to);
+  }
+  if (draft_id) {
+    invalidateMessageDetailCache(draft_id);
   }
   return res.json();
 }
@@ -383,25 +391,45 @@ export async function fetchRawHeaders(messageId) {
   }
 }
 
-export async function saveDraft({ to_addr, cc_addr = null, subject, body_text, in_reply_to = null, references = null, draft_id = null }) {
+export async function saveDraft({
+  to_addr,
+  cc_addr = null,
+  subject,
+  body_text,
+  in_reply_to = null,
+  references = null,
+  draft_id = null,
+  attachments = [],
+}) {
+  const payload = {
+    to_addr,
+    cc_addr,
+    subject,
+    body_text,
+    in_reply_to,
+    references,
+    draft_id,
+  };
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    payload.attachments = attachments;
+  }
   const res = await fetch(`${BASE_URL}/api/composer/save-draft`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      to_addr,
-      cc_addr,
-      subject,
-      body_text,
-      in_reply_to,
-      references,
-      draft_id,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Failed to save draft" }));
     throw new Error(err.detail || "Failed to save draft");
   }
-  return res.json();
+  const data = await res.json();
+  if (draft_id) {
+    invalidateMessageDetailCache(draft_id);
+  }
+  if (data?.db_id) {
+    invalidateMessageDetailCache(data.db_id);
+  }
+  return data;
 }
 
 export async function fetchConfig() {

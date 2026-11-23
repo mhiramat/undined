@@ -5,14 +5,17 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"mime"
 	"net"
+	"net/http"
 	"net/smtp"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +26,80 @@ import (
 	"undined-go/internal/storage/maildir"
 	"undined-go/internal/storage/parser"
 )
+
+// MaxAttachmentTotalBytes limits the combined raw size of attachments on a single message (25 MiB).
+const MaxAttachmentTotalBytes = 25 * 1024 * 1024
+
+// Attachment represents a file to be MIME-encoded and attached to a draft or outgoing email.
+type Attachment struct {
+	FileName    string
+	ContentType string
+	Data        []byte
+}
+
+// DetectAttachmentContentType determines a safe MIME content type from a filename and payload.
+func DetectAttachmentContentType(filename string, data []byte) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".patch", ".diff":
+		return "text/x-patch"
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".log", ".txt":
+		return "text/plain"
+	case ".json":
+		return "application/json"
+	case ".yaml", ".yml":
+		return "text/yaml"
+	case ".csv":
+		return "text/csv"
+	}
+	if ext != "" {
+		if detected := mime.TypeByExtension(ext); detected != "" {
+			if mediaType, _, err := mime.ParseMediaType(detected); err == nil && mediaType != "" {
+				return mediaType
+			}
+			return detected
+		}
+	}
+	if len(data) > 0 {
+		detected := http.DetectContentType(data)
+		if mediaType, _, err := mime.ParseMediaType(detected); err == nil && mediaType != "" {
+			return mediaType
+		}
+	}
+	return "application/octet-stream"
+}
+
+func sanitizeContentType(ct, filename string, data []byte) string {
+	ct = sanitizeHeaderValue(ct)
+	if ct != "" {
+		if mediaType, _, err := mime.ParseMediaType(ct); err == nil && mediaType != "" {
+			return strings.ToLower(mediaType)
+		}
+	}
+	return DetectAttachmentContentType(filename, data)
+}
+
+func wrapBase64CRLF(data []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(data)
+	if len(encoded) <= 76 {
+		return encoded
+	}
+	var b strings.Builder
+	b.Grow(len(encoded) + (len(encoded)/76)*2)
+	for i := 0; i < len(encoded); i += 76 {
+		if i > 0 {
+			b.WriteString("\r\n")
+		}
+		end := i + 76
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		b.WriteString(encoded[i:end])
+	}
+	return b.String()
+}
 
 // Client handles outgoing email delivery via strict plaintext SMTP.
 type Client struct {
@@ -99,6 +176,18 @@ func (c *Client) BuildMessage(
 	toAddr, subject, bodyText string,
 	ccAddr, inReplyTo, references, customFrom string,
 ) string {
+	return c.BuildMessageWithAttachments(toAddr, subject, bodyText, ccAddr, inReplyTo, references, customFrom, nil)
+}
+
+// BuildMessageWithAttachments constructs an RFC822 email. When attachments is empty,
+// it emits a strict 8-bit text/plain email; when attachments are present, it emits an
+// RFC 2046 multipart/mixed email with a UTF-8 8-bit text/plain part followed by
+// base64-encoded attachment parts.
+func (c *Client) BuildMessageWithAttachments(
+	toAddr, subject, bodyText string,
+	ccAddr, inReplyTo, references, customFrom string,
+	attachments []Attachment,
+) string {
 	fromHdr := customFrom
 	if fromHdr == "" {
 		fromName := sanitizeHeaderValue(c.Config.SMTP.FromName)
@@ -154,14 +243,59 @@ func (c *Client) BuildMessage(
 		lines = append(lines, fmt.Sprintf("References: %s", strings.TrimSpace(references)))
 	}
 
+	if len(attachments) == 0 {
+		lines = append(lines,
+			"MIME-Version: 1.0",
+			"Content-Type: text/plain; charset=utf-8",
+			"Content-Transfer-Encoding: 8bit",
+			"",
+			bodyText,
+		)
+		return strings.Join(lines, "\r\n") + "\r\n"
+	}
+
+	bndBytes := make([]byte, 16)
+	_, _ = rand.Read(bndBytes) // crypto/rand.Read never returns an error in Go 1.24+
+	boundary := fmt.Sprintf("----=_UndinePart_%s", hex.EncodeToString(bndBytes))
+
+	normalizedBody := strings.ReplaceAll(bodyText, "\r\n", "\n")
+	normalizedBody = strings.ReplaceAll(normalizedBody, "\n", "\r\n")
+
 	lines = append(lines,
 		"MIME-Version: 1.0",
+		fmt.Sprintf(`Content-Type: multipart/mixed; boundary="%s"`, boundary),
+		"",
+		"This is a multi-part message in MIME format.",
+		"--"+boundary,
 		"Content-Type: text/plain; charset=utf-8",
 		"Content-Transfer-Encoding: 8bit",
 		"",
-		bodyText,
+		normalizedBody,
 	)
 
+	for idx, att := range attachments {
+		contentType := sanitizeContentType(att.ContentType, att.FileName, att.Data)
+		safeName := parser.SanitizeAttachmentFileName(att.FileName, idx, contentType)
+		partContentType := mime.FormatMediaType(contentType, map[string]string{"name": safeName})
+		if partContentType == "" {
+			partContentType = fmt.Sprintf(`%s; name="%s"`, contentType, safeName)
+		}
+		disposition := mime.FormatMediaType("attachment", map[string]string{"filename": safeName})
+		if disposition == "" {
+			disposition = fmt.Sprintf(`attachment; filename="%s"`, safeName)
+		}
+
+		lines = append(lines,
+			"--"+boundary,
+			"Content-Type: "+partContentType,
+			"Content-Disposition: "+disposition,
+			"Content-Transfer-Encoding: base64",
+			"",
+			wrapBase64CRLF(att.Data),
+		)
+	}
+
+	lines = append(lines, "--"+boundary+"--")
 	return strings.Join(lines, "\r\n") + "\r\n"
 }
 
@@ -335,7 +469,16 @@ func (c *Client) SendMessage(
 	toAddr, subject, bodyText string,
 	ccAddr, inReplyTo, references string,
 ) (bool, string, error) {
-	raw := c.BuildMessage(toAddr, subject, bodyText, ccAddr, inReplyTo, references, "")
+	return c.SendMessageWithAttachments(toAddr, subject, bodyText, ccAddr, inReplyTo, references, nil)
+}
+
+// SendMessageWithAttachments builds and sends an email with optional MIME attachments.
+func (c *Client) SendMessageWithAttachments(
+	toAddr, subject, bodyText string,
+	ccAddr, inReplyTo, references string,
+	attachments []Attachment,
+) (bool, string, error) {
+	raw := c.BuildMessageWithAttachments(toAddr, subject, bodyText, ccAddr, inReplyTo, references, "", attachments)
 
 	var recipients []string
 	for _, a := range splitAddressList(toAddr) {

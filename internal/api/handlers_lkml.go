@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +13,8 @@ import (
 	"undined-go/internal/constants"
 	"undined-go/internal/lkml/patch"
 	"undined-go/internal/lkml/quote"
+	"undined-go/internal/smtp"
+	"undined-go/internal/storage/parser"
 )
 
 func (s *Server) handleB4Import(w http.ResponseWriter, r *http.Request) {
@@ -255,19 +259,116 @@ func (s *Server) handleOpenEditor(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
+type composerAttachmentInput struct {
+	FileName              string `json:"filename"`
+	ContentType           string `json:"content_type"`
+	ContentBase64         string `json:"content_base64"`
+	SourceMessageID       int64  `json:"source_message_id,omitempty"`
+	SourceAttachmentIndex *int   `json:"source_attachment_index,omitempty"`
+}
+
+func (s *Server) resolveComposerAttachments(inputs []composerAttachmentInput) ([]smtp.Attachment, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+
+	resolved := make([]smtp.Attachment, 0, len(inputs))
+	cachedSourceAtts := make(map[int64][]*parser.Attachment)
+	var totalBytes int64
+
+	for idx, item := range inputs {
+		var data []byte
+		fileName := strings.TrimSpace(item.FileName)
+		contentType := strings.TrimSpace(item.ContentType)
+
+		if item.ContentBase64 != "" {
+			b64 := strings.TrimSpace(item.ContentBase64)
+			// Strip optional data URI prefix (e.g. data:application/octet-stream;base64,...)
+			if strings.HasPrefix(b64, "data:") {
+				if comma := strings.Index(b64, ","); comma != -1 {
+					b64 = b64[comma+1:]
+				}
+			}
+			decoded, err := base64.StdEncoding.DecodeString(b64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid base64 data for attachment %d (%s): %w", idx+1, fileName, err)
+			}
+			data = decoded
+		} else if item.SourceMessageID > 0 && item.SourceAttachmentIndex != nil && *item.SourceAttachmentIndex >= 0 {
+			atts, ok := cachedSourceAtts[item.SourceMessageID]
+			if !ok {
+				if s.DB == nil {
+					return nil, fmt.Errorf("database not configured for source attachment %d", idx+1)
+				}
+				srcMsg, err := s.DB.GetMessageByID(item.SourceMessageID)
+				if err != nil || srcMsg == nil || srcMsg.FilePath == "" {
+					return nil, fmt.Errorf("source message %d not found for attachment %d", item.SourceMessageID, idx+1)
+				}
+				rawBytes, err := os.ReadFile(srcMsg.FilePath)
+				if err != nil {
+					return nil, fmt.Errorf("failed to read source message %d: %w", item.SourceMessageID, err)
+				}
+				extracted, err := parser.ExtractAttachments(rawBytes)
+				if err != nil {
+					return nil, fmt.Errorf("failed to extract attachments from message %d: %w", item.SourceMessageID, err)
+				}
+				atts = extracted
+				cachedSourceAtts[item.SourceMessageID] = atts
+			}
+			attIdx := *item.SourceAttachmentIndex
+			if attIdx >= len(atts) {
+				return nil, fmt.Errorf("source attachment index %d out of range for message %d", attIdx, item.SourceMessageID)
+			}
+			srcAtt := atts[attIdx]
+			data = srcAtt.Payload
+			if fileName == "" {
+				fileName = srcAtt.FileName
+			}
+			if contentType == "" {
+				contentType = srcAtt.ContentType
+			}
+		} else {
+			return nil, fmt.Errorf("attachment %d (%s) is missing content_base64 or source reference", idx+1, fileName)
+		}
+
+		totalBytes += int64(len(data))
+		if totalBytes > smtp.MaxAttachmentTotalBytes {
+			return nil, fmt.Errorf("total attachment size exceeds maximum limit of %d bytes", smtp.MaxAttachmentTotalBytes)
+		}
+
+		if contentType == "" {
+			contentType = smtp.DetectAttachmentContentType(fileName, data)
+		}
+		fileName = parser.SanitizeAttachmentFileName(fileName, idx, contentType)
+
+		resolved = append(resolved, smtp.Attachment{
+			FileName:    fileName,
+			ContentType: contentType,
+			Data:        data,
+		})
+	}
+
+	return resolved, nil
+}
+
+// maxComposerRequestBodyBytes caps JSON composer payloads (~25 MiB attachments with base64 overhead + body).
+const maxComposerRequestBodyBytes = 40 << 20
+
 func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxComposerRequestBodyBytes)
 	var body struct {
-		ToAddr     string `json:"to_addr"`
-		To         string `json:"to"`
-		Subject    string `json:"subject"`
-		BodyText   string `json:"body_text"`
-		Body       string `json:"body"`
-		CcAddr     string `json:"cc_addr"`
-		Cc         string `json:"cc"`
-		InReplyTo  string `json:"in_reply_to"`
-		References string `json:"references"`
-		CustomFrom string `json:"custom_from"`
-		DraftID    int64  `json:"draft_id"`
+		ToAddr      string                    `json:"to_addr"`
+		To          string                    `json:"to"`
+		Subject     string                    `json:"subject"`
+		BodyText    string                    `json:"body_text"`
+		Body        string                    `json:"body"`
+		CcAddr      string                    `json:"cc_addr"`
+		Cc          string                    `json:"cc"`
+		InReplyTo   string                    `json:"in_reply_to"`
+		References  string                    `json:"references"`
+		CustomFrom  string                    `json:"custom_from"`
+		DraftID     int64                     `json:"draft_id"`
+		Attachments []composerAttachmentInput `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid draft payload", http.StatusBadRequest)
@@ -292,7 +393,15 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw := s.SMTP.BuildMessage(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References, body.CustomFrom)
+	attachments, err := s.resolveComposerAttachments(body.Attachments)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "detail": err.Error()})
+		return
+	}
+
+	raw := s.SMTP.BuildMessageWithAttachments(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References, body.CustomFrom, attachments)
 
 	_ = s.Maildir.EnsureFolder(constants.FolderDrafts)
 	draftFolder, err := s.DB.GetOrCreateFolder(constants.FolderDrafts, false)
@@ -331,6 +440,16 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 		msgID = savedMsg.MessageID
 	}
 
+	savedAttachments := make([]*parser.Attachment, 0, len(attachments))
+	for i, att := range attachments {
+		savedAttachments = append(savedAttachments, &parser.Attachment{
+			Index:       i,
+			FileName:    att.FileName,
+			ContentType: att.ContentType,
+			Size:        int64(len(att.Data)),
+		})
+	}
+
 	if s.Events != nil {
 		eventType := "draft.created"
 		if body.DraftID > 0 {
@@ -345,27 +464,30 @@ func (s *Server) handleSaveDraft(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"success":    true,
-		"status":     "ok",
-		"message_id": msgID,
-		"db_id":      dbID,
-		"file_path":  path,
+		"success":     true,
+		"status":      "ok",
+		"message_id":  msgID,
+		"db_id":       dbID,
+		"file_path":   path,
+		"attachments": savedAttachments,
 	})
 }
 
 func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxComposerRequestBodyBytes)
 	var body struct {
-		ToAddr     string `json:"to_addr"`
-		To         string `json:"to"`
-		CcAddr     string `json:"cc_addr"`
-		Cc         string `json:"cc"`
-		Subject    string `json:"subject"`
-		BodyText   string `json:"body_text"`
-		Body       string `json:"body"`
-		InReplyTo  string `json:"in_reply_to"`
-		References string `json:"references"`
-		OrigMsgID  any    `json:"orig_msg_id"`
-		DraftID    int64  `json:"draft_id"`
+		ToAddr      string                    `json:"to_addr"`
+		To          string                    `json:"to"`
+		CcAddr      string                    `json:"cc_addr"`
+		Cc          string                    `json:"cc"`
+		Subject     string                    `json:"subject"`
+		BodyText    string                    `json:"body_text"`
+		Body        string                    `json:"body"`
+		InReplyTo   string                    `json:"in_reply_to"`
+		References  string                    `json:"references"`
+		OrigMsgID   any                       `json:"orig_msg_id"`
+		DraftID     int64                     `json:"draft_id"`
+		Attachments []composerAttachmentInput `json:"attachments"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "Invalid send payload", http.StatusBadRequest)
@@ -390,7 +512,15 @@ func (s *Server) handleSMTPSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, msg, err := s.SMTP.SendMessage(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References)
+	attachments, err := s.resolveComposerAttachments(body.Attachments)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "detail": err.Error()})
+		return
+	}
+
+	ok, msg, err := s.SMTP.SendMessageWithAttachments(toAddr, body.Subject, bodyText, ccAddr, body.InReplyTo, body.References, attachments)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

@@ -2246,3 +2246,158 @@ func TestMultiTagToggleCrossFolderSyncAndPrioritySort(t *testing.T) {
 		t.Errorf("inboxAfterToggle.Flags = %q, want $cl_3 only", inboxAfterToggle.Flags)
 	}
 }
+
+func TestSaveDraftWithAttachmentsAndPreserveOnResave(t *testing.T) {
+	srv, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+	srv.SMTP = smtp.NewClient(srv.Config, srv.Maildir, db)
+
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+
+	client := &http.Client{}
+
+	// 1. Save a draft with an attached file encoded as base64
+	payload := `{
+		"to_addr": "dev@example.com",
+		"subject": "Draft with attachment",
+		"body_text": "See attached report.",
+		"attachments": [
+			{
+				"filename": "report.md",
+				"content_type": "text/markdown",
+				"content_base64": "IyBSZXBvcnQKCkFsbCB0ZXN0cyBwYXNzZWQuCg=="
+			}
+		]
+	}`
+	req, err := http.NewRequest("POST", ts.URL+"/api/composer/save-draft", strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("POST /api/composer/save-draft failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		t.Fatalf("POST /api/composer/save-draft status = %d, want %d: %s", resp.StatusCode, http.StatusOK, string(bodyBytes))
+	}
+
+	var saveRes struct {
+		Success     bool  `json:"success"`
+		DBID        int64 `json:"db_id"`
+		Attachments []struct {
+			Index       int    `json:"index"`
+			FileName    string `json:"filename"`
+			ContentType string `json:"content_type"`
+			Size        int64  `json:"size"`
+		} `json:"attachments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&saveRes); err != nil {
+		t.Fatalf("decode save-draft response failed: %v", err)
+	}
+	if !saveRes.Success || saveRes.DBID == 0 || len(saveRes.Attachments) != 1 {
+		t.Fatalf("save-draft response = %+v, want success=true, db_id>0, len(attachments)=1", saveRes)
+	}
+	if saveRes.Attachments[0].FileName != "report.md" {
+		t.Errorf("saveRes.Attachments[0].FileName = %q, want %q", saveRes.Attachments[0].FileName, "report.md")
+	}
+
+	// 2. Re-save the draft referencing the existing attachment + adding a second attachment
+	resavePayload := fmt.Sprintf(`{
+		"to_addr": "dev@example.com",
+		"subject": "Draft with two attachments",
+		"body_text": "Updated body.",
+		"draft_id": %d,
+		"attachments": [
+			{
+				"filename": "report.md",
+				"source_message_id": %d,
+				"source_attachment_index": 0
+			},
+			{
+				"filename": "notes.txt",
+				"content_base64": "aGVsbG8gd29ybGQ="
+			}
+		]
+	}`, saveRes.DBID, saveRes.DBID)
+
+	req2, err := http.NewRequest("POST", ts.URL+"/api/composer/save-draft", strings.NewReader(resavePayload))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req2.Header.Set("Authorization", "Bearer "+token)
+	req2.Header.Set("Content-Type", "application/json")
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("second POST /api/composer/save-draft failed: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp2.Body)
+		t.Fatalf("resave status = %d, want %d: %s", resp2.StatusCode, http.StatusOK, string(bodyBytes))
+	}
+
+	var resaveRes struct {
+		Success     bool  `json:"success"`
+		DBID        int64 `json:"db_id"`
+		Attachments []struct {
+			Index    int    `json:"index"`
+			FileName string `json:"filename"`
+		} `json:"attachments"`
+	}
+	if err := json.NewDecoder(resp2.Body).Decode(&resaveRes); err != nil {
+		t.Fatalf("decode resave response failed: %v", err)
+	}
+	if !resaveRes.Success || len(resaveRes.Attachments) != 2 {
+		t.Fatalf("resave response = %+v, want success=true and 2 attachments", resaveRes)
+	}
+
+	// 3. Download both attachments from the resaved draft and verify exact contents
+	dlReq, err := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/0", ts.URL, resaveRes.DBID), nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest attachment 0 failed: %v", err)
+	}
+	dlReq.Header.Set("Authorization", "Bearer "+token)
+	dlResp, err := client.Do(dlReq)
+	if err != nil {
+		t.Fatalf("GET attachment 0 failed: %v", err)
+	}
+	defer dlResp.Body.Close()
+	if dlResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET attachment 0 status = %d, want %d", dlResp.StatusCode, http.StatusOK)
+	}
+	att0Bytes, err := io.ReadAll(dlResp.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll attachment 0 failed: %v", err)
+	}
+	wantAtt0 := "# Report\n\nAll tests passed.\n"
+	if string(att0Bytes) != wantAtt0 {
+		t.Errorf("attachment 0 = %q, want %q", string(att0Bytes), wantAtt0)
+	}
+
+	dlReq1, err := http.NewRequest("GET", fmt.Sprintf("%s/api/messages/%d/attachments/1", ts.URL, resaveRes.DBID), nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest attachment 1 failed: %v", err)
+	}
+	dlReq1.Header.Set("Authorization", "Bearer "+token)
+	dlResp1, err := client.Do(dlReq1)
+	if err != nil {
+		t.Fatalf("GET attachment 1 failed: %v", err)
+	}
+	defer dlResp1.Body.Close()
+	if dlResp1.StatusCode != http.StatusOK {
+		t.Fatalf("GET attachment 1 status = %d, want %d", dlResp1.StatusCode, http.StatusOK)
+	}
+	att1Bytes, err := io.ReadAll(dlResp1.Body)
+	if err != nil {
+		t.Fatalf("io.ReadAll attachment 1 failed: %v", err)
+	}
+	if string(att1Bytes) != "hello world" {
+		t.Errorf("attachment 1 = %q, want %q", string(att1Bytes), "hello world")
+	}
+}

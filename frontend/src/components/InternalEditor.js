@@ -37,6 +37,57 @@ export function openEditorInNewWindow(params = {}) {
   return true;
 }
 
+const MAX_ATTACHMENT_TOTAL_BYTES = 25 * 1024 * 1024;
+
+function formatAttachmentBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getComposerAttachmentIcon(filename, contentType) {
+  const name = (filename || "").toLowerCase();
+  const ct = (contentType || "").toLowerCase();
+  if (name.endsWith(".patch") || name.endsWith(".diff") || ct.includes("patch") || ct.includes("diff")) return "🩹";
+  if (ct.startsWith("image/") || /\.(png|jpe?g|gif|webp|svg)$/.test(name)) return "🖼️";
+  if (ct === "application/pdf" || name.endsWith(".pdf")) return "📕";
+  if (/\.(tar\.gz|tgz|zip|gz|xz|bz2|zst)$/.test(name)) return "🗜️";
+  if (/\.(md|txt|log|c|h|py|go|js|ts|json|yaml|yml|csv)$/.test(name) || ct.startsWith("text/")) return "📄";
+  return "📎";
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === "string" ? reader.result : "";
+      const commaIdx = result.indexOf(",");
+      resolve(commaIdx !== -1 ? result.slice(commaIdx + 1) : result);
+    };
+    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
+function serializeAttachmentsForApi(attList) {
+  return (attList || []).map((att) => {
+    if (att.content_base64) {
+      return {
+        filename: att.filename,
+        content_type: att.content_type || "",
+        content_base64: att.content_base64,
+      };
+    }
+    return {
+      filename: att.filename,
+      content_type: att.content_type || "",
+      source_message_id: att.source_message_id,
+      source_attachment_index: att.source_attachment_index,
+    };
+  });
+}
+
 export function openInternalEditor({
   to = "",
   cc = "",
@@ -47,6 +98,7 @@ export function openInternalEditor({
   origMsgId = "",
   draftId = null,
   notes = [],
+  attachments = [],
   title = "Compose / Reply (Internal Editor)",
   titleIcon = "📝",
   isStandalone = false,
@@ -63,6 +115,7 @@ export function openInternalEditor({
       origMsgId,
       draftId,
       notes,
+      attachments,
       title,
       titleIcon,
     });
@@ -75,6 +128,16 @@ export function openInternalEditor({
   closeInternalEditor();
 
   let sessionDraftId = draftId != null ? Number(draftId) : null;
+  let sessionAttachments = Array.isArray(attachments)
+    ? attachments.map((a) => ({
+        filename: a.filename || "attachment",
+        content_type: a.content_type || "",
+        size: Number(a.size) || 0,
+        content_base64: a.content_base64 || "",
+        source_message_id: a.source_message_id != null ? Number(a.source_message_id) : null,
+        source_attachment_index: a.source_attachment_index != null ? Number(a.source_attachment_index) : null,
+      }))
+    : [];
 
   const container = document.getElementById("composer-container") || document.body;
   const modalEl = document.createElement("div");
@@ -87,7 +150,7 @@ export function openInternalEditor({
         <div class="composer-title-group">
           <span class="composer-icon">${escapeHtml(titleIcon)}</span>
           <span class="composer-title">${escapeHtml(title)}</span>
-          <span class="composer-badge">8-bit plain-text (UTF-8)</span>
+          <span class="composer-badge" id="comp-mime-badge">8-bit plain-text (UTF-8)</span>
         </div>
         <div class="composer-header-actions">
           ${!isStandalone ? `
@@ -136,12 +199,25 @@ export function openInternalEditor({
           ✂️ Erase after cursor
         </button>
         <span class="composer-toolbar-separator"></span>
+        <button type="button" class="composer-tag-btn" id="btn-comp-attach" title="Attach MIME-encoded file(s) (or drag & drop files onto editor)">
+          📎 Attach File
+        </button>
+        <input type="file" id="comp-file-input" multiple style="display: none;" />
+        <span class="composer-toolbar-separator"></span>
         <button type="button" class="composer-tag-btn" id="btn-comp-undo" title="Undo (Ctrl+Z)" disabled>
           ↩️ Undo
         </button>
         <button type="button" class="composer-tag-btn" id="btn-comp-redo" title="Redo (Ctrl+Y)" disabled>
           ↪️ Redo
         </button>
+      </div>
+
+      <!-- Attachments Bar (visible when files are attached) -->
+      <div class="composer-attachments-bar" id="comp-attachments-bar" style="display: none;">
+        <div class="composer-attachments-header">
+          <span class="composer-attachments-title" id="comp-attachments-title">📎 Attachments (0)</span>
+        </div>
+        <div class="composer-attachments-chips" id="comp-attachments-chips"></div>
       </div>
 
       <!-- Main Monospace Editor -->
@@ -194,6 +270,150 @@ export function openInternalEditor({
   const eraseAfterCursorBtn = modalEl.querySelector("#btn-erase-after-cursor");
   const undoBtn = modalEl.querySelector("#btn-comp-undo");
   const redoBtn = modalEl.querySelector("#btn-comp-redo");
+  const attachBtn = modalEl.querySelector("#btn-comp-attach");
+  const fileInput = modalEl.querySelector("#comp-file-input");
+  const attachmentsBar = modalEl.querySelector("#comp-attachments-bar");
+  const attachmentsTitle = modalEl.querySelector("#comp-attachments-title");
+  const attachmentsChips = modalEl.querySelector("#comp-attachments-chips");
+  const mimeBadge = modalEl.querySelector("#comp-mime-badge");
+  const modalDialog = modalEl.querySelector(".composer-modal");
+
+  function renderAttachmentsUI() {
+    if (!attachmentsBar || !attachmentsChips || !attachmentsTitle) return;
+    if (sessionAttachments.length === 0) {
+      attachmentsBar.style.display = "none";
+      attachmentsChips.innerHTML = "";
+      if (mimeBadge) {
+        mimeBadge.textContent = "8-bit plain-text (UTF-8)";
+      }
+      return;
+    }
+
+    const totalSize = sessionAttachments.reduce((acc, a) => acc + (Number(a.size) || 0), 0);
+    attachmentsTitle.textContent = `📎 Attachments (${sessionAttachments.length} · ${formatAttachmentBytes(totalSize)})`;
+    if (mimeBadge) {
+      mimeBadge.textContent = `MIME multipart/mixed (${sessionAttachments.length} file${sessionAttachments.length === 1 ? "" : "s"})`;
+    }
+
+    attachmentsChips.innerHTML = sessionAttachments
+      .map((att, idx) => {
+        const icon = getComposerAttachmentIcon(att.filename, att.content_type);
+        const sizeLabel = formatAttachmentBytes(att.size);
+        const hasDownload = att.source_message_id != null && att.source_attachment_index != null;
+        const nameHtml = hasDownload
+          ? `<a class="composer-attachment-link" href="/api/messages/${att.source_message_id}/attachments/${att.source_attachment_index}/${encodeURIComponent(att.filename)}" download="${escapeAttr(att.filename)}" title="Download ${escapeAttr(att.filename)}">${escapeHtml(att.filename)}</a>`
+          : `<span class="composer-attachment-name">${escapeHtml(att.filename)}</span>`;
+        return `
+          <div class="composer-attachment-chip" data-att-idx="${idx}" title="${escapeAttr(att.filename)} (${escapeAttr(att.content_type || "application/octet-stream")}, ${sizeLabel})">
+            <span class="composer-attachment-icon">${icon}</span>
+            ${nameHtml}
+            <span class="composer-attachment-size">${sizeLabel}</span>
+            <button type="button" class="composer-attachment-remove" data-remove-idx="${idx}" title="Remove attachment">✕</button>
+          </div>
+        `;
+      })
+      .join("");
+
+    attachmentsChips.querySelectorAll(".composer-attachment-remove").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const idx = parseInt(btn.getAttribute("data-remove-idx"), 10);
+        if (!Number.isNaN(idx) && idx >= 0 && idx < sessionAttachments.length) {
+          const removed = sessionAttachments.splice(idx, 1)[0];
+          renderAttachmentsUI();
+          showToast(`Removed attachment: ${removed.filename}`, "info");
+        }
+      });
+    });
+
+    attachmentsBar.style.display = "block";
+  }
+
+  async function addFilesAsAttachments(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    let runningTotal = sessionAttachments.reduce((acc, a) => acc + (Number(a.size) || 0), 0);
+    let addedCount = 0;
+
+    for (const file of files) {
+      if (runningTotal + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+        showToast(
+          `Cannot attach "${file.name}": total attachment size exceeds ${formatAttachmentBytes(MAX_ATTACHMENT_TOTAL_BYTES)} limit`,
+          "error"
+        );
+        continue;
+      }
+      try {
+        const b64 = await readFileAsBase64(file);
+        sessionAttachments.push({
+          filename: file.name || "attachment.bin",
+          content_type: file.type || "",
+          size: file.size || 0,
+          content_base64: b64,
+          source_message_id: null,
+          source_attachment_index: null,
+        });
+        runningTotal += file.size || 0;
+        addedCount++;
+      } catch (err) {
+        showToast(err.message || `Failed to read ${file.name}`, "error");
+      }
+    }
+
+    if (addedCount > 0) {
+      renderAttachmentsUI();
+      showToast(`Attached ${addedCount} file${addedCount === 1 ? "" : "s"}`, "success");
+    }
+  }
+
+  attachBtn?.addEventListener("click", () => {
+    fileInput?.click();
+  });
+
+  fileInput?.addEventListener("change", async () => {
+    if (fileInput.files && fileInput.files.length > 0) {
+      await addFilesAsAttachments(fileInput.files);
+      fileInput.value = "";
+    }
+  });
+
+  if (modalDialog) {
+    let dragDepth = 0;
+    modalDialog.addEventListener("dragenter", (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) {
+        e.preventDefault();
+        dragDepth++;
+        modalDialog.classList.add("composer-drag-over");
+      }
+    });
+    modalDialog.addEventListener("dragover", (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }
+    });
+    modalDialog.addEventListener("dragleave", (e) => {
+      if (dragDepth > 0) {
+        dragDepth--;
+        if (dragDepth === 0) {
+          modalDialog.classList.remove("composer-drag-over");
+        }
+      }
+    });
+    modalDialog.addEventListener("drop", async (e) => {
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth = 0;
+        modalDialog.classList.remove("composer-drag-over");
+        await addFilesAsAttachments(e.dataTransfer.files);
+      }
+    });
+  }
+
+  renderAttachmentsUI();
 
   if (popoutBtn) {
     popoutBtn.addEventListener("click", () => {
@@ -207,6 +427,7 @@ export function openInternalEditor({
         origMsgId,
         draftId: sessionDraftId,
         notes,
+        attachments: sessionAttachments,
         title,
         titleIcon,
       };
@@ -535,7 +756,7 @@ export function openInternalEditor({
       subjectInput.focus();
       return;
     }
-    if (!bodyVal.trim()) {
+    if (!bodyVal.trim() && sessionAttachments.length === 0) {
       showToast("Email body cannot be empty", "error");
       bodyTextarea.focus();
       return;
@@ -554,6 +775,7 @@ export function openInternalEditor({
         references: references || null,
         orig_msg_id: origMsgId || null,
         draft_id: sessionDraftId,
+        attachments: serializeAttachmentsForApi(sessionAttachments),
       });
 
       const replyTargetId = origMsgId || (inReplyTo ? inReplyTo.replace(/^<+|>+$/g, "").trim() : "");
@@ -624,10 +846,22 @@ export function openInternalEditor({
         in_reply_to: inReplyTo || null,
         references: references || null,
         draft_id: sessionDraftId,
+        attachments: serializeAttachmentsForApi(sessionAttachments),
       });
 
       if (res && res.db_id) {
         sessionDraftId = res.db_id;
+        if (Array.isArray(res.attachments)) {
+          sessionAttachments = res.attachments.map((att, idx) => ({
+            filename: att.filename || `attachment-${idx + 1}`,
+            content_type: att.content_type || "",
+            size: Number(att.size) || 0,
+            content_base64: "",
+            source_message_id: res.db_id,
+            source_attachment_index: att.index != null ? att.index : idx,
+          }));
+          renderAttachmentsUI();
+        }
       }
 
       showToast("Draft saved to 'Drafts' folder!", "success");
@@ -1172,6 +1406,14 @@ export async function openForwardForMessage(msg) {
     `\n`;
 
   const body = fwdHeader + (msg.body_plain || "");
+  const initialAttachments = (msg.attachments || []).map((att, idx) => ({
+    filename: att.filename || `attachment-${idx + 1}`,
+    content_type: att.content_type || "",
+    size: Number(att.size) || 0,
+    content_base64: "",
+    source_message_id: msg.id != null ? msg.id : null,
+    source_attachment_index: att.index != null ? att.index : idx,
+  }));
 
   openInternalEditor({
     to: "",
@@ -1182,6 +1424,7 @@ export async function openForwardForMessage(msg) {
     references: "",
     origMsgId: "",
     notes: [],
+    attachments: initialAttachments,
   });
 }
 
@@ -1198,6 +1441,14 @@ export function openEditForMessage(msg) {
   const inReplyTo = msg.in_reply_to ? (msg.in_reply_to.startsWith("<") ? msg.in_reply_to : `<${msg.in_reply_to}>`) : "";
   const refs = msg.references_header || "";
   const parentMsgId = msg.in_reply_to ? msg.in_reply_to.replace(/^<+|>+$/g, "").trim() : "";
+  const initialAttachments = (msg.attachments || []).map((att, idx) => ({
+    filename: att.filename || `attachment-${idx + 1}`,
+    content_type: att.content_type || "",
+    size: Number(att.size) || 0,
+    content_base64: "",
+    source_message_id: msg.id != null ? msg.id : null,
+    source_attachment_index: att.index != null ? att.index : idx,
+  }));
 
   openInternalEditor({
     to: toAddr,
@@ -1209,6 +1460,7 @@ export function openEditForMessage(msg) {
     origMsgId: parentMsgId,
     draftId: msg.id != null ? msg.id : null,
     notes: [],
+    attachments: initialAttachments,
     title: "Edit Draft (Internal Editor)",
     titleIcon: "✏️",
   });

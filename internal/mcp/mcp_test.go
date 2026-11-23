@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"undined-go/internal/patchwork"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
+	"undined-go/internal/storage/parser"
 )
 
 var sampleEmail = []byte(`From: Kernel Developer <dev@kernel.org>
@@ -909,3 +911,110 @@ func TestMCPGetEmailAndBody(t *testing.T) {
 	}
 }
 
+func TestMCPWriteDraftWithAttachments(t *testing.T) {
+	server, db, _, _, _, _ := setupTestMCPEnv(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create a local artifact file to attach by path
+	artifactDir := t.TempDir()
+	artifactPath := filepath.Join(artifactDir, "analysis.md")
+	artifactBody := "# AI Review Artifact\n\nDetailed findings.\n"
+	if err := os.WriteFile(artifactPath, []byte(artifactBody), 0600); err != nil {
+		t.Fatalf("failed to write artifact file: %v", err)
+	}
+
+	binaryBytes := []byte{0x00, 0x01, 0x02, 0xfe, 0xff}
+
+	res, err := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+		"to":      "dev@example.com",
+		"subject": "Draft with AI artifacts",
+		"body":    "Attached are the generated review artifacts.",
+		"attachments": []interface{}{
+			artifactPath,
+			map[string]interface{}{
+				"filename": "summary.txt",
+				"content":  "Inline summary text",
+			},
+			map[string]interface{}{
+				"filename":       "trace.bin",
+				"content_type":   "application/octet-stream",
+				"content_base64": base64.StdEncoding.EncodeToString(binaryBytes),
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("write_draft_message failed: %v", err)
+	}
+
+	resMap, ok := res.(map[string]interface{})
+	if !ok || resMap["success"] != true {
+		t.Fatalf("write_draft_message result = %v, want success=true", res)
+	}
+	if resMap["attachment_count"] != 3 {
+		t.Fatalf("attachment_count = %v, want 3", resMap["attachment_count"])
+	}
+
+	savedPath, ok := resMap["file_path"].(string)
+	if !ok || savedPath == "" {
+		t.Fatalf("file_path = %v, want non-empty string", resMap["file_path"])
+	}
+	rawBytes, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("failed to read saved draft: %v", err)
+	}
+	atts, err := parser.ExtractAttachments(rawBytes)
+	if err != nil {
+		t.Fatalf("ExtractAttachments failed: %v", err)
+	}
+	if len(atts) != 3 {
+		t.Fatalf("len(atts) = %d, want 3", len(atts))
+	}
+	if atts[0].FileName != "analysis.md" || string(atts[0].Payload) != artifactBody {
+		t.Errorf("atts[0] = (%q, %q), want (%q, %q)", atts[0].FileName, string(atts[0].Payload), "analysis.md", artifactBody)
+	}
+	if atts[1].FileName != "summary.txt" || string(atts[1].Payload) != "Inline summary text" {
+		t.Errorf("atts[1] = (%q, %q), want (%q, %q)", atts[1].FileName, string(atts[1].Payload), "summary.txt", "Inline summary text")
+	}
+	if atts[2].FileName != "trace.bin" || !bytes.Equal(atts[2].Payload, binaryBytes) {
+		t.Errorf("atts[2] = (%q, %v), want (%q, %v)", atts[2].FileName, atts[2].Payload, "trace.bin", binaryBytes)
+	}
+
+	// Verify get_email returns attachments metadata for the saved draft
+	draftID, ok := resMap["draft_id"].(int64)
+	if !ok {
+		t.Fatalf("draft_id type = %T, want int64", resMap["draft_id"])
+	}
+	getRes, err := server.CallTool(ctx, "get_email", map[string]interface{}{
+		"message_id": fmt.Sprintf("%d", draftID),
+	})
+	if err != nil {
+		t.Fatalf("get_email failed: %v", err)
+	}
+	getMap, ok := getRes.(map[string]interface{})
+	if !ok {
+		t.Fatalf("get_email result type = %T, want map[string]interface{}", getRes)
+	}
+	gotAtts, ok := getMap["attachments"].([]*parser.Attachment)
+	if !ok || len(gotAtts) != 3 {
+		t.Fatalf("get_email attachments = %#v, want 3 attachments", getMap["attachments"])
+	}
+
+	// Verify nonexistent attachment path returns structured error
+	errRes, err := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+		"to":          "dev@example.com",
+		"subject":     "Missing file",
+		"body":        "Body",
+		"attachments": []interface{}{filepath.Join(artifactDir, "does-not-exist.txt")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected RPC error for missing file: %v", err)
+	}
+	errMap, ok := errRes.(map[string]interface{})
+	if !ok {
+		t.Fatalf("missing file result type = %T, want map[string]interface{}", errRes)
+	}
+	if errMap["success"] != false {
+		t.Fatalf("missing file result = %v, want success=false", errMap)
+	}
+}

@@ -2182,6 +2182,84 @@ body.composer-standalone-body {
   margin: 0 4px;
 }
 
+.composer-attachments-bar {
+  padding: 6px 16px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.composer-attachments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.composer-attachments-title {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.composer-attachments-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-main);
+  max-width: 100%;
+}
+
+.composer-attachment-name,
+.composer-attachment-link {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-main);
+  text-decoration: none;
+}
+
+.composer-attachment-link:hover {
+  color: var(--accent-blue);
+  text-decoration: underline;
+}
+
+.composer-attachment-size {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.composer-attachment-remove {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.composer-attachment-remove:hover {
+  color: #f38ba8;
+}
+
+.composer-modal.composer-drag-over {
+  outline: 2px dashed var(--accent-blue);
+  outline-offset: -4px;
+}
+
 .composer-body-container {
   flex: 1;
   display: flex;
