@@ -64,6 +64,37 @@ CREATE TABLE IF NOT EXISTS known_addresses (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS patch_series_drafts (
+    series_id       TEXT PRIMARY KEY,
+    series_key      TEXT NOT NULL,
+    branch          TEXT DEFAULT '',
+    version         INTEGER DEFAULT 1,
+    base_commit     TEXT DEFAULT '',
+    to_addrs        TEXT NOT NULL,
+    cc_addrs        TEXT NOT NULL,
+    in_reply_to     TEXT DEFAULT '',
+    status          TEXT NOT NULL,
+    send_delay_sec  INTEGER DEFAULT 2,
+    created_at      DATETIME NOT NULL,
+    updated_at      DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS patch_series_items (
+    series_id       TEXT NOT NULL REFERENCES patch_series_drafts(series_id) ON DELETE CASCADE,
+    seq_index       INTEGER NOT NULL,
+    is_cover_letter INTEGER NOT NULL DEFAULT 0,
+    draft_msg_id    TEXT NOT NULL,
+    rfc_message_id  TEXT NOT NULL,
+    subject         TEXT NOT NULL,
+    commit_sha      TEXT DEFAULT '',
+    extra_to        TEXT DEFAULT '[]',
+    extra_cc        TEXT DEFAULT '[]',
+    status          TEXT NOT NULL,
+    error_message   TEXT DEFAULT '',
+    sent_at         DATETIME,
+    PRIMARY KEY (series_id, seq_index)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_in_reply_to ON messages(in_reply_to);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id);
 CREATE INDEX IF NOT EXISTS idx_messages_epoch ON messages(epoch_timestamp DESC);
@@ -83,6 +114,11 @@ CREATE INDEX IF NOT EXISTS idx_patch_comments_file_line ON patch_comments(messag
 CREATE INDEX IF NOT EXISTS idx_known_addresses_address ON known_addresses(address);
 CREATE INDEX IF NOT EXISTS idx_known_addresses_name ON known_addresses(name);
 CREATE INDEX IF NOT EXISTS idx_known_addresses_freq ON known_addresses(frequency DESC, last_seen DESC);
+
+CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_key ON patch_series_drafts(series_key);
+CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_status ON patch_series_drafts(status);
+CREATE INDEX IF NOT EXISTS idx_patch_series_items_draft_msg_id ON patch_series_items(draft_msg_id);
+CREATE INDEX IF NOT EXISTS idx_patch_series_items_rfc_msgid ON patch_series_items(rfc_message_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     message_id UNINDEXED,
