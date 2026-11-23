@@ -116,6 +116,7 @@ undined/
 ├── frontend/                        # Vanilla JavaScript 3-pane client
 ├── docs/
 │   ├── DESIGN.md                    # System architecture and design documentation
+│   ├── DESIGN_UNDINED_SERIES_DRAFT.md # MCP draft-only tools & series send UI spec
 │   ├── REST_API.md                  # REST API interface specification
 │   └── AGENT.md                     # AI Agent skills & MCP protocol specification
 ├── go.mod
@@ -185,6 +186,37 @@ CREATE TABLE IF NOT EXISTS patch_comments (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS patch_series_drafts (
+    series_id       TEXT PRIMARY KEY,
+    series_key      TEXT NOT NULL,
+    branch          TEXT DEFAULT '',
+    version         INTEGER DEFAULT 1,
+    base_commit     TEXT DEFAULT '',
+    to_addrs        TEXT NOT NULL,
+    cc_addrs        TEXT NOT NULL,
+    in_reply_to     TEXT DEFAULT '',
+    status          TEXT NOT NULL,
+    send_delay_sec  INTEGER DEFAULT 2,
+    created_at      DATETIME NOT NULL,
+    updated_at      DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS patch_series_items (
+    series_id       TEXT NOT NULL REFERENCES patch_series_drafts(series_id) ON DELETE CASCADE,
+    seq_index       INTEGER NOT NULL,
+    is_cover_letter INTEGER NOT NULL DEFAULT 0,
+    draft_msg_id    TEXT NOT NULL,
+    rfc_message_id  TEXT NOT NULL,
+    subject         TEXT NOT NULL,
+    commit_sha      TEXT DEFAULT '',
+    extra_to        TEXT DEFAULT '[]',
+    extra_cc        TEXT DEFAULT '[]',
+    status          TEXT NOT NULL,
+    error_message   TEXT DEFAULT '',
+    sent_at         DATETIME,
+    PRIMARY KEY (series_id, seq_index)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_in_reply_to ON messages(in_reply_to);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id);
 CREATE INDEX IF NOT EXISTS idx_messages_epoch ON messages(epoch_timestamp DESC);
@@ -200,6 +232,11 @@ CREATE INDEX IF NOT EXISTS idx_patch_comments_msgid ON patch_comments(message_id
 CREATE INDEX IF NOT EXISTS idx_patch_comments_msg_db_id ON patch_comments(message_db_id);
 CREATE INDEX IF NOT EXISTS idx_patch_comments_state ON patch_comments(state);
 CREATE INDEX IF NOT EXISTS idx_patch_comments_file_line ON patch_comments(message_id, file_path, line_no);
+
+CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_key ON patch_series_drafts(series_key);
+CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_status ON patch_series_drafts(status);
+CREATE INDEX IF NOT EXISTS idx_patch_series_items_draft_msg_id ON patch_series_items(draft_msg_id);
+CREATE INDEX IF NOT EXISTS idx_patch_series_items_rfc_msgid ON patch_series_items(rfc_message_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     message_id UNINDEXED,
@@ -297,16 +334,21 @@ When initializing the database (`db.InitDB()`):
 
 ## **6. Model Context Protocol (MCP) Server (`internal/mcp`)**
 
-Exposes 9 tools matching the `undine-mcp-review` skill:
+Exposes 19 JSON-RPC 2.0 tool entries (13 core tools plus backward-compatible aliases) matching the `undine-mcp-review` skill, strictly enforcing a **Zero-SMTP-Transmission** draft-only boundary:
 1. `list_recent_emails`
 2. `search_emails`
-3. `get_thread_context`
-4. `import_patch_series_b4`
-5. `create_review_draft`
-6. `get_patchwork_patch_info`
-7. `list_my_delegated_patches`
-8. `update_patchwork_patch`
-9. `post_review_comment` (aliases: `post_diff_comment`, `add_diff_comment`)
+3. `get_email` (alias: `get_message`)
+4. `get_thread_context`
+5. `import_patch_series_b4`
+6. `write_draft_message` (aliases: `write_draft`, `save_draft`)
+7. `create_review_draft`
+8. `create_mail_draft`
+9. `stage_patch_series`
+10. `export_thread_mbox`
+11. `get_patchwork_patch_info`
+12. `list_my_delegated_patches`
+13. `update_patchwork_patch`
+14. `post_review_comment` (aliases: `post_diff_comment`, `add_diff_comment`)
 
 * **Transports**:
   * **STDIO Mode**: `undined --mcp-stdio`. Standard input/output reserved strictly for JSON-RPC 2.0; logs written to file.

@@ -96,6 +96,9 @@ data: {"folder":"INBOX","new_count":3,"timestamp":1761722400}
 | `draft.created` | Composer / MCP (`create_review_draft`) | `{"draft_message_id": "string", "in_reply_to": "string"}` | Fetch `GET /api/folders` (update `Drafts` count) and notify user.
 
  |
+| `series_draft_updated` | MCP (`stage_patch_series`) / Series Manager | `{"series_id": "string", "series_key": "string", "message_count": int, "root_message_id": "string", "status": "string"}` | Refresh `Drafts` folder and active series queue view.
+
+ |
 | `patch.applied` | Patch Runner (`git am`) | `{"message_id": "string", "success": bool, "output": "string"}` | Display toast notification with patch application status.
 
  |

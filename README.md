@@ -458,9 +458,14 @@ agy mcp add undine ./bin/undined --mcp-stdio
 |---|---|---|
 | `list_recent_emails` | `folder`, `limit` | List recent email summaries filtered by mailbox folder. |
 | `search_emails` | `query`, `limit` | Full-text search emails using SQLite FTS5. |
+| `get_email` (`get_message`) | `message_id` | Retrieve full metadata, plaintext body, and attachment metadata for an email. |
 | `get_thread_context` | `message_id` | Retrieve complete thread hierarchy and diff contents. |
 | `import_patch_series_b4` | `message_id_or_url` | Download thread from lore.kernel.org via `b4` into Maildir. |
-| `create_review_draft` | `target_message_id`, `general_feedback`, `inline_notes` | Build an LKML quoted review email in Maildir `Drafts`. |
+| `export_thread_mbox` | `message_id`, `output_path`, `patches_only` | Export a local thread/series as a `git am`-ready mbox with collected review trailers. |
+| `write_draft_message` (`write_draft`, `save_draft`) | `body`, `in_reply_to`, `to`, `cc`, `subject`, `inline_notes`, `attachments` | Stage a reply or standalone draft (with optional attachments) into Maildir `Drafts`. |
+| `create_review_draft` | `target_message_id`, `general_feedback`, `inline_notes`, `attachments` | Build an LKML quoted review email in Maildir `Drafts`. |
+| `create_mail_draft` | `to`, `cc`, `subject`, `body`, `in_reply_to`, `references`, `extra_headers`, `tags` | Stage a standalone strict 8-bit plain-text draft (e.g. Pull Request) into Maildir `Drafts`. |
+| `stage_patch_series` | `series_key`, `to`, `cc`, `messages`, `replace_existing`, ... | Stage a threaded `0/N..N/N` patch series draft queue into Maildir `Drafts` and SQLite. |
 | `get_patchwork_patch_info` | `message_id` | Query patchwork.kernel.org for CI checks and delegation. |
 | `list_my_delegated_patches` | `state`, `project`, `limit` | List patches assigned to maintainer on Patchwork. |
 | `update_patchwork_patch` | `patch_id`, `state`, `delegate_to_me` | Update patch review state or self-delegate. |
@@ -468,7 +473,7 @@ agy mcp add undine ./bin/undined --mcp-stdio
 | `post_diff_comment` | `...` | Alias for `post_review_comment`. |
 | `add_diff_comment` | `...` | Alias for `post_review_comment`. |
 
-*All MCP tool calls write structured audit logs to `~/.cache/undined/undined.log`.*
+*MCP tools strictly enforce a **Zero-SMTP-Transmission** draft-only boundary (human review and sending happen exclusively in the Web UI). All MCP tool calls write structured audit logs to `~/.cache/undined/undined.log`.*
 
 ---
 

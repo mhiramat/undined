@@ -11,7 +11,7 @@ UndineD is designed from the ground up to empower AI coding agents (such as Goog
 ### Integration Channels
 
 1. **Embedded Model Context Protocol (MCP) Server**:
-   Exposes high-level tools over STDIO or Server-Sent Events (SSE) to search mail, inspect diffs, post inline review comments, and generate reply drafts.
+   Exposes high-level tools over STDIO or Server-Sent Events (SSE) to search mail, inspect diffs, post inline review comments, export `git am`-ready mbox files, and stage plain-text drafts (standalone or threaded patch series). **MCP tools never transmit email over SMTP**; human review and transmission happen exclusively in the Web UI.
 2. **Asynchronous Review Runner (`agy --print`)**:
    Invoked by the backend when the user clicks `[ AI review ]` in the Web UI. Executes prompt-only reviews in the background and saves reports to the `AI-reviews` mailbox.
 
@@ -166,14 +166,95 @@ Aggregates inline review comments and general feedback into a canonical LKML quo
 {
   "success": true,
   "draft_id": 55,
-  "file_path": "/home/user/.local/share/undined/maildir/Drafts/cur/1791745088.M12345P6789.host,S=1024:2,D",
+  "file_path": ".../maildir/Drafts/cur/1791745088.M12345P6789.host,S=1024:2,D",
   "subject": "Re: [PATCH] ftrace: improve kprobe handling"
 }
 ```
 
 ---
 
-### 4.6 `import_patch_series_b4`
+### 4.6 `create_mail_draft`
+Stages a standalone strict 8-bit UTF-8 plain-text email draft into Maildir `Drafts` without requiring a `target_message_id` reply parent (suitable for Pull Requests and new threads). Preserves raw `\t` tabs verbatim and never invokes SMTP.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `to` | `string[]` | Yes | — | Recipient email addresses (`Name <addr>` or `addr`). |
+| `cc` | `string[]` | No | `[]` | Optional carbon-copy recipients. |
+| `subject` | `string` | Yes | — | Email subject line. |
+| `body` | `string` | Yes | — | Strict plain-text UTF-8 body (tabs and newlines preserved verbatim). |
+| `in_reply_to` | `string` | No | `""` | Optional parent `Message-ID`. |
+| `references` | `string[]` | No | `[]` | Optional `References` chain. |
+| `extra_headers` | `object` | No | `{}` | Optional allowlisted `X-*` custom headers (excluding `X-Mailer` and `X-Undine-Series-*`). |
+| `tags` | `string[]` | No | `[]` | Optional UndineD color/custom tags to attach. |
+
+#### Returns:
+```json
+{
+  "draft_id": "56",
+  "message_id": "<20261123112000.98412-1-dev@kernel.org>",
+  "maildir_path": ".../maildir/Drafts/cur/...",
+  "web_url": "http://127.0.0.1:8080/#drafts/56"
+}
+```
+
+---
+
+### 4.7 `stage_patch_series`
+Stages a threaded multi-email patch series (optional `0/N` cover letter + `1/N..N/N` patches) into Maildir `Drafts` and SQLite (`patch_series_drafts` / `patch_series_items`), emitting a `series_draft_updated` SSE event when connected to an Event Hub. Never invokes SMTP.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `series_key` | `string` | Yes | — | Stable logical key (e.g. `topic/fprobe-cleanup:v2`) for idempotency. |
+| `branch` | `string` | No | `""` | Optional source Git branch name. |
+| `version` | `int` | No | `1` | Series version number. |
+| `to` | `string[]` | Yes | — | Shared `To` recipients for the series. |
+| `cc` | `string[]` | No | `[]` | Optional shared `Cc` recipients. |
+| `in_reply_to` | `string` | No | `""` | Optional external thread `Message-ID`. |
+| `base_commit` | `string` | No | `""` | Optional upstream base commit SHA. |
+| `replace_existing` | `bool` | No | `false` | Replace an existing unsent series with the same `series_key` (refused if any item was already sent). |
+| `messages` | `array` | Yes | — | Ordered `SeriesMessage` objects (`index`, `is_cover_letter`, `subject`, `body`, optional `commit_sha`, `extra_to`, `extra_cc`). |
+
+#### Returns:
+```json
+{
+  "series_id": "ser_...",
+  "series_key": "topic/fprobe-cleanup:v2",
+  "message_count": 3,
+  "root_message_id": "<20261123112500.41022-1-dev@kernel.org>",
+  "items": [
+    { "index": 0, "draft_id": "57", "message_id": "<...-1-...>", "status": "draft" }
+  ],
+  "web_url": "http://127.0.0.1:8080/#series/ser_..."
+}
+```
+
+---
+
+### 4.8 `export_thread_mbox`
+Exports a local thread or patch series from Maildir/SQLite as a `git am`-ready mbox file.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `message_id` | `string` | Yes | — | Any Message-ID or DB ID in the target thread. |
+| `output_path` | `string` | No | Temp file | Optional output path restricted to allowed temp/cache/exports directories (rejects symlinks and path escapes). |
+| `patches_only` | `bool` | No | `true` | Filters to patch messages ordered by `[PATCH x/N]` and attaches deduplicated review trailers collected from thread replies. |
+
+#### Returns:
+```json
+{
+  "mbox_path": "/tmp/undined-export-xxxx.mbx",
+  "patch_count": 3,
+  "base_commit": "a1b2c3d4e5f6...",
+  "root_message_id": "<...>"
+}
+```
+
+---
+
+### 4.9 `import_patch_series_b4`
 Downloads an entire patch series or discussion thread from `lore.kernel.org` via `b4` and imports it into the local Maildir store and SQLite index.
 
 #### Parameters:
@@ -193,21 +274,21 @@ Downloads an entire patch series or discussion thread from `lore.kernel.org` via
 
 ---
 
-### 4.7 `get_patchwork_patch_info`
+### 4.10 `get_patchwork_patch_info`
 Queries `patchwork.kernel.org` for metadata associated with an email:
 * **Parameters**: `message_id: string`
 * **Returns**: `{"id": int, "state": string, "is_delegated_to_me": bool, "checks": array, "series": object}`
 
 ---
 
-### 4.8 `list_my_delegated_patches`
+### 4.11 `list_my_delegated_patches`
 Lists patches assigned to the current maintainer on Patchwork:
 * **Parameters**: `state: string (optional)`, `project: string (optional)`, `limit: int = 20`
 * **Returns**: Array of delegated patch records.
 
 ---
 
-### 4.9 `update_patchwork_patch`
+### 4.12 `update_patchwork_patch`
 Updates review state or self-delegates a patch:
 * **Parameters**: `patch_id: int`, `state: string (optional)`, `delegate_to_me: bool = false`
 * **Returns**: Patchwork API response object.
