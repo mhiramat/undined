@@ -438,3 +438,65 @@ func (d *Database) UpdatePatchSeriesHeaders(seriesID string, toAddrs, ccAddrs []
 	d.MarkInProcessWrite()
 	return nil
 }
+
+// UpdatePatchSeriesItemMeta updates subject, extra_to, and extra_cc for an unsent item.
+func (d *Database) UpdatePatchSeriesItemMeta(seriesID string, seqIndex int, subject string, extraTo, extraCc []string) error {
+	extraToJSON, err := marshalStringSliceJSON(extraTo)
+	if err != nil {
+		return fmt.Errorf("marshal extra_to: %w", err)
+	}
+	extraCcJSON, err := marshalStringSliceJSON(extraCc)
+	if err != nil {
+		return fmt.Errorf("marshal extra_cc: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := d.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin item meta update: %w", err)
+	}
+	defer func() {
+		// Safe to ignore: returns sql.ErrTxDone once Commit succeeds.
+		_ = tx.Rollback()
+	}()
+
+	if _, err := tx.Exec(`
+		UPDATE patch_series_items
+		SET subject = ?, extra_to = ?, extra_cc = ?
+		WHERE series_id = ? AND seq_index = ?;
+	`, subject, extraToJSON, extraCcJSON, seriesID, seqIndex); err != nil {
+		return fmt.Errorf("update item meta %s[%d]: %w", seriesID, seqIndex, err)
+	}
+
+	if _, err := tx.Exec(`
+		UPDATE patch_series_drafts
+		SET updated_at = ?
+		WHERE series_id = ?;
+	`, now, seriesID); err != nil {
+		return fmt.Errorf("update series timestamp %s: %w", seriesID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit item meta update: %w", err)
+	}
+	d.MarkInProcessWrite()
+	return nil
+}
+
+// UpdatePatchSeriesItemDraftMsgID updates draft_msg_id when a missing draft file is recreated.
+func (d *Database) UpdatePatchSeriesItemDraftMsgID(seriesID string, seqIndex int, draftMsgID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := d.DB.Exec(`
+		UPDATE patch_series_items
+		SET draft_msg_id = ?
+		WHERE series_id = ? AND seq_index = ?;
+	`, draftMsgID, seriesID, seqIndex)
+	if err != nil {
+		return fmt.Errorf("update item draft_msg_id %s[%d]: %w", seriesID, seqIndex, err)
+	}
+	if _, err := d.DB.Exec("UPDATE patch_series_drafts SET updated_at = ? WHERE series_id = ?;", now, seriesID); err != nil {
+		return fmt.Errorf("update series timestamp %s: %w", seriesID, err)
+	}
+	d.MarkInProcessWrite()
+	return nil
+}
