@@ -59,19 +59,19 @@ Lists recent email threads and patch messages.
   - `limit` (*int*, optional): Maximum number of messages to return (default: `20`).
 - **Returns**: Array of message summaries with `message_id`, `subject`, `from_addr`, `is_patch`, `date`.
 
-### 3. `search_emails`
+### 4. `search_emails`
 Searches indexed email messages using SQLite full-text search (FTS5).
 - **Parameters**:
   - `query` (*str*, required): Search terms or FTS query.
   - `limit` (*int*, optional): Maximum results (default: `20`).
 
-### 4. `get_thread_context`
+### 5. `get_thread_context`
 Retrieves the complete thread conversation and patch diff content.
 - **Parameters**:
   - `message_id` (*str*, required): Root or member message ID of the thread.
 - **Returns**: List of messages in thread hierarchy with full `body_plain` content and patch diffs.
 
-### 5. `write_draft_message` (and aliases `write_draft`, `save_draft`)
+### 6. `write_draft_message` (and aliases `write_draft`, `save_draft`)
 Writes a complete draft response into the local `Drafts` folder for human review, editing, and transmission.
 - **Parameters**:
   - `in_reply_to` (*str*, optional): Target Message-ID being replied to (auto-derives To, Cc, Subject, and References if omitted).
@@ -80,9 +80,10 @@ Writes a complete draft response into the local `Drafts` folder for human review
   - `subject` (*str*, optional): Subject line.
   - `cc` (*str*, optional): CC email address(es).
   - `inline_notes` (*list[dict]*, optional): Optional structured inline review comments to merge as LKML quotes into the draft.
+  - `attachments` (*list[str|dict]*, optional): Optional local file paths or attachment objects.
 - **Returns**: `{"success": true, "draft_id": int, "message_id": str, "subject": str, "file_path": str}`.
 
-### 6. `create_review_draft`
+### 7. `create_review_draft`
 Aggregates inline review comments into an LKML quoted reply email saved to the local `Drafts` folder.
 - **Parameters**:
   - `target_message_id` (*str*, required): Message-ID being replied to.
@@ -90,7 +91,22 @@ Aggregates inline review comments into an LKML quoted reply email saved to the l
   - `inline_notes` (*list[dict]*, optional): Array of `{"file": "...", "line_no": 123, "comment": "..."}` dicts. Use `"file": "DESCRIPTION"` to attach comments to lines of the commit description / message body.
 - **Returns**: `{"success": true, "draft_id": int, "subject": str, "file_path": str}`.
 
-### 7. `import_patch_series_b4`
+### 8. `create_mail_draft`
+Stages a standalone strict 8-bit UTF-8 plain-text email draft (such as a Pull Request or new thread) into Maildir `Drafts` without sending over SMTP.
+- **Parameters**: `to` (*list[str]*, required), `subject` (*str*, required), `body` (*str*, required), optional `cc`, `in_reply_to`, `references`, `extra_headers` (allowlisted `X-*`), `tags`.
+- **Returns**: `{"draft_id": str, "message_id": str, "maildir_path": str, "web_url": str}`.
+
+### 9. `stage_patch_series`
+Stages a threaded patch series (`0/N` cover letter + `1/N..N/N` patches) into Maildir `Drafts` and SQLite (`patch_series_drafts` / `patch_series_items`) for human review and send in the Web UI. Never invokes SMTP.
+- **Parameters**: `series_key` (*str*, required), `to` (*list[str]*, required), `messages` (*list[dict]*, required), optional `branch`, `version`, `cc`, `in_reply_to`, `base_commit`, `replace_existing`.
+- **Returns**: `{"series_id": str, "series_key": str, "message_count": int, "root_message_id": str, "items": list, "web_url": str}`.
+
+### 10. `export_thread_mbox`
+Exports a local thread or patch series from Maildir/SQLite as a `git am`-ready mbox file (with `[PATCH x/N]` ordering and collected review trailers when `patches_only` is `true`).
+- **Parameters**: `message_id` (*str*, required), optional `output_path` (restricted to allowed temp/cache/exports dirs), `patches_only` (*bool*, default `true`).
+- **Returns**: `{"mbox_path": str, "patch_count": int, "base_commit": str, "root_message_id": str}`.
+
+### 11. `import_patch_series_b4`
 Downloads a patch series or thread from `lore.kernel.org` via `b4`.
 - **Parameters**:
   - `message_id_or_url` (*str*, required): Lore Message-ID or public inbox URL.
