@@ -26,6 +26,7 @@ import (
 	"undined-go/internal/lkml/review"
 	"undined-go/internal/patchwork"
 	"undined-go/internal/security"
+	"undined-go/internal/series"
 	"undined-go/internal/smtp"
 	"undined-go/internal/storage/database"
 	"undined-go/internal/storage/maildir"
@@ -44,6 +45,7 @@ type Server struct {
 	Review       *review.Runner
 	Patchwork    *patchwork.Client
 	Translate    *translate.Client
+	Series       *series.Manager
 	Launcher     *bridge.Launcher
 	FrontendDir  string
 	Events       *events.Hub
@@ -86,6 +88,7 @@ func NewServer(
 		Review:       reviewRunner,
 		Patchwork:    pwClient,
 		Translate:    translate.NewClient(cfg),
+		Series:       series.NewManager(cfg, db, store, smtpClient, hub),
 		Launcher:     launcher,
 		FrontendDir:  frontendDir,
 		Events:       hub,
@@ -108,6 +111,9 @@ func (s *Server) SetEventHub(hub *events.Hub) {
 	}
 	if s.Review != nil {
 		s.Review.SetEvents(hub)
+	}
+	if s.Series != nil {
+		s.Series.SetEvents(hub)
 	}
 }
 
@@ -191,6 +197,16 @@ func (s *Server) setupRoutes() {
 		api.Post("/composer/open-editor", s.handleOpenEditor)
 		api.Post("/composer/save-draft", s.handleSaveDraft)
 		api.Post("/smtp/send", s.handleSMTPSend)
+
+		// Patch Series Drafts & Controlled Sequential Send
+		api.Get("/series", s.handleListSeries)
+		api.Get("/series/{id}", s.handleGetSeries)
+		api.Put("/series/{id}/headers", s.handleUpdateSeriesHeaders)
+		api.Put("/series/{id}/items/{index}", s.handleUpdateSeriesItem)
+		api.Post("/series/{id}/test-send-self", s.handleTestSendSeriesSelf)
+		api.Post("/series/{id}/send", s.handleSendSeries)
+		api.Post("/series/{id}/cancel", s.handleCancelSeries)
+		api.Delete("/series/{id}", s.handleDeleteSeries)
 
 		// Known Addresses
 		api.Get("/addresses", s.handleGetAddresses)
