@@ -593,8 +593,8 @@ func TestE2E_MCPAgentReview(t *testing.T) {
 	_ = json.Unmarshal([]byte(lines[1]), &toolsResp)
 	toolsResult := toolsResp["result"].(map[string]any)
 	toolsList := toolsResult["tools"].([]any)
-	if len(toolsList) != 16 {
-		t.Errorf("expected 16 MCP tools, got %d", len(toolsList))
+	if len(toolsList) != 19 {
+		t.Errorf("expected 19 MCP tools, got %d", len(toolsList))
 	}
 
 	// Verify list_recent_emails

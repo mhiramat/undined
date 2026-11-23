@@ -609,8 +609,8 @@ func TestMCPSTDIOJSONRPC(t *testing.T) {
 	var toolsResp map[string]interface{}
 	_ = json.Unmarshal([]byte(lines[2]), &toolsResp)
 	toolsList := toolsResp["result"].(map[string]interface{})["tools"].([]interface{})
-	if len(toolsList) != 16 {
-		t.Errorf("expected 16 tools, got %d", len(toolsList))
+	if len(toolsList) != 19 {
+		t.Errorf("expected 19 tools, got %d", len(toolsList))
 	}
 
 	// Verify tools/call

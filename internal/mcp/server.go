@@ -21,6 +21,7 @@ import (
 
 	"undined-go/internal/config"
 	"undined-go/internal/constants"
+	"undined-go/internal/events"
 	"undined-go/internal/lkml/b4"
 	"undined-go/internal/lkml/patch"
 	"undined-go/internal/lkml/quote"
@@ -38,6 +39,7 @@ type Server struct {
 	DB        *database.Database
 	B4        *b4.B4Runner
 	Patchwork *patchwork.Client
+	Events    *events.Hub
 
 	logMu     sync.Mutex
 	logWriter io.Writer
@@ -89,6 +91,11 @@ func (s *Server) SetLogWriter(w io.Writer) {
 	s.logMu.Lock()
 	defer s.logMu.Unlock()
 	s.logWriter = w
+}
+
+// SetEventHub attaches an optional SSE Event Hub so MCP draft staging can broadcast live updates.
+func (s *Server) SetEventHub(hub *events.Hub) {
+	s.Events = hub
 }
 
 func (s *Server) writeAccessLog(level, message string) {
@@ -669,6 +676,198 @@ func (s *Server) getToolsList() []map[string]interface{} {
 				"required": []string{"result"},
 			},
 		},
+		{
+			"name":        "create_mail_draft",
+			"description": "Stage a standalone strict plain-text UTF-8 email draft into Maildir Drafts without sending over SMTP.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "create_mail_draftArguments",
+				"properties": map[string]interface{}{
+					"to": map[string]interface{}{
+						"title":       "To",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Recipient email addresses ('Name <addr>' or 'addr').",
+					},
+					"cc": map[string]interface{}{
+						"title":       "Cc",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional carbon-copy recipients.",
+					},
+					"subject": map[string]interface{}{
+						"title":       "Subject",
+						"type":        "string",
+						"description": "Email subject line.",
+					},
+					"body": map[string]interface{}{
+						"title":       "Body",
+						"type":        "string",
+						"description": "Strict plain-text UTF-8 body (tabs and newlines preserved verbatim).",
+					},
+					"in_reply_to": map[string]interface{}{
+						"title":       "In Reply To",
+						"type":        "string",
+						"description": "Optional parent Message-ID.",
+					},
+					"references": map[string]interface{}{
+						"title":       "References",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional References Message-ID chain.",
+					},
+					"extra_headers": map[string]interface{}{
+						"title":                "Extra Headers",
+						"type":                 "object",
+						"additionalProperties": map[string]interface{}{"type": "string"},
+						"description":          "Optional allowlisted X-* custom headers.",
+					},
+					"tags": map[string]interface{}{
+						"title":       "Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional UndineD color/custom tags to attach.",
+					},
+				},
+				"required": []string{"to", "subject", "body"},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "create_mail_draftOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "stage_patch_series",
+			"description": "Stage a threaded multi-email patch series (optional 0/N cover letter + 1/N..N/N patches) into Maildir Drafts and the series draft store without sending over SMTP.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "stage_patch_seriesArguments",
+				"properties": map[string]interface{}{
+					"series_key": map[string]interface{}{
+						"title":       "Series Key",
+						"type":        "string",
+						"description": "Stable logical key (e.g. 'topic/fprobe-cleanup:v2') for idempotency.",
+					},
+					"branch": map[string]interface{}{
+						"title":       "Branch",
+						"type":        "string",
+						"description": "Optional source Git branch name.",
+					},
+					"version": map[string]interface{}{
+						"title":       "Version",
+						"type":        "integer",
+						"default":     1,
+						"description": "Series version number.",
+					},
+					"to": map[string]interface{}{
+						"title":       "To",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Shared To recipients for the series.",
+					},
+					"cc": map[string]interface{}{
+						"title":       "Cc",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Optional shared Cc recipients for the series.",
+					},
+					"in_reply_to": map[string]interface{}{
+						"title":       "In Reply To",
+						"type":        "string",
+						"description": "Optional external thread Message-ID.",
+					},
+					"base_commit": map[string]interface{}{
+						"title":       "Base Commit",
+						"type":        "string",
+						"description": "Optional upstream base commit SHA.",
+					},
+					"replace_existing": map[string]interface{}{
+						"title":       "Replace Existing",
+						"type":        "boolean",
+						"default":     false,
+						"description": "If true and an unsent draft queue with series_key exists, replaces it cleanly.",
+					},
+					"messages": map[string]interface{}{
+						"title": "Messages",
+						"type":  "array",
+						"items": map[string]interface{}{
+							"type": "object",
+							"properties": map[string]interface{}{
+								"index":           map[string]interface{}{"type": "integer"},
+								"is_cover_letter": map[string]interface{}{"type": "boolean", "default": false},
+								"subject":         map[string]interface{}{"type": "string"},
+								"body":            map[string]interface{}{"type": "string"},
+								"commit_sha":      map[string]interface{}{"type": "string"},
+								"extra_to":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+								"extra_cc":        map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}},
+							},
+							"required": []string{"index", "subject", "body"},
+						},
+						"description": "Ordered array of series messages (0/N cover letter if present, followed by 1/N..N/N).",
+					},
+				},
+				"required": []string{"series_key", "to", "messages"},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "stage_patch_seriesOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "export_thread_mbox",
+			"description": "Export a local email thread or patch series from Maildir/SQLite as a git-am-ready mbox file.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "export_thread_mboxArguments",
+				"properties": map[string]interface{}{
+					"message_id": map[string]interface{}{
+						"title":       "Message Id",
+						"type":        "string",
+						"description": "Any Message-ID (or numeric database ID) in the target patch or series thread.",
+					},
+					"output_path": map[string]interface{}{
+						"title":       "Output Path",
+						"type":        "string",
+						"description": "Optional destination path inside temp/cache directories; if omitted, writes to a temporary file.",
+					},
+					"patches_only": map[string]interface{}{
+						"title":       "Patches Only",
+						"type":        "boolean",
+						"default":     true,
+						"description": "Default true. Filters to patch messages ordered by [PATCH x/N] and attaches collected thread trailers.",
+					},
+				},
+				"required": []string{"message_id"},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "export_thread_mboxOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
 	}
 }
 
@@ -693,6 +892,12 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 		return s.toolWriteDraftMessage(name, args)
 	case "create_review_draft":
 		return s.toolCreateReviewDraft(args)
+	case "create_mail_draft":
+		return s.toolCreateMailDraft(args)
+	case "stage_patch_series":
+		return s.toolStagePatchSeries(args)
+	case "export_thread_mbox":
+		return s.toolExportThreadMbox(args)
 	case "get_patchwork_patch_info":
 		return s.toolGetPatchworkPatchInfo(ctx, args)
 	case "list_my_delegated_patches":
