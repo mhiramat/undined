@@ -14,6 +14,50 @@ export function escapeHtml(str) {
 }
 
 /**
+ * Escapes HTML special characters for safe interpolation inside HTML attributes.
+ */
+export function escapeAttr(str) {
+  return escapeHtml(str);
+}
+
+/**
+ * Returns the trimmed URL only if it parses with an explicit http: or https: protocol;
+ * otherwise returns fallback (default empty string).
+ */
+export function sanitizeHttpUrl(rawUrl, fallback = "") {
+  if (!rawUrl || typeof rawUrl !== "string") return fallback;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return fallback;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return trimmed;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+/**
+ * Returns the trimmed color only if it is a valid 3- or 6-digit CSS hex color (#RGB or #RRGGBB).
+ */
+export function sanitizeHexColor(color, fallback = "") {
+  if (!color || typeof color !== "string") return fallback;
+  const trimmed = color.trim();
+  return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(trimmed) ? trimmed : fallback;
+}
+
+/**
+ * Restricts a CSS class slug to ASCII alphanumerics, hyphens, and underscores.
+ */
+export function sanitizeCssSlug(slug, fallback = "") {
+  if (!slug || typeof slug !== "string") return fallback;
+  const cleaned = slug.trim().replace(/[^a-zA-Z0-9_-]/g, "");
+  return cleaned || fallback;
+}
+
+/**
  * Formats a Unicode code point as a visually identifiable badge, e.g. <U+00A0>.
  */
 export function escapeUnicodeChar(codePoint) {

@@ -15,7 +15,7 @@ function isSafeUrl(url) {
   if (trimmed.startsWith("https://") || trimmed.startsWith("http://") || trimmed.startsWith("mailto:")) {
     return true;
   }
-  if (trimmed.startsWith("#") || trimmed.startsWith("/")) {
+  if (trimmed.startsWith("#") || (trimmed.startsWith("/") && !trimmed.startsWith("//"))) {
     return true;
   }
   return false;

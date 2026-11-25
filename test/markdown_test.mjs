@@ -52,6 +52,14 @@ test("renderMarkdown: escapes HTML and blocks malicious scripts (XSS)", () => {
   assert.equal(html.includes("&lt;img"), true);
 });
 
+test("renderMarkdown: rejects protocol-relative URLs (//evil.example)", () => {
+  const md = "[phish](//evil.example/login) and [ok](/local/path) and [hash](#section)";
+  const html = renderMarkdown(md);
+  assert.equal(html.includes('href="//evil.example/login"'), false);
+  assert.equal(html.includes('href="/local/path"'), true);
+  assert.equal(html.includes('href="#section"'), true);
+});
+
 test("renderMarkdown: preserves URL query parameters with underscores and autolinks", () => {
   const text = "Download the desktop app:\n<https://example.com/download?utm_content=hero_cta&opt_in=true#ctaButton>";
   const html = renderMarkdown(text);

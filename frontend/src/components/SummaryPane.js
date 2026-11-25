@@ -6,6 +6,7 @@
 import { store } from "../store.js";
 import { cancelFolderSync, deleteMessagesBatch, fetchFolders, markMessageRead, setMessagesTagBatch } from "../api.js";
 import { getTags, getMessageTags } from "../tags.js";
+import { sanitizeHexColor } from "../linkify.js";
 import { openFilterDialog } from "./FilterDialog.js";
 import { isDraftFolder, triggerNewMessage } from "./ViewerPane.js";
 import {
@@ -164,9 +165,10 @@ export function renderSummaryPane(container) {
             const isCl = key.startsWith("$cl_");
             const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
             const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";
+            const safeColor = sanitizeHexColor(val.color, "transparent");
             itemsHtml += `
               <button type="button" class="header-tag-item bulk-tag-item" data-tag-key="${escapeHtml(key)}">
-                <span class="tag-color-dot" style="background-color: ${escapeHtml(val.color || "")};"></span>
+                <span class="tag-color-dot" style="background-color: ${safeColor};"></span>
                 <span>${escapeHtml(val.tag || key)}</span>
                 ${shortcutHint ? `<span style="margin-left: auto; color: var(--text-muted); font-size: 10px;">${shortcutHint}</span>` : ""}
               </button>
@@ -486,11 +488,11 @@ export function renderSummaryPane(container) {
 
         const msgTags = getMessageTags(m);
         const primaryTag = msgTags[0] || null;
-        const tagColor = escapeHtml(m.tag_color || primaryTag?.color || "");
+        const tagColor = sanitizeHexColor(m.tag_color || primaryTag?.color || "");
         const tagBadgeHtml = msgTags.length > 0
           ? msgTags
               .map((t) => {
-                const c = escapeHtml(t.color || tagColor || "");
+                const c = sanitizeHexColor(t.color || tagColor || "");
                 const label = escapeHtml(t.tag || t.key || "");
                 return `<span class="summary-tag-badge" style="color: ${c || "inherit"}; border-color: ${c || "currentColor"};">${label}</span>`;
               })
@@ -539,7 +541,7 @@ export function renderSummaryPane(container) {
             <td class="summary-subject-cell">${treeGuide}${threadToggleHtml}${escapeHtml(m.subject)}</td>
             <td class="summary-from-cell">${escapeHtml(m.from_name || m.from_addr)}</td>
             <td class="summary-tag-cell">${tagBadgeHtml}</td>
-            <td class="summary-date-cell" style="${dateColorStyle}">${formatDate(m.date)}</td>
+            <td class="summary-date-cell" style="${dateColorStyle}">${escapeHtml(formatDate(m.date))}</td>
           </tr>
         `;
       });
@@ -849,7 +851,7 @@ export function renderSummaryPane(container) {
 
     const tagCell = row.cells ? row.cells[3] : row.querySelector(".summary-tag-cell");
     const dateCell = row.cells ? row.cells[4] : row.querySelector(".summary-date-cell");
-    const safeTagColor = tagColor ? escapeHtml(tagColor) : "";
+    const safeTagColor = sanitizeHexColor(tagColor);
     const safeTagName = tagName || tagKey || "";
 
     if (tagCell) {

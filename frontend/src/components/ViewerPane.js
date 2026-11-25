@@ -11,7 +11,7 @@ import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNew
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
 import { openReviewResultDialog } from "./ReviewResultDialog.js";
 import { renderSeriesWorkspace } from "./SeriesWorkspace.js";
-import { linkifyUrls, linkifyUrlsWithUnicode } from "../linkify.js";
+import { linkifyUrls, linkifyUrlsWithUnicode, sanitizeHttpUrl, sanitizeHexColor, sanitizeCssSlug } from "../linkify.js";
 import { isMarkdown, renderMarkdown, cleanBodyText } from "../markdown.js";
 import {
   FOLDER_B4_IMPORTS,
@@ -293,7 +293,7 @@ export function renderViewerPane(container) {
             <span class="meta-label">Msg-ID:</span>
             <span class="meta-val msgid-val">
               ${cleanMsgId ? `
-                <a href="javascript:void(0)" class="msgid-link" id="link-copy-msgid" role="button" title="Click to copy Message ID: &lt;${escapeAttr(cleanMsgId)}&gt;">&lt;${escapeHtml(cleanMsgId)}&gt;</a>
+                <a href="#" class="msgid-link" id="link-copy-msgid" role="button" title="Click to copy Message ID: &lt;${escapeAttr(cleanMsgId)}&gt;">&lt;${escapeHtml(cleanMsgId)}&gt;</a>
                 <button type="button" class="btn-copy-msgid" id="btn-copy-msgid" title="Copy Message ID to clipboard">📋</button>
               ` : `<span style="color: var(--text-muted);">-</span>`}
               ${mboxPath ? `
@@ -1222,9 +1222,10 @@ export function renderViewerPane(container) {
             const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
             const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";
             const isSelected = hasMessageTag(m, key) ? "✓" : "";
+            const safeTagColor = sanitizeHexColor(val.color, "transparent");
             itemsHtml += `
               <button type="button" class="header-tag-item" data-tag-key="${escapeHtml(key)}">
-                <span class="tag-color-dot" style="background-color: ${escapeAttr(val.color)};"></span>
+                <span class="tag-color-dot" style="background-color: ${safeTagColor};"></span>
                 <span>${escapeHtml(val.tag)}</span>
                 ${shortcutHint ? `<span style="margin-left: auto; color: var(--text-muted); font-size: 10px;">${shortcutHint}</span>` : ""}
                 ${isSelected ? `<span style="color: var(--accent-blue); font-weight: bold; margin-left: 4px;">✓</span>` : ""}
@@ -1446,7 +1447,7 @@ export function renderViewerPane(container) {
       // State Badge & Dropdown
       let stateHtml = "";
       const stateSlug = pw.state || "new";
-      const stateClass = `pw-state-${stateSlug}`;
+      const stateClass = `pw-state-${sanitizeCssSlug(stateSlug, "new")}`;
       const stateLabels = {
         "new": "New",
         "queued": "Queued",
@@ -1519,16 +1520,16 @@ export function renderViewerPane(container) {
       let seriesHtml = "";
       const seriesObj = Array.isArray(pw.series) ? (pw.series[0] || null) : pw.series;
       if (seriesObj) {
-        const v = seriesObj.version || 1;
-        const total = pw.total_series_patches || seriesObj.total || (Array.isArray(seriesObj.patches) ? seriesObj.patches.length : 1);
-        const myCount = pw.my_delegated_series_count || 0;
+        const v = Number(seriesObj.version) || 1;
+        const total = Number(pw.total_series_patches || seriesObj.total || (Array.isArray(seriesObj.patches) ? seriesObj.patches.length : 1)) || 1;
+        const myCount = Number(pw.my_delegated_series_count) || 0;
         let myNote = "";
         if (myCount > 0) {
           myNote = ` (${myCount}/${total} delegated to you)`;
         }
         seriesHtml = `
           <button type="button" class="pw-badge pw-badge-clickable pw-badge-series" id="btn-toggle-series" title="Click to inspect patches in this series">
-            📦 Series v${v} [${total} patches${myNote}] ▾
+            📦 Series v${escapeHtml(String(v))} [${escapeHtml(String(total))} patches${escapeHtml(myNote)}] ▾
           </button>
         `;
       }
@@ -1561,9 +1562,12 @@ export function renderViewerPane(container) {
           ${seriesHtml}
         </div>
         <div class="pw-bar-right">
-          <a href="${escapeHtml(pw.web_url || pw.url || '#')}" target="_blank" rel="noopener noreferrer" class="pw-link" title="Open patch on patchwork.kernel.org">
-            patchwork ↗
-          </a>
+          ${(() => {
+            const safePwUrl = sanitizeHttpUrl(pw.web_url || pw.url);
+            return safePwUrl
+              ? `<a href="${escapeAttr(safePwUrl)}" target="_blank" rel="noopener noreferrer" class="pw-link" title="Open patch on patchwork.kernel.org">patchwork ↗</a>`
+              : "";
+          })()}
         </div>
         <!-- Expandable CI Checks Drawer -->
         <div class="pw-drawer" id="pw-checks-drawer" style="display: none;"></div>
@@ -1662,16 +1666,17 @@ export function renderViewerPane(container) {
               let chkHtml = `<div class="pw-checks-list"><div class="pw-drawer-title">CI Test Checks (${checksList.length}):</div>`;
               for (const c of checksList) {
                 const cState = c.state || "pending";
+                const cStateSlug = sanitizeCssSlug(cState, "pending");
                 const cIcon = cState === "success" ? "✅" : (cState === "fail" ? "❌" : (cState === "warning" ? "⚠️" : "⏳"));
                 const cName = c.context || "Check";
                 const cDesc = c.description || "";
-                const cUrl = c.target_url;
+                const safeCheckUrl = sanitizeHttpUrl(c.target_url);
                 chkHtml += `
-                  <div class="pw-check-item pw-ci-${cState}">
+                  <div class="pw-check-item pw-ci-${cStateSlug}">
                     <span class="pw-check-icon">${cIcon}</span>
                     <span class="pw-check-name">${escapeHtml(cName)}</span>
                     ${cDesc ? `<span class="pw-check-desc">${escapeHtml(cDesc)}</span>` : ""}
-                    ${cUrl ? `<a href="${escapeHtml(cUrl)}" target="_blank" rel="noopener noreferrer" class="pw-check-link">Logs ↗</a>` : ""}
+                    ${safeCheckUrl ? `<a href="${escapeAttr(safeCheckUrl)}" target="_blank" rel="noopener noreferrer" class="pw-check-link">Logs ↗</a>` : ""}
                   </div>
                 `;
               }
@@ -1705,12 +1710,13 @@ export function renderViewerPane(container) {
                 const isMine = Boolean(sp.is_delegated_to_me);
                 const dInfo = sp.delegate ? (sp.delegate.first_name || sp.delegate.username || sp.delegate.email) : "Unassigned";
                 const spState = sp.state ? `[${sp.state}]` : "";
+                const safeSpUrl = sanitizeHttpUrl(sp.web_url);
                 sHtml += `
                   <div class="pw-series-item ${isCurrent ? 'pw-series-current' : ''}">
                     <span class="pw-series-item-title">${escapeHtml(sp.name || 'Patch #' + sp.id)}</span>
                     ${spState ? `<span class="pw-series-item-state">${escapeHtml(spState)}</span>` : ''}
                     ${isMine ? '<span class="pw-badge pw-badge-me-small">👤 Me</span>' : `<span class="pw-series-item-del">👤 ${escapeHtml(dInfo)}</span>`}
-                    ${sp.web_url ? `<a href="${escapeHtml(sp.web_url)}" target="_blank" rel="noopener noreferrer" class="pw-check-link">Open ↗</a>` : ''}
+                    ${safeSpUrl ? `<a href="${escapeAttr(safeSpUrl)}" target="_blank" rel="noopener noreferrer" class="pw-check-link">Open ↗</a>` : ''}
                   </div>
                 `;
               }
@@ -2094,8 +2100,7 @@ function escapeHtml(str) {
 }
 
 function escapeAttr(str) {
-  if (!str) return "";
-  return String(str).replace(/"/g, "&quot;");
+  return escapeHtml(str);
 }
 
 function formatBytes(bytes) {

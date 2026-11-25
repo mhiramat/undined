@@ -7,6 +7,7 @@
 import { store } from "../store.js";
 import { parseFilterQuery, buildFilterQuery } from "../filter.js";
 import { getTags, isTagMatch } from "../tags.js";
+import { sanitizeHexColor } from "../linkify.js";
 
 let activeModal = null;
 
@@ -22,8 +23,7 @@ function escapeHtml(str) {
 }
 
 function escapeAttr(str) {
-  if (!str) return "";
-  return String(str).replace(/"/g, "&quot;");
+  return escapeHtml(str);
 }
 
 export async function openFilterDialog() {
@@ -48,6 +48,7 @@ export async function openFilterDialog() {
   let tagItemsHtml = "";
   for (const [key, val] of Object.entries(tags)) {
     const isSelected = isTagMatch(key, val, initialTags);
+    const safeColor = sanitizeHexColor(val.color, "#94a3b8");
     tagItemsHtml += `
       <label class="filter-tag-item" title="${escapeAttr(val.tag)} (${escapeAttr(key)})">
         <input
@@ -55,10 +56,10 @@ export async function openFilterDialog() {
           class="filter-tag-checkbox"
           value="${escapeAttr(val.tag)}"
           data-tag-key="${escapeAttr(key)}"
-          data-tag-color="${escapeAttr(val.color)}"
+          data-tag-color="${escapeAttr(safeColor)}"
           ${isSelected ? "checked" : ""}
         />
-        <span class="tag-color-dot" style="background-color: ${escapeAttr(val.color)};"></span>
+        <span class="tag-color-dot" style="background-color: ${safeColor};"></span>
         <span class="filter-tag-name">${escapeHtml(val.tag)}</span>
         <span class="filter-tag-key-hint">${escapeHtml(key)}</span>
       </label>
@@ -256,10 +257,10 @@ export async function openFilterDialog() {
       let pillsHtml = "";
       checkedBoxes.forEach((chk) => {
         const tagName = chk.value;
-        const tagColor = chk.getAttribute("data-tag-color") || "#94a3b8";
+        const tagColor = sanitizeHexColor(chk.getAttribute("data-tag-color"), "#94a3b8");
         pillsHtml += `
-          <span class="filter-selected-tag-pill" style="border-color: ${escapeAttr(tagColor)}; color: ${escapeAttr(tagColor)};">
-            <span class="tag-color-dot" style="background-color: ${escapeAttr(tagColor)};"></span>
+          <span class="filter-selected-tag-pill" style="border-color: ${tagColor}; color: ${tagColor};">
+            <span class="tag-color-dot" style="background-color: ${tagColor};"></span>
             <span>${escapeHtml(tagName)}</span>
           </span>
         `;
@@ -272,10 +273,10 @@ export async function openFilterDialog() {
     let pillsHtml = "";
     checkedBoxes.slice(0, 2).forEach((chk) => {
       const tagName = chk.value;
-      const tagColor = chk.getAttribute("data-tag-color") || "#94a3b8";
+      const tagColor = sanitizeHexColor(chk.getAttribute("data-tag-color"), "#94a3b8");
       pillsHtml += `
-        <span class="filter-selected-tag-pill" style="border-color: ${escapeAttr(tagColor)}; color: ${escapeAttr(tagColor)};">
-          <span class="tag-color-dot" style="background-color: ${escapeAttr(tagColor)};"></span>
+        <span class="filter-selected-tag-pill" style="border-color: ${tagColor}; color: ${tagColor};">
+          <span class="tag-color-dot" style="background-color: ${tagColor};"></span>
           <span>${escapeHtml(tagName)}</span>
         </span>
       `;

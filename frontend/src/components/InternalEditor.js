@@ -28,6 +28,11 @@ export function openEditorInNewWindow(params = {}) {
   );
 
   if (!w || w.closed || typeof w.closed === "undefined") {
+    try {
+      localStorage.removeItem(sessionId);
+    } catch (_) {
+      // Ignore storage cleanup errors
+    }
     showToast("Pop-up window was blocked. Please allow pop-ups for UndineD.", "warning");
     return false;
   }
@@ -1704,8 +1709,7 @@ function escapeHtml(str) {
 }
 
 function escapeAttr(str) {
-  if (!str) return "";
-  return str.replace(/"/g, "&quot;");
+  return escapeHtml(str);
 }
 
 function showToast(message, type = "info") {

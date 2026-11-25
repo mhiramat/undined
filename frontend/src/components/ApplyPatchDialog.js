@@ -21,8 +21,7 @@ function escapeHtml(str) {
 }
 
 function escapeAttr(str) {
-  if (!str) return "";
-  return String(str).replace(/"/g, "&quot;");
+  return escapeHtml(str);
 }
 
 export function extractSeriesVersion(subject) {
