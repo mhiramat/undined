@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"undined-go/internal/config"
@@ -546,5 +547,67 @@ func TestSyncTodoFromPatchwork_OrderingAndErrorPreservesExistingTodo(t *testing.
 	}
 	if len(msgs) != 1 {
 		t.Errorf("len(msgs in TODO after failed sync) = %d, want 1 preserved", len(msgs))
+	}
+}
+
+func TestPatchworkClient_BlocksCrossOriginRedirectTokenLeak(t *testing.T) {
+	var leakedAuth atomic.Bool
+	attackerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			leakedAuth.Store(true)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id": 1}`)) // best-effort mock response write
+	}))
+	defer attackerServer.Close()
+
+	pwServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/redirect-external") {
+			http.Redirect(w, r, attackerServer.URL+"/steal", http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/redirect-same") {
+			http.Redirect(w, r, "/api/1.4/patches/42/", http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id": 42, "state": "new"}`)) // best-effort mock response write
+	}))
+	defer pwServer.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.Patchwork.URL = pwServer.URL
+	cfg.Patchwork.APIVersion = "1.4"
+	cfg.Patchwork.Token = "secret-patchwork-token"
+	client := NewClient(cfg, nil, nil)
+
+	// 1. Cross-origin redirect must be rejected and never receive Authorization header
+	req, err := client.newRequest(http.MethodGet, "/redirect-external", nil)
+	if err != nil {
+		t.Fatalf("newRequest failed: %v", err)
+	}
+	resp, err := client.HTTPClient.Do(req)
+	if resp != nil {
+		_ = resp.Body.Close() // ignore close error on test response body
+	}
+	if err == nil {
+		t.Fatalf("HTTPClient.Do(cross-origin redirect) = nil error, want redirect rejection")
+	}
+	if leakedAuth.Load() {
+		t.Errorf("Authorization header was leaked to cross-origin redirect target")
+	}
+
+	// 2. Same-origin redirect remains allowed
+	reqSame, err := client.newRequest(http.MethodGet, "/redirect-same", nil)
+	if err != nil {
+		t.Fatalf("newRequest(same-origin) failed: %v", err)
+	}
+	respSame, err := client.HTTPClient.Do(reqSame)
+	if err != nil {
+		t.Fatalf("HTTPClient.Do(same-origin redirect) failed: %v", err)
+	}
+	_ = respSame.Body.Close() // ignore close error on test response body
+	if respSame.StatusCode != http.StatusOK {
+		t.Errorf("same-origin redirect status = %d, want %d", respSame.StatusCode, http.StatusOK)
 	}
 }

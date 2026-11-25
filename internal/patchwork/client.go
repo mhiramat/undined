@@ -33,6 +33,23 @@ type Client struct {
 	userCache  map[string]int
 }
 
+const (
+	maxPatchworkErrorBytes = 64 * 1024
+	maxPatchworkMboxBytes  = 32 * 1024 * 1024
+	maxPatchworkRedirects  = 10
+)
+
+func readLimitedMbox(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxPatchworkMboxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxPatchworkMboxBytes {
+		return nil, fmt.Errorf("patchwork mbox response exceeded maximum allowed size of %d bytes", maxPatchworkMboxBytes)
+	}
+	return data, nil
+}
+
 // NewClient creates a new Patchwork Client.
 func NewClient(cfg *config.Config, db *database.Database, store *maildir.MaildirStore) *Client {
 	timeout := 15 * time.Second
@@ -40,16 +57,32 @@ func NewClient(cfg *config.Config, db *database.Database, store *maildir.Maildir
 		timeout = time.Duration(cfg.Patchwork.TimeoutSeconds * float64(time.Second))
 	}
 
-	return &Client{
-		Config:  cfg,
-		DB:      db,
-		Maildir: store,
-		HTTPClient: &http.Client{
-			Timeout: timeout,
-		},
+	c := &Client{
+		Config:    cfg,
+		DB:        db,
+		Maildir:   store,
 		cache:     make(map[string]map[string]any),
 		userCache: make(map[string]int),
 	}
+	c.HTTPClient = &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxPatchworkRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxPatchworkRedirects)
+			}
+			if len(via) > 0 {
+				orig := via[0].URL
+				if !strings.EqualFold(req.URL.Scheme, orig.Scheme) || !strings.EqualFold(req.URL.Host, orig.Host) {
+					return fmt.Errorf("refusing cross-origin or scheme-changing redirect to %s://%s", req.URL.Scheme, req.URL.Host)
+				}
+			}
+			if !c.isSameOriginAsBase(req.URL.String()) {
+				return fmt.Errorf("refusing redirect outside configured Patchwork origin: %s://%s", req.URL.Scheme, req.URL.Host)
+			}
+			return nil
+		},
+	}
+	return c
 }
 
 // BaseURL constructs the base API URL (e.g. https://patchwork.kernel.org/api/1.4).
@@ -435,7 +468,8 @@ func (c *Client) UpdatePatch(patchID int, updates map[string]any) (map[string]an
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		// Best-effort read of bounded error body for diagnostic message.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxPatchworkErrorBytes))
 		return nil, fmt.Errorf("patchwork update failed (%d): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -606,7 +640,8 @@ func (c *Client) ListMyPatches(states []string, project string, limit int, fallb
 			}
 
 			if resp.StatusCode != http.StatusOK {
-				respBody, _ := io.ReadAll(resp.Body)
+				// Best-effort read of bounded error body for diagnostic message.
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxPatchworkErrorBytes))
 				resp.Body.Close()
 				return nil, fmt.Errorf("patchwork patches query returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 			}
@@ -737,7 +772,7 @@ func (c *Client) DownloadPatchMbox(patchID int, mboxURL ...string) ([]byte, erro
 				if err == nil {
 					defer resp.Body.Close()
 					if resp.StatusCode == http.StatusOK {
-						data, readErr := io.ReadAll(resp.Body)
+						data, readErr := readLimitedMbox(resp.Body)
 						if readErr == nil && len(data) > 0 {
 							return data, nil
 						}
@@ -763,7 +798,7 @@ func (c *Client) DownloadPatchMbox(patchID int, mboxURL ...string) ([]byte, erro
 		if err == nil {
 			defer resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				data, readErr := io.ReadAll(resp.Body)
+				data, readErr := readLimitedMbox(resp.Body)
 				if readErr == nil && len(data) > 0 {
 					return data, nil
 				}
@@ -788,7 +823,7 @@ func (c *Client) DownloadPatchMbox(patchID int, mboxURL ...string) ([]byte, erro
 		return nil, fmt.Errorf("patch mbox download failed with status %d", resp.StatusCode)
 	}
 
-	return io.ReadAll(resp.Body)
+	return readLimitedMbox(resp.Body)
 }
 
 // SyncTodoResult holds summary counts and patches updated by SyncTodoFromPatchwork.
