@@ -635,3 +635,32 @@ func TestBuildMessageWithAttachmentsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestSendMessage_EnforcesSTARTTLSWhenConfigured(t *testing.T) {
+	l, port := startMockSMTPServer(t)
+	defer l.Close()
+
+	cfg := config.NewDefaultConfig()
+	cfg.SMTP.Host = "127.0.0.1"
+	cfg.SMTP.Port = port
+	cfg.SMTP.UseSSL = false
+	cfg.SMTP.UseSTARTTLS = true
+	cfg.SMTP.FromName = "Kernel Developer"
+	cfg.SMTP.FromEmail = "dev@example.com"
+
+	client := NewClient(cfg, nil, nil)
+	ok, _, err := client.SendMessage(
+		"reviewer@example.com",
+		"[PATCH] test STARTTLS enforcement",
+		"Body text",
+		"",
+		"",
+		"",
+	)
+	if ok || err == nil {
+		t.Fatalf("SendMessage(UseSTARTTLS=true without server STARTTLS) = (%v, %v), want (false, error)", ok, err)
+	}
+	if !strings.Contains(err.Error(), "STARTTLS") {
+		t.Errorf("SendMessage error = %q, want message mentioning STARTTLS", err.Error())
+	}
+}

@@ -526,11 +526,14 @@ func (c *Client) SendRawMessage(rawEmail string, recipients []string) (bool, str
 		}
 
 		if cfg.UseSTARTTLS {
-			if ok, _ := smtpClient.Extension("STARTTLS"); ok {
-				if err := smtpClient.StartTLS(tlsConf); err != nil {
-					smtpClient.Close()
-					return false, "", fmt.Errorf("STARTTLS negotiation failed: %w", err)
-				}
+			ok, _ := smtpClient.Extension("STARTTLS")
+			if !ok {
+				_ = smtpClient.Close() // best-effort close before refusing plaintext fallback
+				return false, "", fmt.Errorf("SMTP server %s does not advertise STARTTLS; refusing plaintext fallback", addr)
+			}
+			if err := smtpClient.StartTLS(tlsConf); err != nil {
+				_ = smtpClient.Close() // best-effort close on STARTTLS error
+				return false, "", fmt.Errorf("STARTTLS negotiation failed: %w", err)
 			}
 		}
 	}
