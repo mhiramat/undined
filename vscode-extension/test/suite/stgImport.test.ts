@@ -29,12 +29,15 @@ describe("StGit Patch Import (importpatch.sh logic)", () => {
     assert.strictEqual(mid, "20261108.12345-1-dev@kernel.org");
   });
 
-  it("should resolve LKML link and strip trailing T/#u suffix", async () => {
+  it("should resolve LKML link over HTTPS with hardened curl flags and strip trailing T/#u suffix", async () => {
     const link = await resolveLkmlLink(
       "<20261108.12345-1-dev@kernel.org>",
       async (cmd, args) => {
         assert.strictEqual(cmd, "curl");
-        assert.ok(args.includes("http://lkml.kernel.org/r/20261108.12345-1-dev@kernel.org"));
+        assert.ok(args.includes("--globoff"), "curl must disable URL globbing");
+        assert.ok(args.includes("--proto") && args.includes("=http,https"), "curl must restrict protocols");
+        assert.ok(args.includes("--proto-redir") && args.includes("=http,https"), "curl must restrict redirect protocols");
+        assert.ok(args.includes("https://lore.kernel.org/r/20261108.12345-1-dev%40kernel.org"));
         return {
           stdout: "https://lore.kernel.org/linux-trace-kernel/20261108.12345-1-dev@kernel.org/T/#u\n",
           stderr: "",

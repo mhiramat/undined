@@ -172,24 +172,32 @@ export async function resolveLkmlLink(
     return "";
   }
 
+  const encodedMid = encodeURIComponent(mid);
+  const lookupUrl = `https://lore.kernel.org/r/${encodedMid}`;
+
   try {
     const { stdout } = await runner("curl", [
       "-Ls",
+      "--globoff",
+      "--proto",
+      "=http,https",
+      "--proto-redir",
+      "=http,https",
       "-o",
       "/dev/null",
       "-w",
       "%{url_effective}",
-      `http://lkml.kernel.org/r/${mid}`,
+      lookupUrl,
     ]);
     const effective = stdout.trim();
-    if (effective) {
+    if (effective && /^https?:\/\//i.test(effective)) {
       return effective.replace(/T\/#u$/, "");
     }
   } catch {
     // Fallback if curl fails or network is unavailable
   }
 
-  return `http://lkml.kernel.org/r/${mid}`;
+  return lookupUrl;
 }
 
 /**
@@ -273,9 +281,12 @@ export async function importPatchWithStgit(
   importArgs.push("-m", mailPath);
   await runner("stg", importArgs, targetRepo);
 
-  const tmpPrefix = path.join(os.tmpdir(), `undine-stg-${process.pid}-${Date.now()}`);
-  const tmpFileIn = `${tmpPrefix}-in.txt`;
-  const tmpFileOut = `${tmpPrefix}-out.txt`;
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "undine-stg-"));
+  if (process.platform !== "win32") {
+    fs.chmodSync(tmpDir, 0o700);
+  }
+  const tmpFileIn = path.join(tmpDir, "in.txt");
+  const tmpFileOut = path.join(tmpDir, "out.txt");
 
   try {
     await runner("stg", ["edit", `--save-template=${tmpFileIn}`], targetRepo);
@@ -289,10 +300,7 @@ export async function importPatchWithStgit(
     await runner("stg", ["edit", "--file", tmpFileOut], targetRepo);
   } finally {
     try {
-      if (fs.existsSync(tmpFileIn)) fs.unlinkSync(tmpFileIn);
-    } catch {}
-    try {
-      if (fs.existsSync(tmpFileOut)) fs.unlinkSync(tmpFileOut);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     } catch {}
   }
 
@@ -691,7 +699,7 @@ export function registerB4Commands(
           async () => {
             let mailPath = "";
             let resolvedMsgId = cleanId;
-            let tempMailFile = "";
+            let tempMailDir = "";
 
             try {
               // 1. Resolve mbox/maildir path on disk (hydrates on server if needed)
@@ -714,10 +722,11 @@ export function registerB4Commands(
                   mailPath = detail.message.file_path;
                 }
                 if (!mailPath && detail.message.body_plain) {
-                  tempMailFile = path.join(
-                    os.tmpdir(),
-                    `undine-patch-${process.pid}-${Date.now()}.eml`
-                  );
+                  tempMailDir = fs.mkdtempSync(path.join(os.tmpdir(), "undine-patch-"));
+                  if (process.platform !== "win32") {
+                    fs.chmodSync(tempMailDir, 0o700);
+                  }
+                  const tempMailFile = path.join(tempMailDir, "patch.eml");
                   const fromHdr = detail.message.from_name
                     ? `${detail.message.from_name} <${detail.message.from_addr}>`
                     : detail.message.from_addr || "dev@example.com";
@@ -757,9 +766,9 @@ export function registerB4Commands(
                 `StGit patch ${patchDesc}imported ${branchDesc}${commitDesc}`.trim()
               );
             } finally {
-              if (tempMailFile) {
+              if (tempMailDir) {
                 try {
-                  if (fs.existsSync(tempMailFile)) fs.unlinkSync(tempMailFile);
+                  fs.rmSync(tempMailDir, { recursive: true, force: true });
                 } catch {}
               }
             }
