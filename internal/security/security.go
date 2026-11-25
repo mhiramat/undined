@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -103,10 +104,22 @@ func NewSecurityManager(host string, port int, dataDir string, forceRenew ...boo
 }
 
 // RenewToken generates a fresh 256-bit cryptographically secure token,
-// overwrites the auth_token file with 0600 permissions, and updates sm.Token.
+// writes it atomically to a 0600 temp file and renames it into sm.TokenPath,
+// refusing to overwrite symlinks, and updates sm.Token.
 func (sm *SecurityManager) RenewToken() (string, error) {
 	if err := os.MkdirAll(sm.DataDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create data dir %s: %w", sm.DataDir, err)
+	}
+
+	if info, err := os.Lstat(sm.TokenPath); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("refusing to overwrite symlink at %s", sm.TokenPath)
+		}
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("auth token path %s is not a regular file", sm.TokenPath)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("failed to stat token path %s: %w", sm.TokenPath, err)
 	}
 
 	// Generate 32 cryptographically secure random bytes (64 hex characters)
@@ -116,31 +129,78 @@ func (sm *SecurityManager) RenewToken() (string, error) {
 	}
 	token := hex.EncodeToString(b)
 
-	// Write atomically with strict 0600 permissions
-	f, err := os.OpenFile(sm.TokenPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// Write atomically via a private 0600 temp file and rename so looser
+	// permissions on a pre-existing file are never preserved.
+	tmpFile, err := os.CreateTemp(sm.DataDir, ".auth_token.*")
 	if err != nil {
-		return "", fmt.Errorf("failed to create token file with 0600 mode: %w", err)
+		return "", fmt.Errorf("failed to create temp token file: %w", err)
 	}
-	defer f.Close()
+	tmpPath := tmpFile.Name()
+	closed := false
+	cleanup := true
+	defer func() {
+		if !closed {
+			_ = tmpFile.Close() // best-effort close on error path
+		}
+		if cleanup {
+			_ = os.Remove(tmpPath) // best-effort temp file cleanup on error path
+		}
+	}()
 
-	if _, err := f.WriteString(token); err != nil {
+	if err := tmpFile.Chmod(0600); err != nil {
+		return "", fmt.Errorf("failed to set 0600 mode on temp token file: %w", err)
+	}
+	if _, err := tmpFile.WriteString(token); err != nil {
 		return "", fmt.Errorf("failed to write token: %w", err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		return "", fmt.Errorf("failed to sync temp token file: %w", err)
+	}
+	closed = true
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp token file: %w", err)
+	}
+	if err := os.Rename(tmpPath, sm.TokenPath); err != nil {
+		return "", fmt.Errorf("failed to atomically replace token file: %w", err)
+	}
+	cleanup = false
 
 	sm.Token = token
 	return token, nil
 }
 
-// initToken atomically generates and writes a 256-bit token with 0600 permissions if not present.
+// initToken validates and loads an existing 0600 token file, or generates a fresh one.
+// Symlinks are rejected; existing files with group/world permissions are rotated to 0600.
 func (sm *SecurityManager) initToken() (string, error) {
 	if err := os.MkdirAll(sm.DataDir, 0700); err != nil {
 		return "", fmt.Errorf("failed to create data dir %s: %w", sm.DataDir, err)
 	}
 
-	// If file exists and contains valid token, reuse it
-	if data, err := os.ReadFile(sm.TokenPath); err == nil {
-		existing := strings.TrimSpace(string(data))
-		if len(existing) == 64 {
+	info, err := os.Lstat(sm.TokenPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return sm.RenewToken()
+		}
+		return "", fmt.Errorf("failed to stat token file %s: %w", sm.TokenPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("refusing to load auth token from symlink %s", sm.TokenPath)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("auth token path %s is not a regular file", sm.TokenPath)
+	}
+	if info.Mode().Perm()&0077 != 0 {
+		// Token file was readable/writable by group or others; rotate atomically to 0600.
+		return sm.RenewToken()
+	}
+
+	data, err := os.ReadFile(sm.TokenPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token file %s: %w", sm.TokenPath, err)
+	}
+	existing := strings.TrimSpace(string(data))
+	if len(existing) == 64 {
+		if _, decErr := hex.DecodeString(existing); decErr == nil {
 			return existing, nil
 		}
 	}
@@ -213,7 +273,8 @@ func (sm *SecurityManager) ValidateOrigin(method, originHeader, refererHeader st
 	return true
 }
 
-// ExtractToken extracts authentication token from Bearer header, session cookie, or query parameter.
+// ExtractToken extracts the authentication token from the Bearer header or session cookie.
+// URL query parameter authentication (?token=) is intentionally not accepted for API routes.
 func (sm *SecurityManager) ExtractToken(r *http.Request) string {
 	// 1. Authorization: Bearer <token>
 	authHdr := r.Header.Get("Authorization")
@@ -224,11 +285,6 @@ func (sm *SecurityManager) ExtractToken(r *http.Request) string {
 	// 2. Cookie undine_session
 	if cookie, err := r.Cookie(constants.SessionCookieName); err == nil && cookie.Value != "" {
 		return strings.TrimSpace(cookie.Value)
-	}
-
-	// 3. Query parameter ?token=
-	if q := r.URL.Query().Get("token"); q != "" {
-		return strings.TrimSpace(q)
 	}
 
 	return ""

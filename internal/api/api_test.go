@@ -1004,8 +1004,8 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 		t.Fatalf("expected 200 OK, got %d", resp3.StatusCode)
 	}
 
-	// 4. Access with ?token= query parameter
-	req4, err := http.NewRequest("GET", ts.URL+"/api/folders?token="+token, nil)
+	// 4. Access with ?token= query parameter on /api/* must be rejected with 401 and still redacted in logs
+	req4, err := http.NewRequest(http.MethodGet, ts.URL+"/api/folders?token="+token, nil)
 	if err != nil {
 		t.Fatalf("failed to create req4: %v", err)
 	}
@@ -1014,6 +1014,9 @@ func TestRESTAPIAccessLogging(t *testing.T) {
 		t.Fatalf("req4 failed: %v", err)
 	}
 	_ = resp4.Body.Close()
+	if resp4.StatusCode != http.StatusUnauthorized {
+		t.Errorf("GET /api/folders?token=... status = %d, want %d", resp4.StatusCode, http.StatusUnauthorized)
+	}
 
 	// Verify log writer output
 	bufStr := logBuf.String()

@@ -64,6 +64,67 @@ func TestSecurityManagerInitAndPermissions(t *testing.T) {
 	}
 }
 
+func TestTokenFilePermissionEnforcementAndSymlinkRejection(t *testing.T) {
+	// 1. Loose 0644 token file is rotated atomically to 0600 on init
+	tmpDir := t.TempDir()
+	tokenPath := filepath.Join(tmpDir, constants.AuthTokenFileName)
+	leakedToken := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if err := os.WriteFile(tokenPath, []byte(leakedToken), 0644); err != nil {
+		t.Fatalf("os.WriteFile failed: %v", err)
+	}
+	if err := os.Chmod(tokenPath, 0644); err != nil {
+		t.Fatalf("os.Chmod failed: %v", err)
+	}
+
+	sm, err := NewSecurityManager("127.0.0.1", 8080, tmpDir)
+	if err != nil {
+		t.Fatalf("NewSecurityManager failed on loose token file: %v", err)
+	}
+	if sm.Token == leakedToken {
+		t.Errorf("initToken reused leaked 0644 token, want rotated token")
+	}
+	fi, err := os.Stat(tokenPath)
+	if err != nil {
+		t.Fatalf("os.Stat failed: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0600 {
+		t.Errorf("token file mode after init = %#o, want 0600", got)
+	}
+
+	// 2. RenewToken replaces a loosely-permissioned file atomically with 0600
+	if err := os.Chmod(tokenPath, 0644); err != nil {
+		t.Fatalf("os.Chmod failed: %v", err)
+	}
+	if _, err := sm.RenewToken(); err != nil {
+		t.Fatalf("RenewToken failed: %v", err)
+	}
+	fi, err = os.Stat(tokenPath)
+	if err != nil {
+		t.Fatalf("os.Stat failed: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0600 {
+		t.Errorf("token file mode after RenewToken = %#o, want 0600", got)
+	}
+
+	// 3. Symlink at auth_token path must be rejected on both init and renew
+	symDir := t.TempDir()
+	target := filepath.Join(symDir, "target_file")
+	if err := os.WriteFile(target, []byte(leakedToken), 0600); err != nil {
+		t.Fatalf("os.WriteFile(target) failed: %v", err)
+	}
+	symTokenPath := filepath.Join(symDir, constants.AuthTokenFileName)
+	if err := os.Symlink(target, symTokenPath); err != nil {
+		t.Fatalf("os.Symlink failed: %v", err)
+	}
+
+	if _, err := NewSecurityManager("127.0.0.1", 8080, symDir); err == nil {
+		t.Errorf("NewSecurityManager on symlink auth_token = nil error, want rejection error")
+	}
+	if _, err := NewSecurityManager("127.0.0.1", 8080, symDir, true); err == nil {
+		t.Errorf("NewSecurityManager(forceRenew) on symlink auth_token = nil error, want rejection error")
+	}
+}
+
 func TestHostValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 	sm, _ := NewSecurityManager("127.0.0.1", 8080, tmpDir)
@@ -171,11 +232,10 @@ func TestExtractAndValidateToken(t *testing.T) {
 		t.Errorf("expected Cookie token to be valid")
 	}
 
-	// 3. Query parameter ?token=
-	req3 := httptest.NewRequest("GET", "/?token="+sm.Token, nil)
-	token3 := sm.ExtractToken(req3)
-	if !sm.IsTokenValid(token3) {
-		t.Errorf("expected query parameter token to be valid")
+	// 3. Query parameter ?token= must NOT be extracted by ExtractToken (restricted to / bootstrap)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/messages?token="+sm.Token, nil)
+	if got := sm.ExtractToken(req3); got != "" {
+		t.Errorf("ExtractToken(%q) = %q, want empty string", req3.URL.String(), got)
 	}
 
 	// 4. Invalid token
