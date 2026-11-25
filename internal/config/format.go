@@ -13,6 +13,7 @@ import (
 type fieldSpec struct {
 	key      string
 	isPath   bool
+	isSecret bool
 	getValue func(c *Config) any
 }
 
@@ -52,7 +53,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "verify_cert", getValue: func(c *Config) any { return c.IMAP.VerifyCert }},
 				{key: "ca_cert_path", isPath: true, getValue: func(c *Config) any { return c.IMAP.CACertPath }},
 				{key: "username", getValue: func(c *Config) any { return c.IMAP.Username }},
-				{key: "password", getValue: func(c *Config) any { return c.IMAP.Password }},
+				{key: "password", isSecret: true, getValue: func(c *Config) any { return c.IMAP.Password }},
 				{key: "password_cmd", getValue: func(c *Config) any { return c.IMAP.PasswordCmd }},
 				{key: "sync_folders", getValue: func(c *Config) any { return c.IMAP.SyncFolders }},
 				{key: "poll_interval_seconds", getValue: func(c *Config) any { return c.IMAP.PollIntervalSeconds }},
@@ -69,7 +70,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "verify_cert", getValue: func(c *Config) any { return c.SMTP.VerifyCert }},
 				{key: "ca_cert_path", isPath: true, getValue: func(c *Config) any { return c.SMTP.CACertPath }},
 				{key: "username", getValue: func(c *Config) any { return c.SMTP.Username }},
-				{key: "password", getValue: func(c *Config) any { return c.SMTP.Password }},
+				{key: "password", isSecret: true, getValue: func(c *Config) any { return c.SMTP.Password }},
 				{key: "password_cmd", getValue: func(c *Config) any { return c.SMTP.PasswordCmd }},
 				{key: "from_name", getValue: func(c *Config) any { return c.SMTP.FromName }},
 				{key: "from_email", getValue: func(c *Config) any { return c.SMTP.FromEmail }},
@@ -111,7 +112,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "api_version", getValue: func(c *Config) any { return c.Patchwork.APIVersion }},
 				{key: "username", getValue: func(c *Config) any { return c.Patchwork.Username }},
 				{key: "email", getValue: func(c *Config) any { return c.Patchwork.Email }},
-				{key: "token", getValue: func(c *Config) any { return c.Patchwork.Token }},
+				{key: "token", isSecret: true, getValue: func(c *Config) any { return c.Patchwork.Token }},
 				{key: "token_cmd", getValue: func(c *Config) any { return c.Patchwork.TokenCmd }},
 				{key: "preferred_archives", getValue: func(c *Config) any { return c.Patchwork.PreferredArchives }},
 				{key: "default_project", getValue: func(c *Config) any { return c.Patchwork.DefaultProject }},
@@ -252,6 +253,11 @@ func FormatActiveConfig(configPath string) (string, error) {
 
 			if isConfigured {
 				activeVal := f.getValue(activeCfg)
+				if f.isSecret {
+					if s, ok := activeVal.(string); ok && s != "" {
+						activeVal = "[REDACTED]"
+					}
+				}
 				valStr := FormatTOMLSettingValue(activeVal, f.isPath)
 				sb.WriteString(fmt.Sprintf("%s = %s\n", displayKey, valStr))
 			} else {

@@ -172,3 +172,47 @@ color = "#FF0000"
 		t.Errorf("expected commented default tag $cl_2 in output:\n%s", out)
 	}
 }
+
+func TestFormatActiveConfig_RedactsSecrets(t *testing.T) {
+	tmpDir := t.TempDir()
+	confPath := filepath.Join(tmpDir, "config.toml")
+
+	initialContent := `[imap]
+username = "dev@example.com"
+password = "super-secret-imap-password"
+
+[smtp]
+username = "dev@example.com"
+password = "super-secret-smtp-password"
+
+[patchwork]
+enabled = true
+token = "super-secret-patchwork-token"
+`
+	if err := os.WriteFile(confPath, []byte(initialContent), 0600); err != nil {
+		t.Fatalf("os.WriteFile failed: %v", err)
+	}
+
+	out, err := FormatActiveConfig(confPath)
+	if err != nil {
+		t.Fatalf("FormatActiveConfig failed: %v", err)
+	}
+
+	secrets := []string{
+		"super-secret-imap-password",
+		"super-secret-smtp-password",
+		"super-secret-patchwork-token",
+	}
+	for _, secret := range secrets {
+		if strings.Contains(out, secret) {
+			t.Errorf("FormatActiveConfig output leaked plaintext secret %q:\n%s", secret, out)
+		}
+	}
+
+	if got := strings.Count(out, `password = "[REDACTED]"`); got != 2 {
+		t.Errorf("redacted password count = %d, want 2; output:\n%s", got, out)
+	}
+	if got := strings.Count(out, `token = "[REDACTED]"`); got != 1 {
+		t.Errorf("redacted token count = %d, want 1; output:\n%s", got, out)
+	}
+}
