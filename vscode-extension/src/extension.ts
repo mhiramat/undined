@@ -29,7 +29,15 @@ export function activate(context: vscode.ExtensionContext) {
 
   // 1. Initialize Client Services
   const tokenManager = new TokenManager({ customTokenPath: authTokenPath });
-  const client = new UndineRestClient(serverUrl, tokenManager);
+  let client: UndineRestClient;
+  try {
+    client = new UndineRestClient(serverUrl, tokenManager);
+  } catch (err: any) {
+    vscode.window.showErrorMessage(
+      `Undine: Rejected unsafe undine.serverUrl (${err.message}). Falling back to http://127.0.0.1:8080.`
+    );
+    client = new UndineRestClient("http://127.0.0.1:8080", tokenManager);
+  }
 
   // 2. Initialize Sidebar View Providers (Folders, Thread Hierarchy, Message Header)
   const foldersProvider = new FoldersTreeProvider(client);
@@ -330,8 +338,12 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("undine.serverUrl")) {
         const newUrl = vscode.workspace.getConfiguration("undine").get<string>("serverUrl", "http://127.0.0.1:8080");
-        client.setBaseUrl(newUrl);
-        foldersProvider.refresh();
+        try {
+          client.setBaseUrl(newUrl);
+          foldersProvider.refresh();
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Undine: Rejected unsafe undine.serverUrl: ${err.message}`);
+        }
       }
       if (e.affectsConfiguration("undine.authTokenPath")) {
         const newPath = vscode.workspace.getConfiguration("undine").get<string>("authTokenPath", "~/.local/share/undined/auth_token");

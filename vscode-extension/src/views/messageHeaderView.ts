@@ -4,10 +4,31 @@
  * Patchwork status, and quick maintainer review actions in the Undine sidebar.
  */
 
+import * as crypto from "crypto";
 import * as vscode from "vscode";
 import { MessageDetail } from "../client/types";
 import { UndineRestClient } from "../client/restClient";
 import { resolveMessageTag } from "./threadsProvider";
+
+/**
+ * Validates that an external URL received from the Webview uses an explicit
+ * http:// or https:// scheme before passing it to vscode.env.openExternal.
+ */
+export function isSafeExternalHttpUrl(rawUrl: unknown): rawUrl is string {
+  if (typeof rawUrl !== "string") {
+    return false;
+  }
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "undine.headerView";
@@ -113,7 +134,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
             }
             break;
           case "openLore":
-            if (message.url) {
+            if (isSafeExternalHttpUrl(message.url)) {
               vscode.env.openExternal(vscode.Uri.parse(message.url));
             }
             break;
@@ -202,7 +223,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
   <style>
     ${this.getStyles()}
   </style>
@@ -216,6 +237,8 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 </body>
 </html>`;
     }
+
+    const nonce = crypto.randomBytes(16).toString("base64");
 
     const m = this._currentDetail.message;
     const cleanMsgId = (m.message_id || "").replace(/^<|>$/g, "").trim();
@@ -322,7 +345,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
     ${this.getStyles()}
   </style>
@@ -408,7 +431,7 @@ export class MessageHeaderViewProvider implements vscode.WebviewViewProvider {
     </div>
   </div>
 
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     document.addEventListener('click', (e) => {
       const target = e.target.closest('[data-command],[data-reviewed-id],[data-file],[data-delegate-id],[data-lore-url],[data-copy-text]');

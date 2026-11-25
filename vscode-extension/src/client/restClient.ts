@@ -21,22 +21,75 @@ import {
   RawHeaderResponse,
 } from "./types";
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+export interface RestClientOptions {
+  /**
+   * Explicitly allow sending the Bearer token to non-loopback HTTPS hosts.
+   * Defaults to false so tokens are only ever transmitted to local loopback hosts.
+   */
+  allowRemoteHttps?: boolean;
+}
+
+/**
+ * Validates that a configured UndineD server URL is safe to receive Bearer tokens.
+ * By default only loopback http/https URLs are permitted; non-loopback HTTP is
+ * always rejected and non-loopback HTTPS requires explicit opt-in.
+ */
+export function validateServerUrl(rawUrl: string, allowRemoteHttps = false): string {
+  const trimmed = (rawUrl || "").trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Invalid UndineD server URL: "${rawUrl}"`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`Unsupported UndineD server URL scheme "${parsed.protocol}": only http/https are allowed`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error("UndineD server URL must not contain embedded credentials");
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isLoopback = LOOPBACK_HOSTS.has(host);
+  if (!isLoopback) {
+    if (parsed.protocol !== "https:") {
+      throw new Error(
+        `Refusing to send authentication token over plaintext HTTP to non-loopback host "${host}"`
+      );
+    }
+    if (!allowRemoteHttps) {
+      throw new Error(
+        `Refusing to send authentication token to non-loopback host "${host}"; use a local loopback URL or SSH port forwarding`
+      );
+    }
+  }
+
+  return trimmed.replace(/\/+$/, "");
+}
+
 export class UndineRestClient {
   private baseUrl: string;
   private tokenManager: TokenManager;
+  private allowRemoteHttps: boolean;
 
-  constructor(baseUrl: string, tokenManager: TokenManager) {
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+  constructor(baseUrl: string, tokenManager: TokenManager, options: RestClientOptions = {}) {
+    this.allowRemoteHttps = Boolean(options.allowRemoteHttps);
+    this.baseUrl = validateServerUrl(baseUrl, this.allowRemoteHttps);
     this.tokenManager = tokenManager;
   }
 
   public setBaseUrl(url: string): void {
-    this.baseUrl = url.replace(/\/+$/, "");
+    this.baseUrl = validateServerUrl(url, this.allowRemoteHttps);
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}, isRetry = false): Promise<T> {
+    const safeBaseUrl = validateServerUrl(this.baseUrl, this.allowRemoteHttps);
     const token = this.tokenManager.getToken(isRetry);
-    const url = `${this.baseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
+    const url = `${safeBaseUrl}${endpoint.startsWith("/") ? endpoint : `/${endpoint}`}`;
 
     const headers: Record<string, string> = {
       Accept: "application/json",
@@ -51,6 +104,7 @@ export class UndineRestClient {
     const res = await fetch(url, {
       ...options,
       headers,
+      redirect: "error",
     });
 
     if (res.status === 401 && !isRetry) {

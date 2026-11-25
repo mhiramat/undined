@@ -1,5 +1,8 @@
 import * as assert from "assert";
-import { MessageHeaderViewProvider } from "../../src/views/messageHeaderView";
+import * as fs from "fs";
+import * as path from "path";
+import { MessageHeaderViewProvider, isSafeExternalHttpUrl } from "../../src/views/messageHeaderView";
+import { mockVscode } from "../vscodeMock";
 import { UndineRestClient } from "../../src/client/restClient";
 import { TokenManager } from "../../src/client/tokenManager";
 import { MessageDetail } from "../../src/client/types";
@@ -222,5 +225,79 @@ describe("MessageHeaderViewProvider", () => {
     assert.ok(html.includes(">Red<"), "Tag name 'Red' should be rendered inside badge");
     assert.ok(html.includes("background-color: #CC0000;"), "Tag badge should use custom hex background color");
     assert.ok(html.includes('class="subject-title" style="color: #CC0000;"'), "Subject should be colored with custom tag color");
+  });
+
+  it("should enforce nonce-based script-src CSP without unsafe-inline", async () => {
+    const provider = new MessageHeaderViewProvider(mockExtensionUri, client);
+    const emptyHtml = provider.getHtmlForWebview();
+    assert.ok(!emptyHtml.includes("script-src 'unsafe-inline'"), "Empty view must not allow unsafe-inline scripts");
+
+    await provider.setMessage(samplePatchDetail);
+    const html1 = provider.getHtmlForWebview();
+    const html2 = provider.getHtmlForWebview();
+
+    assert.ok(!html1.includes("script-src 'unsafe-inline'"), "Populated view must not allow unsafe-inline scripts");
+    const cspMatch1 = html1.match(/script-src 'nonce-([^']+)'/);
+    const scriptMatch1 = html1.match(/<script nonce="([^"]+)">/);
+    const cspMatch2 = html2.match(/script-src 'nonce-([^']+)'/);
+
+    assert.ok(cspMatch1 && scriptMatch1, "Nonce must be present in both CSP and script tag");
+    assert.strictEqual(cspMatch1![1], scriptMatch1![1], "CSP nonce must match script tag nonce");
+    assert.ok(cspMatch2 && cspMatch1![1] !== cspMatch2![1], "Nonce must be freshly generated per render");
+  });
+
+  it("should only open http/https URLs from openLore messages", async () => {
+    assert.strictEqual(isSafeExternalHttpUrl("https://lore.kernel.org/r/test@example.com"), true);
+    assert.strictEqual(isSafeExternalHttpUrl("http://lkml.kernel.org/r/test@example.com"), true);
+    assert.strictEqual(isSafeExternalHttpUrl("javascript:alert(1)"), false);
+    assert.strictEqual(isSafeExternalHttpUrl("file:///etc/passwd"), false);
+    assert.strictEqual(isSafeExternalHttpUrl("command:workbench.action.terminal.new"), false);
+
+    const provider = new MessageHeaderViewProvider(mockExtensionUri, client);
+    let messageHandler: ((msg: any) => Promise<void>) | undefined;
+    const openedUris: string[] = [];
+    const origOpenExternal = mockVscode.env.openExternal;
+    mockVscode.env.openExternal = async (uri?: any) => {
+      openedUris.push(String(uri));
+      return true;
+    };
+
+    try {
+      const mockWebviewView: any = {
+        webview: {
+          options: {},
+          html: "",
+          onDidReceiveMessage: (handler: (msg: any) => Promise<void>) => {
+            messageHandler = handler;
+            return { dispose: () => {} };
+          },
+        },
+        onDidDispose: () => ({ dispose: () => {} }),
+      };
+
+      provider.resolveWebviewView(mockWebviewView, {} as any, {} as any);
+      assert.ok(messageHandler);
+
+      await messageHandler!({ command: "openLore", url: "file:///etc/passwd" });
+      await messageHandler!({ command: "openLore", url: "command:workbench.action.terminal.new" });
+      await messageHandler!({ command: "openLore", url: "javascript:alert(1)" });
+      assert.strictEqual(openedUris.length, 0, "Non-HTTP(S) URLs must not be passed to openExternal");
+
+      await messageHandler!({ command: "openLore", url: "https://lore.kernel.org/r/test@example.com" });
+      assert.strictEqual(openedUris.length, 1);
+      assert.strictEqual(openedUris[0], "https://lore.kernel.org/r/test@example.com");
+    } finally {
+      mockVscode.env.openExternal = origOpenExternal;
+    }
+  });
+
+  it("should restrict sensitive settings and untrusted workspaces in package.json", () => {
+    const pkgPath = path.resolve(__dirname, "..", "..", "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    assert.strictEqual(pkg.capabilities?.untrustedWorkspaces?.supported, false);
+    assert.strictEqual(pkg.contributes?.configuration?.properties?.["undine.serverUrl"]?.scope, "application");
+    assert.strictEqual(pkg.contributes?.configuration?.properties?.["undine.serverUrl"]?.restricted, true);
+    assert.strictEqual(pkg.contributes?.configuration?.properties?.["undine.authTokenPath"]?.scope, "application");
+    assert.strictEqual(pkg.contributes?.configuration?.properties?.["undine.authTokenPath"]?.restricted, true);
   });
 });

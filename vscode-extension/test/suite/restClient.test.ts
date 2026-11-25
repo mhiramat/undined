@@ -3,7 +3,7 @@ import * as http from "http";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { UndineRestClient } from "../../src/client/restClient";
+import { UndineRestClient, validateServerUrl } from "../../src/client/restClient";
 import { TokenManager } from "../../src/client/tokenManager";
 
 describe("UndineRestClient", () => {
@@ -195,5 +195,25 @@ describe("UndineRestClient", () => {
     assert.strictEqual(receivedAuthHeaders.length, 2);
     assert.strictEqual(receivedAuthHeaders[0], "Bearer expired-token");
     assert.strictEqual(receivedAuthHeaders[1], "Bearer valid-reloaded-token");
+  });
+
+  it("should validate serverUrl and block non-loopback or insecure URLs", () => {
+    assert.strictEqual(validateServerUrl("http://127.0.0.1:8080/"), "http://127.0.0.1:8080");
+    assert.strictEqual(validateServerUrl("http://localhost:8080"), "http://localhost:8080");
+    assert.strictEqual(validateServerUrl("http://[::1]:8080"), "http://[::1]:8080");
+    assert.strictEqual(validateServerUrl("https://127.0.0.1:8443"), "https://127.0.0.1:8443");
+
+    assert.throws(() => validateServerUrl("http://attacker.example:8080"), /plaintext HTTP/);
+    assert.throws(() => validateServerUrl("https://attacker.example"), /non-loopback/);
+    assert.throws(() => validateServerUrl("file:///etc/passwd"), /Unsupported/);
+    assert.throws(() => validateServerUrl("http://user:pass@127.0.0.1:8080"), /embedded credentials/);
+    assert.throws(() => new UndineRestClient("http://attacker.example:8080", tokenManager), /plaintext HTTP/);
+
+    // Explicit opt-in allows remote HTTPS but still blocks remote HTTP
+    assert.strictEqual(
+      validateServerUrl("https://remote.example:8443/", true),
+      "https://remote.example:8443"
+    );
+    assert.throws(() => validateServerUrl("http://remote.example:8080", true), /plaintext HTTP/);
   });
 });
