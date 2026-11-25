@@ -182,6 +182,39 @@ func (l *Launcher) PrepareDraftContent(req OpenEditorRequest) (string, error) {
 	return strings.Join(draftLines, "\n") + "\n", nil
 }
 
+// createTempDraftFile atomically creates a 0600 temporary draft file (O_EXCL)
+// and writes content to it.
+func (l *Launcher) createTempDraftFile(content string) (string, error) {
+	f, err := os.CreateTemp("", "undine-reply-*.eml")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp draft file: %w", err)
+	}
+	tempPath := f.Name()
+	closed := false
+	cleanup := true
+	defer func() {
+		if !closed {
+			_ = f.Close() // best-effort close on error path
+		}
+		if cleanup {
+			_ = os.Remove(tempPath) // best-effort cleanup on error path
+		}
+	}()
+
+	if err := f.Chmod(0600); err != nil {
+		return "", fmt.Errorf("failed to set 0600 permissions on temp draft file: %w", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		return "", fmt.Errorf("failed to write temp draft file: %w", err)
+	}
+	closed = true
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp draft file: %w", err)
+	}
+	cleanup = false
+	return tempPath, nil
+}
+
 // Launch prepares draft file and executes terminal editor command asynchronously.
 func (l *Launcher) Launch(req OpenEditorRequest) (*OpenEditorResponse, error) {
 	cmdTemplate := l.Config.General.GetExternalEditorCmd()
@@ -194,13 +227,9 @@ func (l *Launcher) Launch(req OpenEditorRequest) (*OpenEditorResponse, error) {
 		return nil, err
 	}
 
-	tempPath, err := l.GenerateTempDraftPath()
+	tempPath, err := l.createTempDraftFile(content)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate temp draft path: %w", err)
-	}
-
-	if err := os.WriteFile(tempPath, []byte(content), 0600); err != nil {
-		return nil, fmt.Errorf("failed to write temp draft file: %w", err)
+		return nil, err
 	}
 
 	quotedPath := "'" + strings.ReplaceAll(tempPath, "'", `'\''`) + "'"
@@ -214,6 +243,7 @@ func (l *Launcher) Launch(req OpenEditorRequest) (*OpenEditorResponse, error) {
 
 	cmd := exec.Command("sh", "-c", cmdStr)
 	if err := cmd.Start(); err != nil {
+		_ = os.Remove(tempPath) // best-effort cleanup when editor fails to launch
 		return nil, fmt.Errorf("failed to spawn editor: %w", err)
 	}
 

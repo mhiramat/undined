@@ -90,7 +90,11 @@ func TestEditorLauncherLaunch(t *testing.T) {
 		t.Errorf("Unexpected command: %s", res.Command)
 	}
 
-	if _, err := os.Stat(res.TempFile); os.IsNotExist(err) {
-		t.Errorf("Temp file was not created: %s", res.TempFile)
+	fi, err := os.Stat(res.TempFile)
+	if err != nil {
+		t.Fatalf("os.Stat(%s) failed: %v", res.TempFile, err)
+	}
+	if got := fi.Mode().Perm(); got != 0600 {
+		t.Errorf("temp draft file permissions = %#o, want 0600", got)
 	}
 }
