@@ -128,6 +128,7 @@ func (s *Server) setupRoutes() {
 	r.Use(middleware.RequestID)
 	r.Use(s.AccessLogMiddleware)
 	r.Use(middleware.Recoverer)
+	r.Use(s.SecurityHeadersMiddleware)
 	r.Use(s.SecurityMiddleware)
 	r.Use(s.CacheControlMiddleware)
 
@@ -227,6 +228,10 @@ func (s *Server) setupRoutes() {
 	s.router = r
 }
 
+const externalGoogleFontsHTML = `  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">`
+
 func (s *Server) renderLoginHTML(w http.ResponseWriter, errorMsg string, statusCode int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(statusCode)
@@ -235,6 +240,10 @@ func (s *Server) renderLoginHTML(w http.ResponseWriter, errorMsg string, statusC
 	if errorMsg != "" {
 		errHTML = fmt.Sprintf(`<div class="error-msg">%s</div>`, html.EscapeString(errorMsg))
 	}
+	fontLinks := ""
+	if s.allowExternalFonts() {
+		fontLinks = "\n" + externalGoogleFontsHTML
+	}
 
 	const loginTpl = `<!DOCTYPE html>
 <html lang="en">
@@ -242,10 +251,7 @@ func (s *Server) renderLoginHTML(w http.ResponseWriter, errorMsg string, statusC
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>UndineD - Authentication</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">{{EXTERNAL_FONTS}}
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -375,6 +381,7 @@ func (s *Server) renderLoginHTML(w http.ResponseWriter, errorMsg string, statusC
 </html>`
 
 	doc := strings.ReplaceAll(loginTpl, "{{ERROR}}", errHTML)
+	doc = strings.ReplaceAll(doc, "{{EXTERNAL_FONTS}}", fontLinks)
 	_, _ = w.Write([]byte(doc))
 }
 
@@ -401,12 +408,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(constants.SessionCookieName)
 	if err == nil && s.Security.IsTokenValid(cookie.Value) {
 		indexPath := filepath.Join(s.FrontendDir, "index.html")
-		if _, statErr := os.Stat(indexPath); statErr == nil {
-			http.ServeFile(w, r, indexPath)
+		data, readErr := os.ReadFile(indexPath)
+		if readErr != nil {
+			w.Header().Set("Content-Type", "application/json")
+			// Ignore write error on client disconnect.
+			_, _ = w.Write([]byte(`{"status":"UndineD Backend Active (frontend/index.html not found)"}`))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"UndineD Backend Active (frontend/index.html not found)"}`))
+		htmlStr := string(data)
+		if s.allowExternalFonts() && strings.Contains(htmlStr, "</head>") {
+			htmlStr = strings.Replace(htmlStr, "</head>", externalGoogleFontsHTML+"\n</head>", 1)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Ignore write error on client disconnect.
+		_, _ = w.Write([]byte(htmlStr))
 		return
 	}
 

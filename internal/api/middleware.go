@@ -17,6 +17,38 @@ import (
 	"undined-go/internal/config"
 )
 
+// allowExternalFonts reports whether the server configuration explicitly enables
+// loading external Google Fonts in the Web UI.
+func (s *Server) allowExternalFonts() bool {
+	return s.Config != nil && s.Config.General.AllowExternalFonts
+}
+
+// SecurityHeadersMiddleware attaches defense-in-depth HTTP security headers
+// (CSP, X-Content-Type-Options, X-Frame-Options, and Referrer-Policy) to responses.
+func (s *Server) SecurityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+
+		p := r.URL.Path
+		switch {
+		case p == "/" || p == "/login":
+			if s.allowExternalFonts() {
+				w.Header().Set("Content-Security-Policy",
+					"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+			} else {
+				w.Header().Set("Content-Security-Policy",
+					"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+			}
+		default:
+			w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // SecurityMiddleware enforces Host validation, Origin CSRF checks, and Token authentication.
 func (s *Server) SecurityMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

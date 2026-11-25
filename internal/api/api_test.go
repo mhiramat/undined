@@ -259,6 +259,130 @@ func TestIndexAndLoginFlow(t *testing.T) {
 	}
 }
 
+func TestSecurityHeadersAndExternalFontsOption(t *testing.T) {
+	server, db, token, tmpDir := setupTestAPIServer(t)
+	defer os.RemoveAll(tmpDir)
+	defer db.Close()
+
+	// Use an index.html with <head> to verify external font link injection
+	indexPath := filepath.Join(server.FrontendDir, "index.html")
+	if err := os.WriteFile(indexPath, []byte("<!DOCTYPE html><html><head><title>Undine</title></head><body>UI</body></html>"), 0600); err != nil {
+		t.Fatalf("os.WriteFile(index.html) failed: %v", err)
+	}
+
+	ts := httptest.NewServer(server.Router())
+	defer ts.Close()
+	client := ts.Client()
+
+	checkCommonHeaders := func(t *testing.T, resp *http.Response, path string) {
+		t.Helper()
+		if got, want := resp.Header.Get("X-Content-Type-Options"), "nosniff"; got != want {
+			t.Errorf("%s X-Content-Type-Options = %q, want %q", path, got, want)
+		}
+		if got, want := resp.Header.Get("X-Frame-Options"), "DENY"; got != want {
+			t.Errorf("%s X-Frame-Options = %q, want %q", path, got, want)
+		}
+		if got, want := resp.Header.Get("Referrer-Policy"), "no-referrer"; got != want {
+			t.Errorf("%s Referrer-Policy = %q, want %q", path, got, want)
+		}
+	}
+
+	// 1. Default (allow_external_fonts = false): no external font hosts in CSP or HTML
+	for _, path := range []string{"/", "/login"} {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("http.NewRequest(%s) failed: %v", path, err)
+		}
+		if path == "/" {
+			req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", path, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("io.ReadAll(%s) failed: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
+
+		checkCommonHeaders(t, resp, path)
+		csp := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "script-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") {
+			t.Errorf("%s CSP = %q, want script-src 'self' and frame-ancestors 'none'", path, csp)
+		}
+		if strings.Contains(csp, "fonts.googleapis.com") || strings.Contains(csp, "fonts.gstatic.com") {
+			t.Errorf("%s CSP with allow_external_fonts=false unexpectedly allows external fonts: %q", path, csp)
+		}
+		if strings.Contains(string(body), "fonts.googleapis.com") {
+			t.Errorf("%s HTML with allow_external_fonts=false unexpectedly includes Google Fonts link", path)
+		}
+	}
+
+	// 2. API endpoint receives strict default-src 'none' CSP and common headers
+	apiReq, err := http.NewRequest(http.MethodGet, ts.URL+"/api/config", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest(/api/config) failed: %v", err)
+	}
+	apiReq.Header.Set("Authorization", "Bearer "+token)
+	apiResp, err := client.Do(apiReq)
+	if err != nil {
+		t.Fatalf("GET /api/config failed: %v", err)
+	}
+	apiBody, err := io.ReadAll(apiResp.Body)
+	apiResp.Body.Close()
+	if err != nil {
+		t.Fatalf("io.ReadAll(/api/config) failed: %v", err)
+	}
+	checkCommonHeaders(t, apiResp, "/api/config")
+	if got := apiResp.Header.Get("Content-Security-Policy"); !strings.Contains(got, "default-src 'none'") {
+		t.Errorf("/api/config CSP = %q, want default-src 'none'", got)
+	}
+	var cfgPayload map[string]any
+	if err := json.Unmarshal(apiBody, &cfgPayload); err != nil {
+		t.Fatalf("json.Unmarshal(/api/config) failed: %v", err)
+	}
+	if got, ok := cfgPayload["allow_external_fonts"].(bool); !ok || got {
+		t.Errorf("/api/config allow_external_fonts = %v (present=%v), want false", got, ok)
+	}
+
+	// 3. Opt-in (allow_external_fonts = true): Google Fonts permitted in CSP and injected into HTML
+	server.Config.General.AllowExternalFonts = true
+	for _, path := range []string{"/", "/login"} {
+		req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+		if err != nil {
+			t.Fatalf("http.NewRequest(%s) failed: %v", path, err)
+		}
+		if path == "/" {
+			req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", path, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("io.ReadAll(%s) failed: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("GET %s status = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
+
+		checkCommonHeaders(t, resp, path)
+		csp := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "https://fonts.googleapis.com") || !strings.Contains(csp, "https://fonts.gstatic.com") {
+			t.Errorf("%s CSP with allow_external_fonts=true = %q, want Google Fonts origins", path, csp)
+		}
+		if !strings.Contains(string(body), "https://fonts.googleapis.com/css2?family=JetBrains+Mono") {
+			t.Errorf("%s HTML with allow_external_fonts=true missing Google Fonts stylesheet link", path)
+		}
+	}
+}
+
 func TestFolderAndMessageEndpoints(t *testing.T) {
 	server, db, token, tmpDir := setupTestAPIServer(t)
 	defer os.RemoveAll(tmpDir)
