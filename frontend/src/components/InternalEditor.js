@@ -1232,18 +1232,34 @@ export function visualWidth(str) {
   return col;
 }
 
+const URL_SCHEME_PATTERN = `(?:(?:https?|ftps?|git|ssh|ircs?|nntp|news):\\/\\/|mailto:)`;
+
+const NO_WRAP_TAG_LINE_RE =
+  /^(?:[A-Za-z][A-Za-z0-9-]*-by|Fixes|Link|Closes|Resolves|BugLink|Bug|Cc|To|From|Subject|Date|Message-Id|In-Reply-To|References|Change-Id|Depends-on|Reverts|See-also|URL|Lore|Commit|Author|CommitDate|AuthorDate|base-commit|prerequisite-patch-id|prerequisite-message-id):(?:\s|$)/i;
+
+const NO_WRAP_URL_LINE_RE = new RegExp(
+  `^(?:(?:\\[[^\\]]+\\]:?|[-*•]|\\d+[.)])\\s+)?[<(\\["'（]?${URL_SCHEME_PATTERN}\\S+$`,
+  "i"
+);
+
+const URL_TOKEN_RE = new RegExp(`(?:^|[^A-Za-z0-9_])${URL_SCHEME_PATTERN}\\S+`, "i");
+
+export function isNoWrapTagLine(trimmed) {
+  return Boolean(trimmed) && NO_WRAP_TAG_LINE_RE.test(trimmed);
+}
+
+export function isNoWrapUrlLine(trimmed) {
+  return Boolean(trimmed) && NO_WRAP_URL_LINE_RE.test(trimmed);
+}
+
 function isUrlToken(w) {
-  return (
-    w.startsWith("http://") ||
-    w.startsWith("https://") ||
-    w.startsWith("<http://") ||
-    w.startsWith("<https://")
-  );
+  return Boolean(w) && URL_TOKEN_RE.test(w);
 }
 
 /**
  * Wrap lines in a review comment around maxCols columns (default 75).
- * Quoted lines (">"), fenced code blocks ("```"), and tab-indented lines are preserved.
+ * Quoted lines (">"), fenced code blocks ("```"), tab-indented lines,
+ * kernel/mail trailer tags (e.g. "Fixes:", "Link:", "Closes:"), and URL lines are preserved.
  */
 export function wrapCommentText(text, maxCols = DEFAULT_WRAP_COLUMNS) {
   if (!text || typeof text !== "string") return text || "";
@@ -1263,7 +1279,12 @@ export function wrapCommentText(text, maxCols = DEFAULT_WRAP_COLUMNS) {
       outLines.push(line);
       continue;
     }
-    if (trimmed.startsWith(">") || line.startsWith("\t")) {
+    if (
+      trimmed.startsWith(">") ||
+      line.startsWith("\t") ||
+      isNoWrapTagLine(trimmed) ||
+      isNoWrapUrlLine(trimmed)
+    ) {
       outLines.push(line);
       continue;
     }
@@ -1404,6 +1425,8 @@ export function autoWrapEditorLine(value, cursorOffset, maxCols = DEFAULT_WRAP_C
     line.startsWith("-- ") ||
     line === "--" ||
     /^On .+ wrote:$/.test(trimmed) ||
+    isNoWrapTagLine(trimmed) ||
+    isNoWrapUrlLine(trimmed) ||
     visualWidth(line) <= limit
   ) {
     return null;
@@ -1430,13 +1453,48 @@ export function autoWrapEditorLine(value, cursorOffset, maxCols = DEFAULT_WRAP_C
   const relCursor = cursorOffset - lineStart;
 
   if (lastSpaceIdx !== -1) {
+    let tokenStart = lastSpaceIdx + 1;
+    while (tokenStart < line.length && line[tokenStart] === " ") {
+      tokenStart++;
+    }
+    const nextSpaceIdx = line.indexOf(" ", tokenStart);
+    const crossingToken =
+      nextSpaceIdx === -1 ? line.slice(tokenStart) : line.slice(tokenStart, nextSpaceIdx);
+
+    if (isUrlToken(crossingToken)) {
+      if (nextSpaceIdx !== -1 && line.slice(nextSpaceIdx + 1).trim() !== "") {
+        const newLine =
+          line.slice(0, nextSpaceIdx) + "\n" + indent + line.slice(nextSpaceIdx + 1);
+        const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+        const newCursor = relCursor > nextSpaceIdx ? cursorOffset + indent.length : cursorOffset;
+        return { value: newValue, cursor: newCursor };
+      }
+      return null;
+    }
+
     const newLine = line.slice(0, lastSpaceIdx) + "\n" + indent + line.slice(lastSpaceIdx + 1);
     const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
     const newCursor = relCursor > lastSpaceIdx ? cursorOffset + indent.length : cursorOffset;
     return { value: newValue, cursor: newCursor };
   }
 
-  if (isUrlToken(trimmed)) {
+  const firstSpaceAfterIndent = line.indexOf(" ", indentLen);
+  const firstToken =
+    firstSpaceAfterIndent === -1
+      ? line.slice(indentLen)
+      : line.slice(indentLen, firstSpaceAfterIndent);
+  if (isUrlToken(firstToken)) {
+    if (firstSpaceAfterIndent !== -1 && line.slice(firstSpaceAfterIndent + 1).trim() !== "") {
+      const newLine =
+        line.slice(0, firstSpaceAfterIndent) +
+        "\n" +
+        indent +
+        line.slice(firstSpaceAfterIndent + 1);
+      const newValue = value.slice(0, lineStart) + newLine + value.slice(lineEnd);
+      const newCursor =
+        relCursor > firstSpaceAfterIndent ? cursorOffset + indent.length : cursorOffset;
+      return { value: newValue, cursor: newCursor };
+    }
     return null;
   }
 

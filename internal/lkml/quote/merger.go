@@ -3,6 +3,7 @@ package quote
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"undined-go/internal/lkml/patch"
@@ -50,15 +51,30 @@ func visualWidth(s string) int {
 	return col
 }
 
+const urlSchemePattern = `(?:(?:https?|ftps?|git|ssh|ircs?|nntp|news)://|mailto:)`
+
+var (
+	noWrapTagLineRe = regexp.MustCompile(`(?i)^(?:[a-z][a-z0-9-]*-by|fixes|link|closes|resolves|buglink|bug|cc|to|from|subject|date|message-id|in-reply-to|references|change-id|depends-on|reverts|see-also|url|lore|commit|author|commitdate|authordate|base-commit|prerequisite-patch-id|prerequisite-message-id):(?:\s|$)`)
+	noWrapURLLineRe = regexp.MustCompile(`(?i)^(?:(?:\[[^\]]+\]:?|[-*•]|\d+[.)])\s+)?[<(\["'（]?` + urlSchemePattern + `\S+$`)
+	urlTokenRe      = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])` + urlSchemePattern + `\S+`)
+)
+
+func isNoWrapTagLine(trimmed string) bool {
+	return trimmed != "" && noWrapTagLineRe.MatchString(trimmed)
+}
+
+func isNoWrapURLLine(trimmed string) bool {
+	return trimmed != "" && noWrapURLLineRe.MatchString(trimmed)
+}
+
 func isURLToken(w string) bool {
-	return strings.HasPrefix(w, "http://") ||
-		strings.HasPrefix(w, "https://") ||
-		strings.HasPrefix(w, "<http://") ||
-		strings.HasPrefix(w, "<https://")
+	return w != "" && urlTokenRe.MatchString(w)
 }
 
 // WrapCommentText wraps lines in a review comment around maxCols columns (default 75).
-// Quoted lines (">"), fenced code blocks ("```"), and tab-indented lines are preserved as-is.
+// Quoted lines (">"), fenced code blocks ("```"), tab-indented lines, trailer/tag lines
+// (such as "Fixes:", "Link:", "Closes:", "*-by:"), and standalone/reference URL lines
+// are preserved as-is.
 func WrapCommentText(text string, maxCols int) string {
 	if maxCols <= 0 {
 		maxCols = DefaultWrapColumns
@@ -79,7 +95,10 @@ func WrapCommentText(text string, maxCols int) string {
 			outLines = append(outLines, line)
 			continue
 		}
-		if strings.HasPrefix(trimmed, ">") || strings.HasPrefix(line, "\t") {
+		if strings.HasPrefix(trimmed, ">") ||
+			strings.HasPrefix(line, "\t") ||
+			isNoWrapTagLine(trimmed) ||
+			isNoWrapURLLine(trimmed) {
 			outLines = append(outLines, line)
 			continue
 		}

@@ -279,6 +279,62 @@ func TestWrapCommentText(t *testing.T) {
 			t.Errorf("WrapCommentText() = %q, want unwrapped fenced code line %q", wrapped, codeLine)
 		}
 	})
+
+	t.Run("trailer_tags_preserved", func(t *testing.T) {
+		tagLines := []string{
+			`Fixes: 1234567890ab ("tracing: Fix a very long commit subject that exceeds seventy-five columns")`,
+			"Link: https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+			"Closes: https://bugzilla.kernel.org/show_bug.cgi?id=12345678901234567890123456789",
+			"Signed-off-by: Very Long Kernel Developer Name <very.long.developer.address@example.kernel.org>",
+			"Reviewed-by: Another Kernel Developer Name <another.developer.address@example.kernel.org>",
+			"Cc: stable@vger.kernel.org # v6.1+: 1234567890ab: tracing: prerequisite patch subject",
+			"base-commit: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+		}
+		for _, line := range tagLines {
+			if got := WrapCommentText(line, 75); got != line {
+				t.Errorf("WrapCommentText(%q) = %q, want unwrapped line", line, got)
+			}
+		}
+
+		noteLine := "Note: This is a regular prose explanation that exceeds seventy-five columns and should wrap."
+		if got := WrapCommentText(noteLine, 75); !strings.Contains(got, "\n") {
+			t.Errorf("WrapCommentText(%q) = %q, want prose with 'Note:' prefix to wrap", noteLine, got)
+		}
+	})
+
+	t.Run("reference_and_delimited_urls", func(t *testing.T) {
+		urlLines := []string{
+			"[1] https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+			"[1]: https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+			"- https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+			"git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ftrace.c",
+			"<mailto:very.long.developer.address.exceeding.seventy.five.columns@example.kernel.org>",
+		}
+		for _, line := range urlLines {
+			if got := WrapCommentText(line, 75); got != line {
+				t.Errorf("WrapCommentText(%q) = %q, want unwrapped URL line", line, got)
+			}
+		}
+
+		parenURL := "(https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u)"
+		comment := "Please check the thread " + parenURL + " for the earlier discussion."
+		wrapped := WrapCommentText(comment, 75)
+		if !strings.Contains(wrapped, "\n"+parenURL+"\n") {
+			t.Errorf("WrapCommentText() = %q, want intact parenthesized URL %q", wrapped, parenURL)
+		}
+
+		leadingURL := "https://example.kernel.org/short"
+		urlThenProse := leadingURL + " explains why the lock ordering constraint must be preserved across preemption."
+		wrappedTrailing := WrapCommentText(urlThenProse, 75)
+		if !strings.HasPrefix(wrappedTrailing, leadingURL+" ") || !strings.Contains(wrappedTrailing, "\n") {
+			t.Errorf("WrapCommentText(%q) = %q, want leading URL preserved and trailing prose wrapped", urlThenProse, wrappedTrailing)
+		}
+
+		nonURL := "notmailto:" + strings.Repeat("a", 80)
+		if got := WrapCommentText(nonURL, 75); !strings.Contains(got, "\n") {
+			t.Errorf("WrapCommentText(%q) = %q, want non-URL identifier to wrap", nonURL, got)
+		}
+	})
 }
 
 func TestMergePatchReviewQuoteWrapsLongComments(t *testing.T) {

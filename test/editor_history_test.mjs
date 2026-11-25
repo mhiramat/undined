@@ -188,3 +188,118 @@ test("autoWrapEditorLine: wraps unquoted line when typing past column 75", () =>
   assert.equal(autoWrapEditorLine(quotedLong, quotedLong.length, 75), null);
 });
 
+test("autoWrapEditorLine: does not wrap long kernel/mail trailer tag lines", () => {
+  const noWrapTagLines = [
+    'Fixes: 1234567890ab ("tracing: Fix a very long commit subject that exceeds seventy-five columns")',
+    "Link: https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "Closes: https://bugzilla.kernel.org/show_bug.cgi?id=12345678901234567890123456789",
+    "Signed-off-by: Very Long Kernel Developer Name <very.long.developer.address@example.kernel.org>",
+    "Reviewed-by: Another Kernel Developer Name <another.developer.address@example.kernel.org>",
+    "Acked-by: Subsystem Maintainer Name <subsystem.maintainer.address@example.kernel.org>",
+    "Co-developed-by: Collaborating Developer <collaborating.developer@example.kernel.org>",
+    "Cc: stable@vger.kernel.org # v6.1+: 1234567890ab: tracing: prerequisite patch subject",
+    "Message-ID: <20261104135327.23dbae14572e88b3.very.long.message.id@example.kernel.org>",
+    "BugLink: https://bugs.example.org/projects/kernel/issues/very-long-issue-identifier-123456",
+    "base-commit: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    '  fixes: 1234567890ab ("indented lowercase fixes tag exceeding seventy-five columns")',
+  ];
+
+  for (const line of noWrapTagLines) {
+    assert.ok(line.length > 75, `Test line should exceed 75 cols: ${line}`);
+    assert.equal(
+      autoWrapEditorLine(line, line.length, 75),
+      null,
+      `Trailer tag line must not auto-wrap: ${line}`
+    );
+  }
+
+  // Regular prose starting with a non-trailer colon label must still wrap
+  const noteProse =
+    "Note: This is a regular prose explanation that exceeds seventy-five columns and should wrap.";
+  const wrappedNote = autoWrapEditorLine(noteProse, noteProse.length, 75);
+  assert.ok(wrappedNote !== null, "Normal prose starting with 'Note:' should still wrap");
+  assert.ok(wrappedNote.value.includes("\n"));
+});
+
+test("autoWrapEditorLine: does not wrap URLs or reference URL lines", () => {
+  const noWrapUrlLines = [
+    "https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "<https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u>",
+    "(https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u)",
+    "git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ftrace.c",
+    "ftp://ftp.kernel.org/pub/linux/kernel/v6.x/testing/linux-6.12-rc1-very-long-archive-name.tar.xz",
+    "<mailto:very.long.developer.address.exceeding.seventy.five.columns@example.kernel.org>",
+    "[1] https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "[1]: https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "- https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "1. https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "Please check https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+    "See (https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u)",
+    "詳細はこちら：https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u",
+  ];
+
+  for (const line of noWrapUrlLines) {
+    assert.ok(line.length > 75, `Test line should exceed 75 cols: ${line}`);
+    assert.equal(
+      autoWrapEditorLine(line, line.length, 75),
+      null,
+      `URL line must not auto-wrap: ${line}`
+    );
+  }
+
+  // Typing prose after a long URL should wrap after the URL without breaking it
+  const url = "https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u";
+  const proseAfterInlineUrl = `Please check ${url} for`;
+  const wrappedAfterInline = autoWrapEditorLine(
+    proseAfterInlineUrl,
+    proseAfterInlineUrl.length,
+    75
+  );
+  assert.ok(wrappedAfterInline !== null);
+  assert.equal(wrappedAfterInline.value, `Please check ${url}\nfor`);
+  assert.equal(wrappedAfterInline.cursor, proseAfterInlineUrl.length);
+
+  const proseAfterStandaloneUrl = `${url} details`;
+  const wrappedAfterStandalone = autoWrapEditorLine(
+    proseAfterStandaloneUrl,
+    proseAfterStandaloneUrl.length,
+    75
+  );
+  assert.ok(wrappedAfterStandalone !== null);
+  assert.equal(wrappedAfterStandalone.value, `${url}\ndetails`);
+  assert.equal(wrappedAfterStandalone.cursor, proseAfterStandaloneUrl.length);
+});
+
+test("wrapCommentText & wrapReplyBodyComments: preserve tag lines and URLs", () => {
+  const fixesLine =
+    'Fixes: 1234567890ab ("tracing: Fix a very long commit subject that exceeds seventy-five columns")';
+  const linkLine =
+    "Link: https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u";
+  const closesLine =
+    "Closes: https://bugzilla.kernel.org/show_bug.cgi?id=12345678901234567890123456789";
+  const refUrlLine =
+    "[1] https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u";
+  const parenUrl =
+    "(https://lore.kernel.org/all/20261104135327.23dbae14572e88b3@example.kernel.org/T/#u)";
+
+  const comment = [
+    fixesLine,
+    linkLine,
+    closesLine,
+    refUrlLine,
+    `Please inspect the previous discussion ${parenUrl} for full context on this issue.`,
+  ].join("\n");
+
+  const wrapped = wrapCommentText(comment, 75);
+  assert.ok(wrapped.includes(fixesLine), "Fixes: line must stay unwrapped");
+  assert.ok(wrapped.includes(linkLine), "Link: line must stay unwrapped");
+  assert.ok(wrapped.includes(closesLine), "Closes: line must stay unwrapped");
+  assert.ok(wrapped.includes(refUrlLine), "Reference URL line must stay unwrapped");
+  assert.ok(wrapped.includes(`\n${parenUrl}\n`), "Parenthesized URL must stay intact");
+
+  const replyBody = `On Thu, 05 Nov 2026, Kernel Developer <dev@kernel.org> wrote:\n> patch line\n\n${fixesLine}\n${linkLine}\n\n-- \nKernel Developer`;
+  const wrappedReply = wrapReplyBodyComments(replyBody, 75);
+  assert.ok(wrappedReply.includes(fixesLine));
+  assert.ok(wrappedReply.includes(linkLine));
+});
+
