@@ -1017,4 +1017,30 @@ func TestMCPWriteDraftWithAttachments(t *testing.T) {
 	if errMap["success"] != false {
 		t.Fatalf("missing file result = %v, want success=false", errMap)
 	}
+
+	// Verify sensitive UndineD files (direct and via symlink) cannot be attached via MCP
+	tokenPath := filepath.Join(server.Config.General.DataDir, "auth_token")
+	if err := os.WriteFile(tokenPath, []byte("secret-token-value"), 0600); err != nil {
+		t.Fatalf("os.WriteFile(auth_token) failed: %v", err)
+	}
+	symlinkPath := filepath.Join(artifactDir, "innocent.txt")
+	if err := os.Symlink(tokenPath, symlinkPath); err != nil {
+		t.Fatalf("os.Symlink failed: %v", err)
+	}
+
+	for _, blockedPath := range []string{tokenPath, symlinkPath} {
+		blockedRes, callErr := server.CallTool(ctx, "write_draft_message", map[string]interface{}{
+			"to":          "dev@example.com",
+			"subject":     "Blocked attachment",
+			"body":        "Body",
+			"attachments": []interface{}{blockedPath},
+		})
+		if callErr != nil {
+			t.Fatalf("write_draft_message(%q) returned RPC error: %v", blockedPath, callErr)
+		}
+		resMap, ok := blockedRes.(map[string]interface{})
+		if !ok || resMap["success"] != false {
+			t.Errorf("write_draft_message(%q) = %v, want success=false rejection", blockedPath, blockedRes)
+		}
+	}
 }

@@ -1178,7 +1178,101 @@ func (s *Server) toolImportPatchSeriesB4(ctx context.Context, args map[string]in
 	}, nil
 }
 
-func parseMCPAttachments(raw []interface{}) ([]smtp.Attachment, error) {
+func isPathWithin(path, baseDir string) bool {
+	if path == "" || baseDir == "" {
+		return false
+	}
+	rel, err := filepath.Rel(baseDir, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func canonicalPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		abs = filepath.Clean(p)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	return abs
+}
+
+// isBlockedMCPAttachmentPath rejects sensitive UndineD, user credential, and
+// system secret paths to limit damage from prompt-injected MCP tool calls.
+func isBlockedMCPAttachmentPath(expandedPath string, cfg *config.Config) (bool, string) {
+	resolved := canonicalPath(expandedPath)
+	absClean, err := filepath.Abs(expandedPath)
+	if err != nil {
+		absClean = filepath.Clean(expandedPath)
+	}
+	candidates := []string{resolved}
+	if absClean != resolved {
+		candidates = append(candidates, absClean)
+	}
+
+	var blockedDirs []string
+	var blockedFiles []string
+
+	if cfg != nil && cfg.General.DataDir != "" {
+		blockedDirs = append(blockedDirs, canonicalPath(config.ExpandPath(cfg.General.DataDir)))
+	}
+	blockedDirs = append(blockedDirs, canonicalPath(config.ExpandPath(constants.DefaultDataDir)))
+
+	if cfgPath := config.FindConfigFile(""); cfgPath != "" {
+		blockedFiles = append(blockedFiles, canonicalPath(cfgPath))
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, relDir := range []string{
+			".ssh",
+			".gnupg",
+			".aws",
+			".kube",
+			filepath.Join(".config", "undined"),
+			filepath.Join(".config", "undine"),
+			filepath.Join(".local", "share", "undined"),
+		} {
+			blockedDirs = append(blockedDirs, canonicalPath(filepath.Join(home, relDir)))
+		}
+		for _, relFile := range []string{
+			".netrc",
+			".git-credentials",
+			".pgpass",
+			".npmrc",
+			".pypirc",
+			filepath.Join(".docker", "config.json"),
+		} {
+			blockedFiles = append(blockedFiles, canonicalPath(filepath.Join(home, relFile)))
+		}
+	}
+
+	for _, sysFile := range []string{"/etc/shadow", "/etc/gshadow", "/proc/self/environ"} {
+		blockedFiles = append(blockedFiles, sysFile, canonicalPath(sysFile))
+	}
+
+	for _, cand := range candidates {
+		base := filepath.Base(cand)
+		if base == constants.AuthTokenFileName {
+			return true, "UndineD authentication token file"
+		}
+		for _, bf := range blockedFiles {
+			if bf != "" && cand == bf {
+				return true, "protected credential or configuration file"
+			}
+		}
+		for _, bd := range blockedDirs {
+			if isPathWithin(cand, bd) {
+				return true, "protected credential or UndineD data directory"
+			}
+		}
+	}
+	return false, ""
+}
+
+func parseMCPAttachments(raw []interface{}, cfg *config.Config) ([]smtp.Attachment, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
@@ -1212,6 +1306,9 @@ func parseMCPAttachments(raw []interface{}) ([]smtp.Attachment, error) {
 		var data []byte
 		if filePath != "" {
 			expandedPath := config.ExpandPath(filePath)
+			if blocked, reason := isBlockedMCPAttachmentPath(expandedPath, cfg); blocked {
+				return nil, fmt.Errorf("attachment %d: access to %s is not permitted via MCP", idx+1, reason)
+			}
 			f, err := os.Open(expandedPath)
 			if err != nil {
 				return nil, fmt.Errorf("attachment %d: cannot open %q: %w", idx+1, filePath, err)
@@ -1400,7 +1497,7 @@ func (s *Server) toolWriteDraftMessage(toolName string, args map[string]interfac
 		}
 	}
 
-	attachments, err := parseMCPAttachments(rawAttachments)
+	attachments, err := parseMCPAttachments(rawAttachments, s.Config)
 	if err != nil {
 		durMs := time.Since(t0).Seconds() * 1000.0
 		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: %s() -> REJECTED (%v) (%.1fms)", toolName, err, durMs))
