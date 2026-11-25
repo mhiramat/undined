@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"undined-go/internal/constants"
@@ -51,25 +52,35 @@ func NewSecurityManager(host string, port int, dataDir string, forceRenew ...boo
 	}
 
 	// Register allowed Host headers
+	portStr := strconv.Itoa(port)
 	hosts := []string{
-		fmt.Sprintf("%s:%d", host, port),
-		fmt.Sprintf("localhost:%d", port),
-		fmt.Sprintf("127.0.0.1:%d", port),
+		net.JoinHostPort(host, portStr),
+		net.JoinHostPort("localhost", portStr),
+		net.JoinHostPort("127.0.0.1", portStr),
 		host,
 		"localhost",
 		"127.0.0.1",
-		"test",
-		"testserver",
 	}
 	for _, h := range hosts {
 		sm.AllowedHosts[strings.ToLower(h)] = struct{}{}
 	}
 
-	// Register allowed Origins
+	// Register allowed Origins (strict scheme + host + port exact match)
 	origins := []string{
-		fmt.Sprintf("http://%s:%d", host, port),
-		fmt.Sprintf("http://localhost:%d", port),
-		fmt.Sprintf("http://127.0.0.1:%d", port),
+		fmt.Sprintf("http://%s", net.JoinHostPort(host, portStr)),
+		fmt.Sprintf("http://%s", net.JoinHostPort("localhost", portStr)),
+		fmt.Sprintf("http://%s", net.JoinHostPort("127.0.0.1", portStr)),
+	}
+	if port == 80 {
+		h := host
+		if strings.Contains(h, ":") {
+			h = "[" + h + "]"
+		}
+		origins = append(origins,
+			fmt.Sprintf("http://%s", h),
+			"http://localhost",
+			"http://127.0.0.1",
+		)
 	}
 	for _, o := range origins {
 		sm.AllowedOrigins[strings.ToLower(strings.TrimRight(o, "/"))] = struct{}{}
@@ -174,7 +185,7 @@ func (sm *SecurityManager) ValidateHost(hostHeader string) bool {
 	return false
 }
 
-// ValidateOrigin ensures state-modifying requests originate from local origins (CSRF defense).
+// ValidateOrigin ensures state-modifying requests originate from exact allowed origins (CSRF defense).
 func (sm *SecurityManager) ValidateOrigin(method, originHeader, refererHeader string) bool {
 	method = strings.ToUpper(method)
 	// Read-only methods don't mutate state
@@ -184,32 +195,18 @@ func (sm *SecurityManager) ValidateOrigin(method, originHeader, refererHeader st
 
 	if originHeader != "" {
 		originHeader = strings.ToLower(strings.TrimRight(strings.TrimSpace(originHeader), "/"))
-		if _, ok := sm.AllowedOrigins[originHeader]; ok {
-			return true
-		}
-		u, err := url.Parse(originHeader)
-		if err == nil {
-			hostname := strings.ToLower(u.Hostname())
-			if _, ok := sm.AllowedHosts[hostname]; ok {
-				return true
-			}
-		}
-		return false
+		_, ok := sm.AllowedOrigins[originHeader]
+		return ok
 	}
 
 	if refererHeader != "" {
 		u, err := url.Parse(refererHeader)
-		if err == nil {
-			refOrigin := strings.ToLower(fmt.Sprintf("%s://%s", u.Scheme, u.Host))
-			if _, ok := sm.AllowedOrigins[refOrigin]; ok {
-				return true
-			}
-			hostname := strings.ToLower(u.Hostname())
-			if _, ok := sm.AllowedHosts[hostname]; ok {
-				return true
-			}
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return false
 		}
-		return false
+		refOrigin := strings.ToLower(fmt.Sprintf("%s://%s", u.Scheme, u.Host))
+		_, ok := sm.AllowedOrigins[refOrigin]
+		return ok
 	}
 
 	// If neither Origin nor Referer is provided (e.g. CLI curl or MCP client), allow mutation if Bearer token authenticated

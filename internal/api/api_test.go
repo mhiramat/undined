@@ -141,6 +141,57 @@ func TestSecurityMiddlewareAndAuth(t *testing.T) {
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected 403 Forbidden for cookie-authenticated POST missing Origin and Referer, got %d", resp.StatusCode)
 	}
+
+	// 7. Cross-port localhost CSRF POST with SameSite cookie must be rejected (403)
+	req, err = http.NewRequest(http.MethodPost, ts.URL+"/api/composer/preview-quote", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Origin", "http://127.0.0.1:3000")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("POST with cross-port localhost Origin: got status %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+
+	// 8. Cookie-authenticated POST with non-JSON Content-Type (simple request CSRF) must be rejected (415)
+	req, err = http.NewRequest(http.MethodPost, ts.URL+"/api/composer/preview-quote", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set("Content-Type", "text/plain")
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnsupportedMediaType {
+		t.Errorf("POST with text/plain cookie auth: got status %d, want %d", resp.StatusCode, http.StatusUnsupportedMediaType)
+	}
+
+	// 9. Cookie-authenticated POST with exact Origin and application/json should pass security middleware
+	req, err = http.NewRequest(http.MethodPost, ts.URL+"/api/addresses/collect", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest failed: %v", err)
+	}
+	req.Header.Set("Origin", "http://127.0.0.1:8080")
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: constants.SessionCookieName, Value: token})
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do failed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST with exact Origin and JSON Content-Type: got status %d, want %d", resp.StatusCode, http.StatusOK)
+	}
 }
 
 func TestIndexAndLoginFlow(t *testing.T) {

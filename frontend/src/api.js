@@ -519,6 +519,7 @@ export async function fetchMyPatchworkPatches(params = {}) {
 export async function syncTodoFromPatchwork() {
   const res = await fetch(`${BASE_URL}/api/patchwork/sync-todo`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Failed to sync TODO from Patchwork" }));

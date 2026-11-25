@@ -73,8 +73,6 @@ func TestHostValidation(t *testing.T) {
 		"localhost:8080",
 		"127.0.0.1",
 		"localhost",
-		"test",
-		"testserver",
 	}
 	for _, h := range validHosts {
 		if !sm.ValidateHost(h) {
@@ -86,6 +84,8 @@ func TestHostValidation(t *testing.T) {
 		"evil.com",
 		"attacker.org:8080",
 		"192.168.1.1:8080",
+		"test",
+		"testserver",
 		"",
 	}
 	for _, h := range invalidHosts {
@@ -115,6 +115,39 @@ func TestOriginValidation(t *testing.T) {
 	// POST from untrusted origin
 	if sm.ValidateOrigin("POST", "http://malicious-website.com", "") {
 		t.Errorf("POST from evil website should be rejected")
+	}
+
+	// Cross-port localhost / 127.0.0.1 CSRF attempts must be rejected
+	crossPortOrigins := []string{
+		"http://127.0.0.1:3000",
+		"http://localhost:9999",
+		"https://127.0.0.1:8080",
+		"http://127.0.0.1",
+	}
+	for _, orig := range crossPortOrigins {
+		if sm.ValidateOrigin(http.MethodPost, orig, "") {
+			t.Errorf("ValidateOrigin(%q, %q, %q) = true, want false", http.MethodPost, orig, "")
+		}
+		if sm.ValidateOrigin(http.MethodPost, "", orig+"/attack.html") {
+			t.Errorf("ValidateOrigin(%q, %q, %q) = true, want false", http.MethodPost, "", orig+"/attack.html")
+		}
+	}
+
+	// Valid exact-match Referer when Origin is absent
+	if !sm.ValidateOrigin(http.MethodPost, "", "http://127.0.0.1:8080/") {
+		t.Errorf("ValidateOrigin(%q, %q, %q) = false, want true", http.MethodPost, "", "http://127.0.0.1:8080/")
+	}
+
+	// Default port 80 allows omitted port in Origin/Referer
+	sm80, err := NewSecurityManager("127.0.0.1", 80, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSecurityManager(port 80) failed: %v", err)
+	}
+	if !sm80.ValidateOrigin(http.MethodPost, "http://127.0.0.1", "") {
+		t.Errorf("ValidateOrigin(port 80, %q) = false, want true", "http://127.0.0.1")
+	}
+	if sm80.ValidateOrigin(http.MethodPost, "http://127.0.0.1:8080", "") {
+		t.Errorf("ValidateOrigin(port 80, %q) = true, want false", "http://127.0.0.1:8080")
 	}
 }
 

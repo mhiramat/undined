@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -45,11 +46,21 @@ func (s *Server) SecurityMiddleware(next http.Handler) http.Handler {
 			}
 			// If neither Origin nor Referer is present on an API mutation, require
 			// explicit Bearer token authentication (disallow cookie-only or query-token mutations without Origin/Referer).
-			if !isExempt && origin == "" && referer == "" {
+			if !isExempt {
 				authHdr := r.Header.Get("Authorization")
-				if !strings.HasPrefix(strings.ToLower(authHdr), "bearer ") {
+				isBearer := strings.HasPrefix(strings.ToLower(authHdr), "bearer ")
+				if origin == "" && referer == "" && !isBearer {
 					http.Error(w, "Access denied: Missing Origin/Referer header for cookie-authenticated mutation.", http.StatusForbidden)
 					return
+				}
+				// For cookie-authenticated API POSTs, require Content-Type: application/json
+				// to block browser simple-request CSRF (text/plain, form-urlencoded, multipart).
+				if r.Method == http.MethodPost && !isBearer {
+					mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+					if err != nil || mediaType != "application/json" {
+						http.Error(w, "Access denied: Content-Type must be application/json for cookie-authenticated API POST.", http.StatusUnsupportedMediaType)
+						return
+					}
 				}
 			}
 		}
