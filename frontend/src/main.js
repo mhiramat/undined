@@ -224,9 +224,14 @@ async function init() {
     if (event === EVENT_FOLDER_SELECTED) {
       try {
         const msgs = await fetchMessages(folderId);
-        store.setMessages(msgs);
+        if (store.getState().selectedFolderId === folderId) {
+          store.setMessages(msgs);
+        }
       } catch (err) {
         console.error("Failed to load folder messages:", err);
+        if (store.getState().selectedFolderId === folderId) {
+          store.setSummaryError(`Failed to load folder messages: ${err?.message || String(err)}`);
+        }
       }
     }
   });
@@ -267,6 +272,7 @@ async function init() {
     }
   } catch (err) {
     console.error("Failed to initialize UndineD:", err);
+    store.setSummaryError(`Failed to load mailbox data: ${err?.message || String(err)}`);
   }
 }
 

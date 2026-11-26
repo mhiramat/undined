@@ -2495,6 +2495,58 @@ body.composer-standalone-body {
 }
 
 /* =============================================================================
+   Summary Pane Error Banner & Render Fallback
+   ============================================================================= */
+.summary-error-banner {
+  background-color: rgba(239, 68, 68, 0.12);
+  border-bottom: 1px solid rgba(239, 68, 68, 0.4);
+  padding: 6px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.error-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #fca5a5;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.error-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.summary-error-state {
+  padding: 20px 24px;
+  margin: 12px;
+  background-color: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: 6px;
+  color: #fca5a5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+}
+.summary-error-state-title {
+  font-weight: 600;
+}
+.summary-error-state-detail {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* =============================================================================
    Active Filter Banner
    ============================================================================= */
 .summary-filter-banner {

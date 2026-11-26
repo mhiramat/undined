@@ -347,8 +347,8 @@ export function renderSideDiff(container, parsedDiff) {
 }
 
 function escapeHtml(str) {
-  if (!str) return "";
-  return str.replace(/[&<>"']/g, (m) => ({
+  if (str == null || str === "") return "";
+  return String(str).replace(/[&<>"']/g, (m) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",

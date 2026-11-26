@@ -4,9 +4,9 @@
  */
 
 import { store } from "../store.js";
-import { cancelFolderSync, deleteMessagesBatch, fetchFolders, markMessageRead, setMessagesTagBatch } from "../api.js";
+import { cancelFolderSync, deleteMessagesBatch, fetchFolders, fetchMessages, markMessageRead, setMessagesTagBatch } from "../api.js";
 import { getTags, getMessageTags } from "../tags.js";
-import { sanitizeHexColor } from "../linkify.js";
+import { sanitizeCssSlug, sanitizeHexColor } from "../linkify.js";
 import { openFilterDialog } from "./FilterDialog.js";
 import { isDraftFolder, triggerNewMessage } from "./ViewerPane.js";
 import {
@@ -24,6 +24,7 @@ import {
   EVENT_SERIES_LIST_UPDATED,
   EVENT_SERIES_SELECTED,
   EVENT_SERIES_PROGRESS_UPDATED,
+  EVENT_SUMMARY_ERROR_UPDATED,
 } from "../constants.js";
 
 function showToast(message, type = "info") {
@@ -40,12 +41,14 @@ export function renderSummaryPane(container) {
   // Set up container layout slots once
   container.innerHTML = `
     <div id="summary-selection-slot"></div>
+    <div id="summary-error-slot"></div>
     <div id="summary-banner-slot"></div>
     <div id="summary-filter-slot"></div>
     <div class="summary-table-container"></div>
   `;
 
   const selectionSlot = container.querySelector("#summary-selection-slot");
+  const errorSlot = container.querySelector("#summary-error-slot");
   const bannerSlot = container.querySelector("#summary-banner-slot");
   const filterSlot = container.querySelector("#summary-filter-slot");
   const tableContainer = container.querySelector(".summary-table-container");
@@ -299,7 +302,71 @@ export function renderSummaryPane(container) {
     }
   }
 
+  function renderErrorBanner() {
+    if (!errorSlot) return;
+    const { summaryError, selectedFolderId } = store.getState();
+    if (!summaryError) {
+      errorSlot.innerHTML = "";
+      return;
+    }
+
+    errorSlot.innerHTML = `
+      <div class="summary-error-banner" id="summary-error-banner" role="alert">
+        <div class="error-banner-content">
+          <span class="error-icon">⚠️</span>
+          <span class="error-text">${escapeHtml(summaryError)}</span>
+        </div>
+        <div class="error-banner-actions">
+          ${selectedFolderId != null ? `<button type="button" class="filter-action-btn" id="btn-summary-retry-load" title="Retry loading messages">🔄 Retry</button>` : ""}
+          <button type="button" class="filter-action-btn text-danger" id="btn-summary-dismiss-error" title="Dismiss error">✕ Dismiss</button>
+        </div>
+      </div>
+    `;
+
+    const retryBtn = errorSlot.querySelector("#btn-summary-retry-load");
+    if (retryBtn && selectedFolderId != null) {
+      retryBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        retryBtn.disabled = true;
+        try {
+          const msgs = await fetchMessages(selectedFolderId);
+          store.setMessages(msgs);
+        } catch (err) {
+          store.setSummaryError(`Failed to load folder messages: ${err?.message || String(err)}`);
+        }
+      });
+    }
+
+    const dismissBtn = errorSlot.querySelector("#btn-summary-dismiss-error");
+    if (dismissBtn) {
+      dismissBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        store.setSummaryError(null);
+      });
+    }
+  }
+
   function renderTable() {
+    try {
+      renderTableInner();
+    } catch (err) {
+      console.error("[SummaryPane] Failed to render message list:", err);
+      const errMsg = err?.message || String(err);
+      tableContainer.innerHTML = `
+        <div class="summary-error-state" id="summary-render-error" role="alert">
+          <div class="summary-error-state-title">⚠️ Failed to render folder message list</div>
+          <div class="summary-error-state-detail">${escapeHtml(errMsg)}</div>
+          <button type="button" class="filter-action-btn" id="btn-summary-retry-render">🔄 Retry</button>
+        </div>
+      `;
+      tableContainer.querySelector("#btn-summary-retry-render")?.addEventListener("click", () => {
+        renderTable();
+      });
+      showToast(`Failed to render message list: ${errMsg}`, "error");
+    }
+  }
+
+  function renderTableInner() {
     const {
       selectedFolderId,
       messages,
@@ -468,7 +535,7 @@ export function renderSummaryPane(container) {
             </td>
             <td class="summary-from-cell">${escapeHtml((ser.to_addrs || []).join(", "))}</td>
             <td class="summary-tag-cell">
-              <span class="series-status-pill ${escapeHtml(ser.status || "draft")}">${escapeHtml(statusLabel)}</span>
+              <span class="series-status-pill ${sanitizeCssSlug(ser.status || "draft", "draft")}">${escapeHtml(statusLabel)}</span>
             </td>
             <td class="summary-date-cell" style="color: var(--text-muted);">${escapeHtml(formatDate(ser.updated_at || ser.created_at))}</td>
           </tr>
@@ -883,9 +950,15 @@ export function renderSummaryPane(container) {
       event === EVENT_FILTER_UPDATED
     ) {
       renderSelectionBar();
+      renderErrorBanner();
       renderTable();
       renderSyncBanner();
       renderFilterBanner();
+    } else if (event === EVENT_SUMMARY_ERROR_UPDATED) {
+      renderErrorBanner();
+      if (payload) {
+        showToast(payload, "error");
+      }
     } else if (event === EVENT_SELECTION_CHANGED) {
       renderSelectionBar();
       renderTable();
@@ -915,6 +988,7 @@ export function renderSummaryPane(container) {
   });
 
   renderSelectionBar();
+  renderErrorBanner();
   renderSyncBanner();
   renderFilterBanner();
   renderTable();
@@ -937,8 +1011,8 @@ function formatDate(dateStr) {
 }
 
 function escapeHtml(str) {
-  if (!str) return "";
-  return str.replace(/[&<>"']/g, (m) => ({
+  if (str == null || str === "") return "";
+  return String(str).replace(/[&<>"']/g, (m) => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",

@@ -48,3 +48,4 @@ export const EVENT_SELECTION_CHANGED = "selection_changed";
 export const EVENT_SERIES_LIST_UPDATED = "series_list_updated";
 export const EVENT_SERIES_SELECTED = "series_selected";
 export const EVENT_SERIES_PROGRESS_UPDATED = "series_progress_updated";
+export const EVENT_SUMMARY_ERROR_UPDATED = "summary_error_updated";

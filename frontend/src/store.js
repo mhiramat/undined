@@ -22,6 +22,7 @@ import {
   EVENT_SERIES_LIST_UPDATED,
   EVENT_SERIES_PROGRESS_UPDATED,
   EVENT_SERIES_SELECTED,
+  EVENT_SUMMARY_ERROR_UPDATED,
   EVENT_WIDTH_RESIZED,
   FOLDER_B4_IMPORTS,
 } from "./constants.js";
@@ -62,6 +63,7 @@ class UndineDStore {
       seriesList: [],
       selectedSeriesId: null,
       seriesProgress: {},
+      summaryError: null,
     };
     this.listeners = new Set();
   }
@@ -172,7 +174,11 @@ class UndineDStore {
 
   notify(event, payload) {
     for (const listener of this.listeners) {
-      listener(event, payload, this.state);
+      try {
+        listener(event, payload, this.state);
+      } catch (err) {
+        console.error(`[UndineD Store] Listener error for event "${event}":`, err);
+      }
     }
   }
 
@@ -286,6 +292,8 @@ class UndineDStore {
     }
     this.state.selectedFolderId = folderId;
     this.state.pendingTargetMessageId = targetMessageId;
+    this.state.selectedSeriesId = null;
+    this.state.summaryError = null;
     this.state.rawMessages = [];
     this.state.messages = [];
     this.state.selectedMessageId = null;
@@ -295,6 +303,7 @@ class UndineDStore {
     this.state.lastToggledMessageIndex = -1;
     this.state.activeMessageDetail = null;
     this.state.activeNotes = {};
+    this.notify(EVENT_SUMMARY_ERROR_UPDATED, null);
     this.notify(EVENT_FOLDER_SELECTED, folderId);
   }
 
@@ -561,8 +570,18 @@ class UndineDStore {
     }
   }
 
+  setSummaryError(errorMessage) {
+    const nextErr = errorMessage ? String(errorMessage) : null;
+    this.state.summaryError = nextErr;
+    this.notify(EVENT_SUMMARY_ERROR_UPDATED, nextErr);
+  }
+
   setMessages(messages) {
     const prevSelectedId = this.state.selectedMessageId;
+    if (this.state.summaryError !== null) {
+      this.state.summaryError = null;
+      this.notify(EVENT_SUMMARY_ERROR_UPDATED, null);
+    }
     this.state.rawMessages = messages || [];
     this.syncSelectedFolderUnreadCount();
     this.recomputeMessages();
