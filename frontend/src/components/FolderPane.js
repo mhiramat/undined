@@ -13,9 +13,12 @@ import {
   EVENT_FOLDER_SYNC_FINISHED,
   EVENT_FOLDER_SYNC_PROGRESS,
   EVENT_AI_REVIEW_STATE_CHANGED,
+  EVENT_SERIES_LIST_UPDATED,
+  EVENT_SERIES_PROGRESS_UPDATED,
   EVENT_MESSAGE_SELECTED,
   EVENT_MESSAGE_DETAIL_LOADED,
   FOLDER_AI_REVIEWS,
+  FOLDER_DRAFTS,
 } from "../constants.js";
 
 function showToast(message, type = "success") {
@@ -148,6 +151,8 @@ export function renderFolderPane(container) {
         syncingBadge = `<span class="folder-syncing-icon spinner" title="Syncing TODO from Patchwork..." style="margin-left: 5px; font-size: 11px;">🔄</span>`;
       } else if ((f.name === FOLDER_AI_REVIEWS || f.name === "AI-reviews") && store.isAiReviewActive()) {
         syncingBadge = `<span class="folder-syncing-icon spinner" title="AI Review in progress..." style="margin-left: 5px; font-size: 11px;">🔄</span>`;
+      } else if ((f.name === FOLDER_DRAFTS || f.name === "Drafts") && store.isAnySeriesSending()) {
+        syncingBadge = `<span class="folder-syncing-icon spinner-hourglass" title="Sending patch series..." style="margin-left: 5px; font-size: 11px;">⏳</span>`;
       }
       html += `
         <li class="folder-item ${isActive}" data-id="${f.id}">
@@ -393,7 +398,9 @@ export function renderFolderPane(container) {
       event === EVENT_FOLDER_SYNC_STARTED ||
       event === EVENT_FOLDER_SYNC_FINISHED ||
       event === EVENT_FOLDER_SYNC_PROGRESS ||
-      event === EVENT_AI_REVIEW_STATE_CHANGED
+      event === EVENT_AI_REVIEW_STATE_CHANGED ||
+      event === EVENT_SERIES_LIST_UPDATED ||
+      event === EVENT_SERIES_PROGRESS_UPDATED
     ) {
       if (event === EVENT_FOLDERS_UPDATED || event === EVENT_FOLDER_SELECTED) {
         isMenuOpen = false;

@@ -63,6 +63,7 @@ class UndineDStore {
       seriesList: [],
       selectedSeriesId: null,
       seriesProgress: {},
+      seriesBusyIds: new Set(),
       summaryError: null,
     };
     this.listeners = new Set();
@@ -1144,6 +1145,33 @@ class UndineDStore {
     this.notify(EVENT_SERIES_LIST_UPDATED, this.state.seriesList);
   }
 
+  setSeriesBusy(seriesId, isBusy) {
+    if (!seriesId) return;
+    const changed = isBusy
+      ? !this.state.seriesBusyIds.has(seriesId)
+      : this.state.seriesBusyIds.has(seriesId);
+    if (isBusy) {
+      this.state.seriesBusyIds.add(seriesId);
+    } else {
+      this.state.seriesBusyIds.delete(seriesId);
+    }
+    if (changed) {
+      this.notify(EVENT_SERIES_LIST_UPDATED, this.state.seriesList);
+    }
+  }
+
+  isSeriesBusy(seriesId) {
+    if (!seriesId) return false;
+    if (this.state.seriesBusyIds.has(seriesId)) return true;
+    const item = this.state.seriesList.find((s) => s && s.series_id === seriesId);
+    return Boolean(item && item.status === "sending");
+  }
+
+  isAnySeriesSending() {
+    if (this.state.seriesBusyIds.size > 0) return true;
+    return this.state.seriesList.some((s) => s && s.status === "sending");
+  }
+
   selectSeries(seriesId) {
     this.state.selectedSeriesId = seriesId || null;
     if (seriesId) {
@@ -1157,17 +1185,34 @@ class UndineDStore {
   updateSeriesProgress(progress) {
     if (!progress || !progress.series_id) return;
     this.state.seriesProgress[progress.series_id] = progress;
+    const isTerminal =
+      progress.status === "failed" ||
+      progress.status === "paused" ||
+      (progress.seq_index == null && progress.status === "sent");
+    if (isTerminal) {
+      this.state.seriesBusyIds.delete(progress.series_id);
+    } else if (progress.status === "sending" || progress.seq_index != null) {
+      this.state.seriesBusyIds.add(progress.series_id);
+    }
     const item = this.state.seriesList.find((s) => s.series_id === progress.series_id);
     if (item && progress.status) {
-      item.status = progress.status;
-      if (Array.isArray(item.items) && progress.seq_index != null) {
-        const target = item.items.find((it) => it.seq_index === progress.seq_index);
-        if (target) {
-          target.status = progress.status;
-          if (progress.error_message) {
-            target.error_message = progress.error_message;
+      if (progress.seq_index != null) {
+        if (progress.status === "failed" || progress.status === "paused") {
+          item.status = progress.status;
+        } else {
+          item.status = "sending";
+        }
+        if (Array.isArray(item.items)) {
+          const target = item.items.find((it) => it.seq_index === progress.seq_index);
+          if (target) {
+            target.status = progress.status;
+            if (progress.error_message) {
+              target.error_message = progress.error_message;
+            }
           }
         }
+      } else {
+        item.status = progress.status;
       }
       this.notify(EVENT_SERIES_LIST_UPDATED, this.state.seriesList);
     }

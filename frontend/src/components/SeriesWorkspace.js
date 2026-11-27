@@ -55,7 +55,9 @@ function parseAddressCSV(raw) {
 function formatStatusPill(status, sentCount, totalCount) {
   switch (status) {
     case "sending":
-      return `<span class="series-status-pill sending">Sending ${sentCount}/${totalCount}</span>`;
+      return `<span class="series-status-pill sending"><span class="spinner-hourglass" aria-hidden="true">⏳</span> Sending ${sentCount}/${totalCount}</span>`;
+    case "test-sending":
+      return `<span class="series-status-pill sending"><span class="spinner-hourglass" aria-hidden="true">⏳</span> Sending Test…</span>`;
     case "paused":
       return `<span class="series-status-pill paused">Paused ${sentCount}/${totalCount}</span>`;
     case "failed":
@@ -69,7 +71,7 @@ function formatStatusPill(status, sentCount, totalCount) {
 
 function formatItemBadge(status, isEdited) {
   if (status === "sent") return `<span class="series-item-badge sent">Sent ✓</span>`;
-  if (status === "sending") return `<span class="series-item-badge sending">Sending…</span>`;
+  if (status === "sending") return `<span class="series-item-badge sending"><span class="spinner-hourglass" aria-hidden="true">⏳</span> Sending…</span>`;
   if (status === "failed") return `<span class="series-item-badge failed">Failed ✗</span>`;
   if (isEdited) return `<span class="series-item-badge edited">Edited</span>`;
   return `<span class="series-item-badge draft">Draft</span>`;
@@ -171,19 +173,40 @@ function buildSeriesTranslatedBoxHtml(translationState, isPatchDiff, targetLangL
 export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) {
   if (!container || !seriesId) return;
 
-  container.innerHTML = `<div style="padding: 24px; color: var(--text-muted);">Loading patch series ${escapeHtml(seriesId)}…</div>`;
+  const loadSeq = (stateRef.loadSeq || 0) + 1;
+  stateRef.loadSeq = loadSeq;
+
+  const isSameSeriesRendered =
+    stateRef.currentSeriesId === seriesId &&
+    typeof container.innerHTML === "string" &&
+    container.innerHTML.includes(`data-series-id="${escapeHtml(seriesId)}"`);
+
+  if (!isSameSeriesRendered) {
+    container.innerHTML = `<div style="padding: 24px; color: var(--text-muted);">Loading patch series ${escapeHtml(seriesId)}…</div>`;
+  }
 
   let detail;
   try {
     detail = await fetchSeriesDetail(seriesId);
   } catch (err) {
+    if (stateRef.loadSeq !== loadSeq) return;
     container.innerHTML = `<div style="padding: 24px; color: var(--accent-red);">Failed to load patch series: ${escapeHtml(err.message)}</div>`;
     return;
   }
 
-  if (store.getState().selectedSeriesId !== seriesId) {
+  if (stateRef.loadSeq !== loadSeq || store.getState().selectedSeriesId !== seriesId) {
     return;
   }
+  stateRef.currentSeriesId = seriesId;
+  if (!detail.is_sending_now && detail.status !== "sending") {
+    if (stateRef.pausingSeriesId === seriesId) {
+      stateRef.pausingSeriesId = null;
+    }
+  }
+  const serverSending = Boolean(detail.is_sending_now || detail.status === "sending");
+  const localBusy =
+    stateRef.testSendingSeriesId === seriesId || stateRef.startingSendSeriesId === seriesId;
+  store.setSeriesBusy(seriesId, serverSending || localBusy);
 
   let selectedSeqIndex =
     stateRef.selectedSeqIndex != null && detail.items.some((it) => it.seq_index === stateRef.selectedSeqIndex)
@@ -251,7 +274,15 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
     const totalCount = detail.total_count ?? items.length;
     const sentCount = detail.sent_count ?? items.filter((it) => it.status === "sent").length;
     const remainingCount = Math.max(0, totalCount - sentCount);
-    const isSending = Boolean(detail.is_sending_now || detail.status === "sending");
+    const isStartingSend = stateRef.startingSendSeriesId === detail.series_id;
+    const isTestSending = stateRef.testSendingSeriesId === detail.series_id;
+    const isSending = Boolean(detail.is_sending_now || detail.status === "sending" || isStartingSend);
+    const isBusy = isSending || isTestSending;
+    const isPausing = stateRef.pausingSeriesId === detail.series_id;
+    if (isBusy && editMode) {
+      editMode = false;
+      stateRef.editMode = false;
+    }
     const isSentAll = remainingCount === 0 && totalCount > 0;
     const activeItem = items.find((it) => it.seq_index === selectedSeqIndex) || items[0] || null;
     const warnings = Array.isArray(detail.warnings) ? detail.warnings : [];
@@ -264,8 +295,10 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
         ? `▶ Resume Remaining (${remainingCount}/${totalCount})…`
         : `🚀 Send Series (${remainingCount} emails)…`;
 
+    const effectiveStatus = isTestSending ? "test-sending" : (isSending ? "sending" : detail.status);
+    const drawerStatusClass = isBusy ? "sending" : escapeHtml(detail.status);
     const pct = totalCount > 0 ? Math.round((sentCount / totalCount) * 100) : 0;
-    const showProgressDrawer = isSending || detail.status === "paused" || detail.status === "failed" || detail.status === "sent";
+    const showProgressDrawer = isBusy || detail.status === "paused" || detail.status === "failed" || detail.status === "sent";
     const failedItem = items.find((it) => it.status === "failed");
 
     const cfg = store.getConfig();
@@ -304,20 +337,20 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
         <div class="series-header-bar">
           <div class="series-title-row">
             <div class="series-title-left">
-              <span class="series-icon">📦</span>
+              ${isBusy ? `<span class="series-icon spinner-hourglass" aria-hidden="true">⏳</span>` : `<span class="series-icon">📦</span>`}
               <strong>${escapeHtml(detail.series_key)}</strong>
               <span class="series-version-badge">v${escapeHtml(detail.version || 1)} · ${totalCount} msgs</span>
               ${detail.branch ? `<span class="series-branch-badge">${escapeHtml(detail.branch)}</span>` : ""}
-              ${formatStatusPill(detail.status, sentCount, totalCount)}
+              ${formatStatusPill(effectiveStatus, sentCount, totalCount)}
             </div>
             <div class="series-actions-right">
-              <button type="button" class="action-btn" id="btn-series-test-self" ${isSending ? "disabled" : ""} title="Send test copy only to ${escapeHtml(detail.from_email)}">
-                🧪 Send Test to Self
+              <button type="button" class="action-btn" id="btn-series-test-self" ${isBusy ? "disabled" : ""} title="Send test copy only to ${escapeHtml(detail.from_email)}">
+                ${isTestSending ? `<span class="spinner-hourglass" aria-hidden="true">⏳</span> Sending Test…` : "🧪 Send Test to Self"}
               </button>
-              <button type="button" class="action-btn primary" id="btn-series-send" ${isSending || isSentAll ? "disabled" : ""}>
-                ${escapeHtml(primarySendLabel)}
+              <button type="button" class="action-btn primary" id="btn-series-send" ${isBusy || isSentAll ? "disabled" : ""}>
+                ${isSending ? `<span class="spinner-hourglass" aria-hidden="true">⏳</span> Sending (${sentCount}/${totalCount})…` : escapeHtml(primarySendLabel)}
               </button>
-              <button type="button" class="action-btn danger" id="btn-series-discard" ${isSending ? "disabled" : ""}>
+              <button type="button" class="action-btn danger" id="btn-series-discard" ${isBusy ? "disabled" : ""}>
                 🗑️ Discard Series
               </button>
             </div>
@@ -326,26 +359,26 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
           <div class="series-shared-headers">
             <label class="series-field">
               <span>To:</span>
-              <input type="text" id="series-to-input" value="${escapeHtml((detail.to_addrs || []).join(", "))}" ${isSending ? "disabled" : ""} />
+              <input type="text" id="series-to-input" value="${escapeHtml((detail.to_addrs || []).join(", "))}" ${isBusy ? "disabled" : ""} />
             </label>
             <label class="series-field">
               <span>Cc:</span>
-              <input type="text" id="series-cc-input" value="${escapeHtml((detail.cc_addrs || []).join(", "))}" ${isSending ? "disabled" : ""} />
+              <input type="text" id="series-cc-input" value="${escapeHtml((detail.cc_addrs || []).join(", "))}" ${isBusy ? "disabled" : ""} />
             </label>
             <div class="series-field-row">
               <label class="series-field" style="flex: 1;">
                 <span>In-Reply-To:</span>
-                <input type="text" id="series-in-reply-to-input" value="${escapeHtml(detail.in_reply_to || "")}" placeholder="<optional-parent@kernel.org>" ${isSending ? "disabled" : ""} />
+                <input type="text" id="series-in-reply-to-input" value="${escapeHtml(detail.in_reply_to || "")}" placeholder="<optional-parent@kernel.org>" ${isBusy ? "disabled" : ""} />
               </label>
               <label class="series-field series-delay-field">
                 <span>Delay:</span>
-                <select id="series-delay-select" ${isSending ? "disabled" : ""}>
+                <select id="series-delay-select" ${isBusy ? "disabled" : ""}>
                   <option value="1" ${Number(detail.send_delay_sec) === 1 ? "selected" : ""}>1s</option>
                   <option value="2" ${Number(detail.send_delay_sec || 2) === 2 ? "selected" : ""}>2s</option>
                   <option value="5" ${Number(detail.send_delay_sec) === 5 ? "selected" : ""}>5s</option>
                 </select>
               </label>
-              <button type="button" class="action-btn" id="btn-series-save-headers" ${isSending ? "disabled" : ""}>
+              <button type="button" class="action-btn" id="btn-series-save-headers" ${isBusy ? "disabled" : ""}>
                 💾 Save Headers
               </button>
             </div>
@@ -353,21 +386,23 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
         </div>
 
         ${showProgressDrawer ? `
-          <div class="series-progress-drawer status-${escapeHtml(detail.status)}" id="series-progress-drawer">
+          <div class="series-progress-drawer status-${drawerStatusClass}" id="series-progress-drawer">
             <div class="series-progress-top">
               <div class="series-progress-text">
-                <strong>Delivery Status:</strong> ${formatStatusPill(detail.status, sentCount, totalCount)}
-                <span>(${sentCount} of ${totalCount} transmitted)</span>
-                ${failedItem?.error_message ? `<span class="series-error-detail">— ${escapeHtml(failedItem.error_message)}</span>` : ""}
+                <strong>Delivery Status:</strong> ${formatStatusPill(effectiveStatus, sentCount, totalCount)}
+                ${isTestSending
+                  ? `<span>Sending [TEST] copy of ${totalCount} email(s) to ${escapeHtml(detail.from_email)}…</span>`
+                  : `<span>(${sentCount} of ${totalCount} transmitted)</span>`}
+                ${!isBusy && failedItem?.error_message ? `<span class="series-error-detail">— ${escapeHtml(failedItem.error_message)}</span>` : ""}
               </div>
               ${isSending ? `
-                <button type="button" class="action-btn danger" id="btn-series-pause">
-                  ⏸ Pause / Cancel
+                <button type="button" class="action-btn danger" id="btn-series-pause" ${isPausing ? "disabled" : ""}>
+                  ${isPausing ? `<span class="spinner-hourglass" aria-hidden="true">⏳</span> Pausing…` : "⏸ Pause / Cancel"}
                 </button>
               ` : ""}
             </div>
             <div class="series-progress-bar-track">
-              <div class="series-progress-bar-fill" style="width: ${pct}%;"></div>
+              <div class="series-progress-bar-fill ${isTestSending ? "indeterminate" : ""}" style="width: ${isTestSending ? 100 : pct}%;"></div>
             </div>
           </div>
         ` : ""}
@@ -398,13 +433,13 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
                   ${activeItem.commit_sha ? `<span class="series-sha-badge">${escapeHtml(activeItem.commit_sha.slice(0, 12))}</span>` : ""}
                 </div>
                 <div class="series-inspector-controls">
-                  <button type="button" class="action-btn ${!editMode ? "primary" : ""}" id="btn-series-mode-preview">📄 Diff View</button>
-                  <button type="button" class="action-btn ${editMode ? "primary" : ""}" id="btn-series-mode-edit" ${activeItem.status === "sent" || isSending ? "disabled" : ""}>✏️ Edit Plain Text</button>
+                  <button type="button" class="action-btn ${!editMode ? "primary" : ""}" id="btn-series-mode-preview" ${isBusy ? "disabled" : ""}>📄 Diff View</button>
+                  <button type="button" class="action-btn ${editMode ? "primary" : ""}" id="btn-series-mode-edit" ${activeItem.status === "sent" || isBusy ? "disabled" : ""}>✏️ Edit Plain Text</button>
                   ${isTranslateEnabled ? `
-                    <button type="button" class="action-btn ${showTranslated ? "active" : ""}" id="btn-series-translate" ${isTranslatingNow ? "disabled" : ""} title="${escapeAttr(translateBtnTitle)}">${translateBtnLabel}</button>
+                    <button type="button" class="action-btn ${showTranslated ? "active" : ""}" id="btn-series-translate" ${isTranslatingNow || isBusy ? "disabled" : ""} title="${escapeAttr(translateBtnTitle)}">${translateBtnLabel}</button>
                   ` : ""}
                   ${hasExternalEditor && activeItem.draft_msg_id && activeItem.status !== "sent" ? `
-                    <button type="button" class="action-btn" id="btn-series-ext-editor" title="Open in external $EDITOR">🖥️ $EDITOR</button>
+                    <button type="button" class="action-btn" id="btn-series-ext-editor" ${isBusy ? "disabled" : ""} title="Open in external $EDITOR">🖥️ $EDITOR</button>
                   ` : ""}
                 </div>
               </div>
@@ -595,26 +630,58 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
 
     // Test Send to Self
     container.querySelector("#btn-series-test-self")?.addEventListener("click", async () => {
+      if (isBusy) return;
       if (!confirm(`Send a [TEST] copy of all ${totalCount} messages ONLY to ${detail.from_email}?`)) {
         return;
       }
+      stateRef.testSendingSeriesId = detail.series_id;
+      editMode = false;
+      store.setSeriesBusy(detail.series_id, true);
+      renderWorkspace();
       try {
         const res = await testSendSeriesSelf(detail.series_id);
         showToast(`Sent ${res.sent_count} test message(s) to ${detail.from_email}.`, "success");
       } catch (err) {
         showToast(err.message, "error");
+      } finally {
+        if (stateRef.testSendingSeriesId === detail.series_id) {
+          stateRef.testSendingSeriesId = null;
+        }
+        store.setSeriesBusy(detail.series_id, Boolean(detail.is_sending_now || detail.status === "sending"));
+        if (store.getState().selectedSeriesId === detail.series_id) {
+          renderWorkspace();
+        }
       }
     });
 
     // Open Human Confirmation Modal before any SMTP transmission
     container.querySelector("#btn-series-send")?.addEventListener("click", () => {
+      if (isBusy || isSentAll) return;
       openConfirmSendModal(detail, async () => {
+        stateRef.startingSendSeriesId = detail.series_id;
+        stateRef.pausingSeriesId = null;
+        editMode = false;
+        store.setSeriesBusy(detail.series_id, true);
+        renderWorkspace();
         try {
           await sendSeries(detail.series_id);
           detail = await fetchSeriesDetail(detail.series_id);
-          renderWorkspace();
+          if (stateRef.startingSendSeriesId === detail.series_id) {
+            stateRef.startingSendSeriesId = null;
+          }
+          store.setSeriesBusy(detail.series_id, Boolean(detail.is_sending_now || detail.status === "sending"));
+          if (store.getState().selectedSeriesId === detail.series_id) {
+            renderWorkspace();
+          }
           showToast("Sequential patch series transmission started.", "info");
         } catch (err) {
+          if (stateRef.startingSendSeriesId === detail.series_id) {
+            stateRef.startingSendSeriesId = null;
+          }
+          store.setSeriesBusy(detail.series_id, Boolean(detail.is_sending_now || detail.status === "sending"));
+          if (store.getState().selectedSeriesId === detail.series_id) {
+            renderWorkspace();
+          }
           showToast(err.message, "error");
         }
       });
@@ -622,10 +689,19 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
 
     // Pause / Cancel active transmission
     container.querySelector("#btn-series-pause")?.addEventListener("click", async () => {
+      if (isPausing) return;
+      stateRef.pausingSeriesId = detail.series_id;
+      renderWorkspace();
       try {
         await cancelSeriesSend(detail.series_id);
         showToast("Pause requested; halting after current message completes.", "info");
       } catch (err) {
+        if (stateRef.pausingSeriesId === detail.series_id) {
+          stateRef.pausingSeriesId = null;
+        }
+        if (store.getState().selectedSeriesId === detail.series_id) {
+          renderWorkspace();
+        }
         showToast(err.message, "error");
       }
     });
@@ -726,7 +802,12 @@ function openConfirmSendModal(detail, onConfirm) {
   backdrop.addEventListener("click", (e) => {
     if (e.target === backdrop) close();
   });
-  backdrop.querySelector("#btn-confirm-send-series")?.addEventListener("click", async () => {
+  let confirmed = false;
+  const confirmBtn = backdrop.querySelector("#btn-confirm-send-series");
+  confirmBtn?.addEventListener("click", async () => {
+    if (confirmed) return;
+    confirmed = true;
+    confirmBtn.disabled = true;
     close();
     await onConfirm();
   });

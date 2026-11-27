@@ -519,15 +519,23 @@ export function renderSummaryPane(container) {
         const sentCount = items.filter((it) => it.status === "sent").length;
         const primarySubject = items[0]?.subject || ser.series_key;
         const isActiveSeries = selectedSeriesId === ser.series_id ? "active" : "";
+        const effectiveStatus = store.isSeriesBusy(ser.series_id) ? "sending" : (ser.status || "draft");
         let statusLabel = "Draft";
-        if (ser.status === "sending") statusLabel = `Sending ${sentCount}/${total}`;
-        else if (ser.status === "paused") statusLabel = `Paused ${sentCount}/${total}`;
-        else if (ser.status === "failed") statusLabel = `Failed (${sentCount}/${total})`;
-        else if (ser.status === "sent") statusLabel = "Sent ✓";
+        let statusIconHtml = "";
+        if (effectiveStatus === "sending") {
+          statusLabel = `Sending ${sentCount}/${total}`;
+          statusIconHtml = `<span class="spinner-hourglass" aria-hidden="true">⏳</span> `;
+        } else if (effectiveStatus === "paused") {
+          statusLabel = `Paused ${sentCount}/${total}`;
+        } else if (effectiveStatus === "failed") {
+          statusLabel = `Failed (${sentCount}/${total})`;
+        } else if (effectiveStatus === "sent") {
+          statusLabel = "Sent ✓";
+        }
 
         html += `
           <tr class="summary-row series-queue-row ${isActiveSeries}" data-series-id="${escapeHtml(ser.series_id)}">
-            <td class="summary-unread-cell" title="Patch Series Draft Queue">📦</td>
+            <td class="summary-unread-cell" title="Patch Series Draft Queue">${effectiveStatus === "sending" ? `<span class="spinner-hourglass" aria-hidden="true">⏳</span>` : "📦"}</td>
             <td class="summary-subject-cell">
               <span class="series-row-prefix">[Series v${escapeHtml(ser.version || 1)} · ${total} msgs]</span>
               <span class="series-row-subject">${escapeHtml(primarySubject)}</span>
@@ -535,7 +543,7 @@ export function renderSummaryPane(container) {
             </td>
             <td class="summary-from-cell">${escapeHtml((ser.to_addrs || []).join(", "))}</td>
             <td class="summary-tag-cell">
-              <span class="series-status-pill ${sanitizeCssSlug(ser.status || "draft", "draft")}">${escapeHtml(statusLabel)}</span>
+              <span class="series-status-pill ${sanitizeCssSlug(effectiveStatus, "draft")}">${statusIconHtml}${escapeHtml(statusLabel)}</span>
             </td>
             <td class="summary-date-cell" style="color: var(--text-muted);">${escapeHtml(formatDate(ser.updated_at || ser.created_at))}</td>
           </tr>
