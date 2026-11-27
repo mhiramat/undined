@@ -10,12 +10,17 @@ import {
   fetchMessages,
   fetchSeriesDetail,
   fetchSeriesList,
+  getCachedTranslation,
+  getInFlightTranslation,
+  invalidateTranslationCache,
   openEditor,
   sendSeries,
   testSendSeriesSelf,
+  translateMessage,
   updateSeriesHeaders,
   updateSeriesItem,
 } from "../api.js";
+import { escapeAttr, linkifyUrls } from "../linkify.js";
 import { store } from "../store.js";
 
 function showToast(message, type = "info") {
@@ -88,6 +93,81 @@ function renderDiffPreviewHtml(body) {
     .join("");
 }
 
+function renderTranslatedLinesHtml(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+  return lines
+    .map((line) => {
+      const match = line.match(/^((?:>\s*)+)(.*)$/);
+      if (match) {
+        const rawPrefix = match[1];
+        const depth = (rawPrefix.match(/>/g) || []).length;
+        const depthClass = `translated-quote-depth-${Math.min(depth, 4)}`;
+        return `<div class="translated-line translated-quote-line ${depthClass}" data-quote-depth="${depth}">${linkifyUrls(line)}</div>`;
+      }
+      if (line.trim() === "") {
+        return `<div class="translated-line translated-blank-line">&nbsp;</div>`;
+      }
+      return `<div class="translated-line">${linkifyUrls(line)}</div>`;
+    })
+    .join("");
+}
+
+function resolveItemTranslateTarget(item) {
+  if (!item) return null;
+  if (item.status === "sent" && item.rfc_message_id) {
+    return item.rfc_message_id;
+  }
+  return item.draft_msg_id || item.rfc_message_id || null;
+}
+
+function itemHasPatchDiff(item) {
+  if (!item || item.is_cover_letter) return false;
+  return String(item.body || "").includes("diff --git ");
+}
+
+function buildSeriesTranslatedBoxHtml(translationState, isPatchDiff, targetLangLabel) {
+  if (!translationState?.isTranslated || !translationState?.data) {
+    return "";
+  }
+  const d = translationState.data;
+  const isShowingFormatted = translationState.displayMode === "formatted";
+  const langBadge = (d.target_lang || targetLangLabel || "JA").toUpperCase();
+  const modelBadge = d.model ? `<span class="translated-model-badge">${escapeHtml(d.model)}</span>` : "";
+  const subjectHtml = d.translated_subject && !isShowingFormatted
+    ? `<div class="viewer-translated-subject"><strong>Subject:</strong> ${linkifyUrls(d.translated_subject)}</div>`
+    : "";
+
+  const bodyTextToUse = isPatchDiff
+    ? (isShowingFormatted ? (d.formatted_preamble || d.formatted_body) : (d.translated_preamble || d.translated_body))
+    : (isShowingFormatted ? d.formatted_body : d.translated_body);
+
+  const titleLabel = isPatchDiff
+    ? (isShowingFormatted ? "📐 Reflowed Patch Description (English)" : `🌐 Translated Patch Description (${escapeHtml(langBadge)})`)
+    : (isShowingFormatted ? "📐 Reflowed Email (Unwrapped English)" : `🌐 Translated Email (${escapeHtml(langBadge)})`);
+
+  return `
+    <div class="viewer-translated-box" id="series-translated-box">
+      <div class="viewer-translated-header">
+        <div class="viewer-translated-title">
+          <span>${titleLabel}</span>
+          ${modelBadge}
+        </div>
+        <div class="viewer-translated-actions">
+          <button type="button" class="action-btn btn-xs" id="btn-series-toggle-translated-source" title="Switch between translated text and unwrapped English sentences">
+            ${isShowingFormatted ? `🌐 Show ${escapeHtml(langBadge)} Translation` : "📐 Show Reflowed English"}
+          </button>
+          <button type="button" class="action-btn btn-xs" id="btn-series-close-translation" title="Hide translation and return to original message">
+            ✕ Original
+          </button>
+        </div>
+      </div>
+      ${subjectHtml}
+      <div class="viewer-translated-body" id="series-translated-body">${renderTranslatedLinesHtml(bodyTextToUse)}</div>
+    </div>
+  `;
+}
+
 export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) {
   if (!container || !seriesId) return;
 
@@ -111,11 +191,61 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
       : (detail.items[0]?.seq_index ?? 0);
   let editMode = Boolean(stateRef.editMode);
   const editedIndices = stateRef.editedIndices || new Set();
+  const translationStates = stateRef.translationStates || new Map();
+  const attachedFlights = stateRef.attachedFlights || new WeakSet();
+
+  function getItemTranslationKey(item) {
+    return item ? `${detail.series_id}:${item.seq_index}` : "";
+  }
+
+  function getItemTranslationState(item) {
+    const key = getItemTranslationKey(item);
+    if (!key) {
+      return { isTranslated: false, displayMode: "translated", data: null };
+    }
+    const targetId = resolveItemTranslateTarget(item);
+    const cached = targetId ? getCachedTranslation(targetId) : null;
+    if (!translationStates.has(key)) {
+      translationStates.set(key, {
+        isTranslated: false,
+        displayMode: "translated",
+        data: cached,
+      });
+    } else if (cached && !translationStates.get(key).data) {
+      translationStates.get(key).data = cached;
+    }
+    return translationStates.get(key);
+  }
+
+  function attachTranslationFlight(flightPromise, item) {
+    if (!flightPromise || !item || attachedFlights.has(flightPromise)) return;
+    attachedFlights.add(flightPromise);
+    const tState = getItemTranslationState(item);
+    const itemSeq = item.seq_index;
+    flightPromise
+      .then((res) => {
+        tState.data = res;
+        tState.isTranslated = true;
+        tState.displayMode = "translated";
+        if (store.getState().selectedSeriesId === detail.series_id && selectedSeqIndex === itemSeq) {
+          renderWorkspace();
+        }
+      })
+      .catch((err) => {
+        tState.isTranslated = false;
+        showToast(`Translation failed: ${err.message}`, "error");
+        if (store.getState().selectedSeriesId === detail.series_id && selectedSeqIndex === itemSeq) {
+          renderWorkspace();
+        }
+      });
+  }
 
   function renderWorkspace() {
     stateRef.selectedSeqIndex = selectedSeqIndex;
     stateRef.editMode = editMode;
     stateRef.editedIndices = editedIndices;
+    stateRef.translationStates = translationStates;
+    stateRef.attachedFlights = attachedFlights;
 
     const items = detail.items || [];
     const totalCount = detail.total_count ?? items.length;
@@ -138,7 +268,36 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
     const showProgressDrawer = isSending || detail.status === "paused" || detail.status === "failed" || detail.status === "sent";
     const failedItem = items.find((it) => it.status === "failed");
 
-    const hasExternalEditor = Boolean(store.getConfig()?.has_external_editor);
+    const cfg = store.getConfig();
+    const hasExternalEditor = Boolean(cfg?.has_external_editor);
+    const translateCfg = cfg?.translate;
+    const isTranslateEnabled = Boolean(translateCfg && translateCfg.enabled === true);
+    const targetLangLabel = ((translateCfg && translateCfg.target_lang) || "ja").toUpperCase();
+    const activeTranslateTarget = resolveItemTranslateTarget(activeItem);
+    const activeTranslationState = getItemTranslationState(activeItem);
+    const activeInFlight = activeTranslateTarget ? getInFlightTranslation(activeTranslateTarget) : null;
+    if (activeInFlight) {
+      attachTranslationFlight(activeInFlight, activeItem);
+    }
+    const isTranslatingNow = Boolean(activeInFlight);
+    const showTranslated = Boolean(
+      isTranslateEnabled && !editMode && activeTranslationState.isTranslated && activeTranslationState.data
+    );
+    const activeHasPatchDiff = itemHasPatchDiff(activeItem);
+    const translateBtnLabel = isTranslatingNow
+      ? "⏳ Translating..."
+      : (showTranslated ? "🌐 Original" : `🌐 Translate (${escapeHtml(targetLangLabel)})`);
+    const translateBtnTitle = showTranslated
+      ? "Hide translation and show original email"
+      : `Format 80-column wrapped lines and translate message (${targetLangLabel})`;
+    const translatedBoxHtml = showTranslated
+      ? buildSeriesTranslatedBoxHtml(activeTranslationState, activeHasPatchDiff, targetLangLabel)
+      : "";
+    const previewBodyHtml = showTranslated
+      ? (activeHasPatchDiff
+          ? `${translatedBoxHtml}${renderDiffPreviewHtml(activeItem.body || "")}`
+          : translatedBoxHtml)
+      : renderDiffPreviewHtml(activeItem?.body || "");
 
     container.innerHTML = `
       <div class="series-workspace" id="series-workspace" data-series-id="${escapeHtml(detail.series_id)}">
@@ -241,6 +400,9 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
                 <div class="series-inspector-controls">
                   <button type="button" class="action-btn ${!editMode ? "primary" : ""}" id="btn-series-mode-preview">📄 Diff View</button>
                   <button type="button" class="action-btn ${editMode ? "primary" : ""}" id="btn-series-mode-edit" ${activeItem.status === "sent" || isSending ? "disabled" : ""}>✏️ Edit Plain Text</button>
+                  ${isTranslateEnabled ? `
+                    <button type="button" class="action-btn ${showTranslated ? "active" : ""}" id="btn-series-translate" ${isTranslatingNow ? "disabled" : ""} title="${escapeAttr(translateBtnTitle)}">${translateBtnLabel}</button>
+                  ` : ""}
                   ${hasExternalEditor && activeItem.draft_msg_id && activeItem.status !== "sent" ? `
                     <button type="button" class="action-btn" id="btn-series-ext-editor" title="Open in external $EDITOR">🖥️ $EDITOR</button>
                   ` : ""}
@@ -279,7 +441,7 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
                   </div>
                 </div>
               ` : `
-                <div class="series-diff-preview" id="series-diff-preview">${renderDiffPreviewHtml(activeItem.body || "")}</div>
+                <div class="series-diff-preview" id="series-diff-preview">${previewBodyHtml}</div>
               `}
             ` : `<div style="padding: 24px; color: var(--text-muted);">No items in this series.</div>`}
           </div>
@@ -302,6 +464,52 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
     });
     container.querySelector("#btn-series-mode-edit")?.addEventListener("click", () => {
       editMode = true;
+      renderWorkspace();
+    });
+
+    // Wire Translate button & translated box actions
+    container.querySelector("#btn-series-translate")?.addEventListener("click", async () => {
+      if (!activeItem) return;
+      const tState = getItemTranslationState(activeItem);
+      if (showTranslated) {
+        tState.isTranslated = false;
+        renderWorkspace();
+        return;
+      }
+      if (editMode) {
+        editMode = false;
+      }
+      if (tState.data) {
+        tState.isTranslated = true;
+        renderWorkspace();
+        return;
+      }
+      const targetId = resolveItemTranslateTarget(activeItem);
+      if (!targetId) {
+        showToast("No message ID available to translate.", "error");
+        return;
+      }
+      const flight = translateMessage(targetId);
+      attachTranslationFlight(flight, activeItem);
+      renderWorkspace();
+      try {
+        await flight;
+      } catch (_) {
+        // Handled in attachTranslationFlight
+      }
+    });
+
+    container.querySelector("#btn-series-toggle-translated-source")?.addEventListener("click", () => {
+      if (!activeItem) return;
+      const tState = getItemTranslationState(activeItem);
+      tState.displayMode = tState.displayMode === "formatted" ? "translated" : "formatted";
+      renderWorkspace();
+    });
+
+    container.querySelector("#btn-series-close-translation")?.addEventListener("click", () => {
+      if (!activeItem) return;
+      const tState = getItemTranslationState(activeItem);
+      tState.isTranslated = false;
       renderWorkspace();
     });
 
@@ -358,6 +566,9 @@ export async function renderSeriesWorkspace(container, seriesId, stateRef = {}) 
           extra_cc: extraCc,
         });
         editedIndices.add(activeItem.seq_index);
+        invalidateTranslationCache(activeItem.draft_msg_id);
+        invalidateTranslationCache(activeItem.rfc_message_id);
+        translationStates.delete(getItemTranslationKey(activeItem));
         detail = await fetchSeriesDetail(detail.series_id);
         const warnCount = Array.isArray(res?.warnings) ? res.warnings.length : 0;
         if (warnCount > 0) {

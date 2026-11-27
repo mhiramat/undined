@@ -1775,7 +1775,9 @@ export function renderViewerPane(container) {
       event === EVENT_NOTES_UPDATED ||
       event === EVENT_AI_REVIEW_STATE_CHANGED
     ) {
-      if (currentDetail) {
+      if (event === EVENT_CONFIG_LOADED && store.getState().selectedSeriesId) {
+        renderSeriesWorkspace(container, store.getState().selectedSeriesId, seriesWorkspaceState);
+      } else if (currentDetail) {
         render(currentDetail);
       }
     } else if (event === EVENT_MESSAGE_TAG_UPDATED) {

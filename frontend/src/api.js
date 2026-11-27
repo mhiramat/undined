@@ -709,6 +709,16 @@ export function clearTranslationCache() {
   translationQueueTail = Promise.resolve();
 }
 
+export function invalidateTranslationCache(messageId) {
+  if (messageId == null || messageId === "") return;
+  const prefix = `${messageId}:`;
+  for (const key of Array.from(translationCache.keys())) {
+    if (key.startsWith(prefix)) {
+      translationCache.delete(key);
+    }
+  }
+}
+
 export function getCachedTranslation(messageId, opts = {}) {
   return translationCache.get(buildTranslationKey(messageId, opts)) || null;
 }
