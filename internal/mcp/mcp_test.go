@@ -105,12 +105,16 @@ func TestMCPToolsCore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search_emails failed: %v", err)
 	}
-	matches, ok := searchRes.([]*database.SearchResult)
+	matches, ok := searchRes.([]map[string]interface{})
 	if !ok || len(matches) < 1 {
 		t.Fatalf("expected at least 1 match, got %v", searchRes)
 	}
-	if !strings.Contains(strings.ToLower(matches[0].Subject), "kprobe") {
-		t.Errorf("expected subject to contain kprobe, got %s", matches[0].Subject)
+	subjStr, _ := matches[0]["subject"].(string)
+	if !strings.Contains(strings.ToLower(subjStr), "kprobe") {
+		t.Errorf("expected subject to contain kprobe, got %s", subjStr)
+	}
+	if matches[0]["folder_name"] != constants.FolderB4Imports {
+		t.Errorf("expected folder_name %q, got %v", constants.FolderB4Imports, matches[0]["folder_name"])
 	}
 
 	// 3. get_thread_context
@@ -609,8 +613,8 @@ func TestMCPSTDIOJSONRPC(t *testing.T) {
 	var toolsResp map[string]interface{}
 	_ = json.Unmarshal([]byte(lines[2]), &toolsResp)
 	toolsList := toolsResp["result"].(map[string]interface{})["tools"].([]interface{})
-	if len(toolsList) != 19 {
-		t.Errorf("expected 19 tools, got %d", len(toolsList))
+	if len(toolsList) != 23 {
+		t.Errorf("expected 23 tools, got %d", len(toolsList))
 	}
 
 	// Verify tools/call

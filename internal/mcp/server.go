@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -161,7 +162,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
 			"name":        "list_recent_emails",
-			"description": "List recent emails optionally filtered by folder name (or across all folders if not specified).",
+			"description": "List recent emails optionally filtered by folder name, sender exclusions, tags, or patch status.",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "list_recent_emailsArguments",
@@ -175,6 +176,37 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"title":   "Limit",
 						"type":    "integer",
 						"default": 20,
+					},
+					"offset": map[string]interface{}{
+						"title":   "Offset",
+						"type":    "integer",
+						"default": 0,
+					},
+					"exclude_from": map[string]interface{}{
+						"title":       "Exclude From",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Email addresses to exclude. Special value 'self' expands to configured user emails.",
+					},
+					"has_tags": map[string]interface{}{
+						"title":       "Has Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Return only messages that have at least one of these tags.",
+					},
+					"without_tags": map[string]interface{}{
+						"title":       "Without Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Exclude messages that have any of these tags.",
+					},
+					"is_patch": map[string]interface{}{
+						"title":   "Is Patch",
+						"anyOf":   []map[string]interface{}{{"type": "boolean"}, {"type": "null"}},
+						"default": nil,
 					},
 				},
 			},
@@ -193,13 +225,26 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "search_emails",
-			"description": "Full-text search indexed kernel emails using SQLite FTS5 with matched snippets.",
+			"description": "Full-text search indexed kernel emails using SQLite FTS5 with matched snippets and optional folder/tag filters.",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "search_emailsArguments",
 				"properties": map[string]interface{}{
-					"query": map[string]interface{}{"title": "Query", "type": "string"},
-					"limit": map[string]interface{}{"title": "Limit", "type": "integer", "default": 20},
+					"query":  map[string]interface{}{"title": "Query", "type": "string"},
+					"limit":  map[string]interface{}{"title": "Limit", "type": "integer", "default": 20},
+					"folder": map[string]interface{}{"title": "Folder", "anyOf": []map[string]interface{}{{"type": "string"}, {"type": "null"}}, "default": nil},
+					"has_tags": map[string]interface{}{
+						"title":   "Has Tags",
+						"type":    "array",
+						"items":   map[string]interface{}{"type": "string"},
+						"default": []string{},
+					},
+					"without_tags": map[string]interface{}{
+						"title":   "Without Tags",
+						"type":    "array",
+						"items":   map[string]interface{}{"type": "string"},
+						"default": []string{},
+					},
 				},
 				"required": []string{"query"},
 			},
@@ -218,7 +263,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "get_email",
-			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata and complete plaintext body.",
+			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata, tags, trailers, diffstat, and locally cached plaintext body without triggering IMAP fetch.",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "get_emailArguments",
@@ -232,6 +277,12 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"title":       "Id",
 						"type":        "string",
 						"description": "Alias for message_id.",
+					},
+					"include_diff": map[string]interface{}{
+						"title":       "Include Diff",
+						"type":        "boolean",
+						"default":     true,
+						"description": "If false, strips unified diff hunks from body_plain while keeping commit log, trailers, and diffstat.",
 					},
 				},
 				"required": []string{"message_id"},
@@ -251,7 +302,7 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "get_message",
-			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata and complete plaintext body (alias for get_email).",
+			"description": "Find an email by Message-ID (or database ID) and retrieve its metadata and locally cached plaintext body (alias for get_email).",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "get_messageArguments",
@@ -265,6 +316,12 @@ func (s *Server) getToolsList() []map[string]interface{} {
 						"title":       "Id",
 						"type":        "string",
 						"description": "Alias for message_id.",
+					},
+					"include_diff": map[string]interface{}{
+						"title":       "Include Diff",
+						"type":        "boolean",
+						"default":     true,
+						"description": "If false, strips unified diff hunks from body_plain while keeping commit log, trailers, and diffstat.",
 					},
 				},
 				"required": []string{"message_id"},
@@ -284,13 +341,25 @@ func (s *Server) getToolsList() []map[string]interface{} {
 		},
 		{
 			"name":        "get_thread_context",
-			"description": "Retrieve the entire thread tree for a given message ID including plaintext bodies.",
+			"description": "Retrieve the thread tree for a given message ID using locally cached bodies (no IMAP fetch), with optional diff stripping and cross-folder deduplication.",
 			"inputSchema": map[string]interface{}{
 				"type":  "object",
 				"title": "get_thread_contextArguments",
 				"properties": map[string]interface{}{
 					"message_id": map[string]interface{}{"title": "Message Id", "type": "string"},
 					"id":         map[string]interface{}{"title": "Id", "type": "string"},
+					"include_diff": map[string]interface{}{
+						"title":       "Include Diff",
+						"type":        "boolean",
+						"default":     true,
+						"description": "If false, strips unified diff hunks from body_plain while retaining commit messages, trailers, and diffstat.",
+					},
+					"deduplicate": map[string]interface{}{
+						"title":       "Deduplicate",
+						"type":        "boolean",
+						"default":     true,
+						"description": "If true, merges duplicate copies of the same Message-ID across folders, preferring hydrated copies and returning all folders/folder_ids.",
+					},
 				},
 				"required": []string{"message_id"},
 			},
@@ -868,6 +937,202 @@ func (s *Server) getToolsList() []map[string]interface{} {
 				"required": []string{"result"},
 			},
 		},
+		{
+			"name":        "update_email_tags",
+			"description": "Add, remove, or replace UndineD/IMAP keyword tags (e.g. '$cl_1', '$cl_2', '$cl_3', '$cl_5') on existing emails or threads without sending, moving, or deleting mail.",
+			"inputSchema": map[string]interface{}{
+				"type":     "object",
+				"title":    "update_email_tagsArguments",
+				"required": []string{"message_ids"},
+				"properties": map[string]interface{}{
+					"message_ids": map[string]interface{}{
+						"title":       "Message Ids",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"minItems":    1,
+						"maxItems":    100,
+						"description": "Target Message-IDs (with or without '<...>') or numeric DB IDs.",
+					},
+					"add_tags": map[string]interface{}{
+						"title":       "Add Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Tags to add (e.g. ['$cl_1']). Cannot be combined with replace_tags.",
+					},
+					"remove_tags": map[string]interface{}{
+						"title":       "Remove Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Tags to remove (e.g. ['$cl_2', '$cl_3', '$cl_5']). Cannot be combined with replace_tags.",
+					},
+					"replace_tags": map[string]interface{}{
+						"title": "Replace Tags",
+						"anyOf": []map[string]interface{}{
+							{"type": "array", "items": map[string]interface{}{"type": "string"}},
+							{"type": "null"},
+						},
+						"default":     nil,
+						"description": "If non-null, replaces the entire user-tag set on target emails. Mutually exclusive with add_tags/remove_tags.",
+					},
+					"scope": map[string]interface{}{
+						"title":       "Scope",
+						"type":        "string",
+						"enum":        []string{"message", "thread"},
+						"default":     "message",
+						"description": "'message' updates target Message-IDs; 'thread' expands to all messages in the same thread.",
+					},
+					"folder": map[string]interface{}{
+						"title":       "Folder",
+						"anyOf":       []map[string]interface{}{{"type": "string"}, {"type": "null"}},
+						"default":     nil,
+						"description": "Optional folder guard (e.g. 'TODO'). Default null updates ALL folder copies sharing the target Message-ID(s).",
+					},
+					"dry_run": map[string]interface{}{
+						"title":       "Dry Run",
+						"type":        "boolean",
+						"default":     false,
+						"description": "If true, validates targets and returns planned before/after tag diffs without mutating state.",
+					},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "update_email_tagsOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "list_tags",
+			"description": "List configured UndineD color labels and known custom tags, optionally with message counts in a folder.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "list_tagsArguments",
+				"properties": map[string]interface{}{
+					"folder": map[string]interface{}{
+						"title":       "Folder",
+						"anyOf":       []map[string]interface{}{{"type": "string"}, {"type": "null"}},
+						"default":     nil,
+						"description": "Optional folder name to scope usage counts.",
+					},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "list_tagsOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "get_user_identity",
+			"description": "Return the configured user's display name and email addresses/aliases for self-authorship filtering.",
+			"inputSchema": map[string]interface{}{
+				"type":       "object",
+				"title":      "get_user_identityArguments",
+				"properties": map[string]interface{}{},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "get_user_identityOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
+		{
+			"name":        "list_threads",
+			"description": "List email threads or patch series in a folder with series-level aggregation, tag filtering, and cursor pagination.",
+			"inputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "list_threadsArguments",
+				"properties": map[string]interface{}{
+					"folder": map[string]interface{}{
+						"title":       "Folder",
+						"anyOf":       []map[string]interface{}{{"type": "string"}, {"type": "null"}},
+						"default":     nil,
+						"description": "Folder name to filter by (e.g. 'TODO').",
+					},
+					"limit": map[string]interface{}{
+						"title":   "Limit",
+						"type":    "integer",
+						"default": 30,
+						"minimum": 1,
+						"maximum": 200,
+					},
+					"cursor": map[string]interface{}{
+						"title":       "Cursor",
+						"anyOf":       []map[string]interface{}{{"type": "string"}, {"type": "null"}},
+						"default":     nil,
+						"description": "Opaque pagination cursor returned by the previous call.",
+					},
+					"exclude_from": map[string]interface{}{
+						"title":       "Exclude From",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Email addresses to exclude by thread root author. Special value 'self' expands to configured user emails.",
+					},
+					"patches_only": map[string]interface{}{
+						"title":       "Patches Only",
+						"type":        "boolean",
+						"default":     false,
+						"description": "If true, include only threads containing at least one patch message in the target folder.",
+					},
+					"has_tags": map[string]interface{}{
+						"title":       "Has Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Return only threads that have at least one of these tags.",
+					},
+					"without_tags": map[string]interface{}{
+						"title":       "Without Tags",
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"default":     []string{},
+						"description": "Exclude threads that already have any of these tags (e.g. ['$cl_1', '$cl_2', '$cl_3', '$cl_5'] for untriaged).",
+					},
+					"sort": map[string]interface{}{
+						"title":   "Sort",
+						"type":    "string",
+						"enum":    []string{"latest_date_desc", "latest_date_asc"},
+						"default": "latest_date_desc",
+					},
+				},
+			},
+			"outputSchema": map[string]interface{}{
+				"type":  "object",
+				"title": "list_threadsOutput",
+				"properties": map[string]interface{}{
+					"result": map[string]interface{}{
+						"title":                "Result",
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				},
+				"required": []string{"result"},
+			},
+		},
 	}
 }
 
@@ -906,6 +1171,14 @@ func (s *Server) CallTool(ctx context.Context, name string, args map[string]inte
 		return s.toolUpdatePatchworkPatch(ctx, args)
 	case "post_review_comment", "post_diff_comment", "add_diff_comment":
 		return s.toolPostReviewComment(name, args)
+	case "update_email_tags":
+		return s.toolUpdateEmailTags(args)
+	case "list_tags":
+		return s.toolListTags(args)
+	case "get_user_identity":
+		return s.toolGetUserIdentity(args)
+	case "list_threads":
+		return s.toolListThreads(args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -915,31 +1188,66 @@ func (s *Server) toolListRecentEmails(args map[string]interface{}) (interface{},
 	t0 := time.Now()
 	folderStr := getStringPtr(args, "folder")
 	limit := getInt(args, "limit", 20)
+	if limit < 1 || limit > 500 {
+		return nil, newInvalidParamsError("limit must be between 1 and 500 (got %d)", limit)
+	}
+	offset := getInt(args, "offset", 0)
+	if offset < 0 {
+		return nil, newInvalidParamsError("offset must be non-negative")
+	}
+
+	excludeRaw, _, err := parseStrictStringArray(args, "exclude_from")
+	if err != nil {
+		return nil, err
+	}
+	hasTags, _, err := parseStrictStringArray(args, "has_tags")
+	if err != nil {
+		return nil, err
+	}
+	withoutTags, _, err := parseStrictStringArray(args, "without_tags")
+	if err != nil {
+		return nil, err
+	}
+	isPatchPtr := getBoolPtr(args, "is_patch")
 
 	var folderID *int64
-	if folderStr != nil && *folderStr != "" && s.DB != nil {
-		fInfo, err := s.DB.GetFolderByName(*folderStr)
-		if err == nil && fInfo != nil {
+	folderMissing := false
+	if folderStr != nil && strings.TrimSpace(*folderStr) != "" && s.DB != nil {
+		fInfo, fErr := s.DB.GetFolderByName(strings.TrimSpace(*folderStr))
+		if fErr == nil && fInfo != nil {
 			folderID = &fInfo.ID
+		} else {
+			folderMissing = true
 		}
 	}
 
-	var results []map[string]interface{}
-	if s.DB != nil {
-		msgs, err := s.DB.ListMessages(folderID, limit, 0)
-		if err == nil {
-			for _, m := range msgs {
-				results = append(results, map[string]interface{}{
-					"id":         m.ID,
-					"message_id": m.MessageID,
-					"subject":    m.Subject,
-					"from_addr":  m.FromAddr,
-					"from_name":  m.FromName,
-					"date":       m.Date,
-					"is_patch":   m.IsPatch,
-					"is_read":    m.IsRead,
-				})
-			}
+	results := make([]map[string]interface{}, 0)
+	if s.DB != nil && !folderMissing {
+		msgs, listErr := s.DB.ListMessagesFiltered(database.MessageFilterOptions{
+			FolderID:    folderID,
+			Limit:       limit,
+			Offset:      offset,
+			ExcludeFrom: s.expandExcludeFrom(excludeRaw),
+			HasTags:     hasTags,
+			WithoutTags: withoutTags,
+			IsPatch:     isPatchPtr,
+		})
+		if listErr != nil {
+			return nil, fmt.Errorf("failed to list recent emails: %w", listErr)
+		}
+		for _, m := range msgs {
+			results = append(results, map[string]interface{}{
+				"id":         m.ID,
+				"message_id": m.MessageID,
+				"subject":    m.Subject,
+				"from_addr":  m.FromAddr,
+				"from_name":  m.FromName,
+				"date":       m.Date,
+				"is_patch":   m.IsPatch,
+				"is_read":    m.IsRead,
+				"tags":       database.ExtractUserTagsFromFlags(m.Flags),
+				"thread_id":  ComputeThreadID(resolveMessageRootID(m)),
+			})
 		}
 	}
 
@@ -948,8 +1256,8 @@ func (s *Server) toolListRecentEmails(args map[string]interface{}) (interface{},
 		folderDisplay = fmt.Sprintf("%q", *folderStr)
 	}
 	durMs := time.Since(t0).Seconds() * 1000.0
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: list_recent_emails(folder=%s, limit=%d) -> %d messages (%.1fms)",
-		folderDisplay, limit, len(results), durMs))
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: list_recent_emails(folder=%s, limit=%d, offset=%d) -> %d messages (%.1fms)",
+		folderDisplay, limit, offset, len(results), durMs))
 
 	return results, nil
 }
@@ -958,20 +1266,60 @@ func (s *Server) toolSearchEmails(args map[string]interface{}) (interface{}, err
 	t0 := time.Now()
 	query := getString(args, "query")
 	limit := getInt(args, "limit", 20)
+	if limit < 1 || limit > 500 {
+		return nil, newInvalidParamsError("limit must be between 1 and 500 (got %d)", limit)
+	}
+	folderPtr := getStringPtr(args, "folder")
+	folderName := ""
+	if folderPtr != nil {
+		folderName = strings.TrimSpace(*folderPtr)
+	}
+	hasTags, _, err := parseStrictStringArray(args, "has_tags")
+	if err != nil {
+		return nil, err
+	}
+	withoutTags, _, err := parseStrictStringArray(args, "without_tags")
+	if err != nil {
+		return nil, err
+	}
 
-	var matches []*database.SearchResult
+	results := make([]map[string]interface{}, 0)
 	if s.DB != nil && query != "" {
-		res, err := s.DB.Search(query, limit)
-		if err == nil {
-			matches = res
+		res, searchErr := s.DB.SearchWithOptions(query, database.SearchOptions{
+			Limit:       limit,
+			FolderName:  folderName,
+			HasTags:     hasTags,
+			WithoutTags: withoutTags,
+		})
+		if searchErr != nil {
+			return nil, fmt.Errorf("failed to search emails: %w", searchErr)
+		}
+		for _, r := range res {
+			results = append(results, map[string]interface{}{
+				"id":                r.ID,
+				"message_id":        r.MessageID,
+				"folder_name":       r.FolderName,
+				"subject":           r.Subject,
+				"from_name":         r.FromName,
+				"from_addr":         r.FromAddr,
+				"date":              r.Date,
+				"is_patch":          r.IsPatch,
+				"is_read":           r.IsRead,
+				"is_replied":        r.IsReplied,
+				"flags":             r.Flags,
+				"in_reply_to":       r.InReplyTo,
+				"references_header": r.ReferencesHeader,
+				"tags":              database.ExtractUserTagsFromFlags(r.Flags),
+				"snippet":           r.Snippet,
+			})
 		}
 	}
 
 	durMs := time.Since(t0).Seconds() * 1000.0
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: search_emails(query=%q, limit=%d) -> %d matches (%.1fms)",
-		query, limit, len(matches), durMs))
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: search_emails(query=%q, limit=%d, folder=%q) -> %d matches (%.1fms)",
+		query, limit, folderName, len(results), durMs))
 
-	return matches, nil
+	return results, nil
 }
 
 func (s *Server) resolveMessage(idOrMsgID string) (*database.Message, error) {
@@ -1029,6 +1377,7 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 	if msgID == "" {
 		msgID = getString(args, "id")
 	}
+	includeDiff := getBool(args, "include_diff", true)
 
 	if s.DB == nil {
 		durMs := time.Since(t0).Seconds() * 1000.0
@@ -1039,7 +1388,7 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		}, nil
 	}
 
-	msg, err := s.resolveMessage(msgID)
+	msg, err := s.resolveMessageNoHydrate(msgID)
 	durMs := time.Since(t0).Seconds() * 1000.0
 	if err != nil || msg == nil {
 		s.writeAccessLog("WARNING", fmt.Sprintf("MCP access: get_email(%q) -> NOT FOUND (%.1fms)", msgID, durMs))
@@ -1050,6 +1399,9 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		}, nil
 	}
 
+	// Local-cache-only hydration: read local Maildir file if present, never perform IMAP FETCH.
+	bodyHydrated := s.tryHydrateFromLocalDisk(msg)
+
 	attachments := make([]*parser.Attachment, 0)
 	if msg.FilePath != "" {
 		if rawBytes, readErr := os.ReadFile(msg.FilePath); readErr == nil {
@@ -1059,8 +1411,18 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		}
 	}
 
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_email(%q) -> SUCCESS (id=%d, subject=%q) (%.1fms)",
-		msgID, msg.ID, msg.Subject, durMs))
+	fullBody := msg.BodyPlain
+	bodyOut := fullBody
+	if !includeDiff {
+		bodyOut = StripUnifiedDiff(fullBody)
+	}
+	trailers := ExtractEmailTrailers(fullBody)
+	diffstat := ExtractDiffstat(fullBody)
+	tags := database.ExtractUserTagsFromFlags(msg.Flags)
+
+	durMs = time.Since(t0).Seconds() * 1000.0
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_email(%q, include_diff=%v) -> SUCCESS (id=%d, hydrated=%v, subject=%q) (%.1fms)",
+		msgID, includeDiff, msg.ID, bodyHydrated, msg.Subject, durMs))
 
 	return map[string]interface{}{
 		"found":            true,
@@ -1077,7 +1439,8 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		"epoch_timestamp":  msg.EpochTimestamp,
 		"in_reply_to":      msg.InReplyTo,
 		"references":       msg.ReferencesHeader,
-		"body_plain":       msg.BodyPlain,
+		"body_plain":       bodyOut,
+		"body_hydrated":    bodyHydrated,
 		"is_patch":         msg.IsPatch,
 		"is_read":          msg.IsRead,
 		"is_replied":       msg.IsReplied,
@@ -1085,6 +1448,9 @@ func (s *Server) toolGetEmail(args map[string]interface{}) (interface{}, error) 
 		"file_path":        msg.FilePath,
 		"review_commit_id": msg.ReviewCommitID,
 		"attachments":      attachments,
+		"tags":             tags,
+		"trailers":         trailers,
+		"diffstat":         diffstat,
 	}, nil
 }
 
@@ -1094,10 +1460,12 @@ func (s *Server) toolGetThreadContext(args map[string]interface{}) (interface{},
 	if msgID == "" {
 		msgID = getString(args, "id")
 	}
+	includeDiff := getBool(args, "include_diff", true)
+	deduplicate := getBool(args, "deduplicate", true)
 
-	var results []map[string]interface{}
+	results := make([]map[string]interface{}, 0)
 	if s.DB != nil && msgID != "" {
-		orig, _ := s.resolveMessage(msgID)
+		orig, _ := s.resolveMessageNoHydrate(msgID)
 
 		var msgs []*database.Message
 		if orig != nil {
@@ -1117,29 +1485,138 @@ func (s *Server) toolGetThreadContext(args map[string]interface{}) (interface{},
 			msgs = append([]*database.Message{orig}, msgs...)
 		}
 
-		for _, m := range msgs {
-			s.hydrateMessageBody(m)
-			results = append(results, map[string]interface{}{
-				"id":          m.ID,
-				"message_id":  m.MessageID,
-				"folder_name": m.FolderName,
-				"subject":     m.Subject,
-				"from_name":   m.FromName,
-				"from_addr":   m.FromAddr,
-				"to_addr":     m.ToAddr,
-				"cc_addr":     m.CcAddr,
-				"date":        m.Date,
-				"in_reply_to": m.InReplyTo,
-				"references":  m.ReferencesHeader,
-				"body_plain":  m.BodyPlain,
-				"is_patch":    m.IsPatch,
-			})
+		if deduplicate {
+			type dedupEntry struct {
+				primary   *database.Message
+				hydrated  bool
+				folders   []string
+				folderSet map[string]struct{}
+				folderIDs []int64
+				fIDSet    map[int64]struct{}
+				tagMap    map[string]string
+			}
+			order := make([]string, 0, len(msgs))
+			entries := make(map[string]*dedupEntry, len(msgs))
+
+			for _, m := range msgs {
+				hydrated := s.tryHydrateFromLocalDisk(m)
+				key := parser.CleanMsgID(m.MessageID)
+				if key == "" {
+					key = fmt.Sprintf("id-%d", m.ID)
+				}
+				entry, exists := entries[key]
+				if !exists {
+					entry = &dedupEntry{
+						primary:   m,
+						hydrated:  hydrated,
+						folders:   make([]string, 0, 2),
+						folderSet: make(map[string]struct{}),
+						folderIDs: make([]int64, 0, 2),
+						fIDSet:    make(map[int64]struct{}),
+						tagMap:    make(map[string]string),
+					}
+					entries[key] = entry
+					order = append(order, key)
+				} else if hydrated && (!entry.hydrated || (entry.primary.BodyPlain == "" && m.BodyPlain != "")) {
+					// Prefer locally hydrated copy (with non-empty cached body) over unhydrated copy.
+					entry.primary = m
+					entry.hydrated = true
+				}
+
+				if m.FolderName != "" {
+					if _, dup := entry.folderSet[m.FolderName]; !dup {
+						entry.folderSet[m.FolderName] = struct{}{}
+						entry.folders = append(entry.folders, m.FolderName)
+					}
+				}
+				if m.FolderID > 0 {
+					if _, dup := entry.fIDSet[m.FolderID]; !dup {
+						entry.fIDSet[m.FolderID] = struct{}{}
+						entry.folderIDs = append(entry.folderIDs, m.FolderID)
+					}
+				}
+				for _, t := range database.ExtractUserTagsFromFlags(m.Flags) {
+					lower := strings.ToLower(t)
+					if _, dup := entry.tagMap[lower]; !dup {
+						entry.tagMap[lower] = t
+					}
+				}
+			}
+
+			for _, key := range order {
+				entry := entries[key]
+				m := entry.primary
+				bodyOut := m.BodyPlain
+				if !includeDiff {
+					bodyOut = StripUnifiedDiff(bodyOut)
+				}
+				mergedTags := make([]string, 0, len(entry.tagMap))
+				for _, t := range entry.tagMap {
+					mergedTags = append(mergedTags, t)
+				}
+				mergedTags = sortTagList(mergedTags)
+
+				results = append(results, map[string]interface{}{
+					"id":            m.ID,
+					"message_id":    m.MessageID,
+					"folder_name":   m.FolderName,
+					"folders":       entry.folders,
+					"folder_ids":    entry.folderIDs,
+					"subject":       m.Subject,
+					"from_name":     m.FromName,
+					"from_addr":     m.FromAddr,
+					"to_addr":       m.ToAddr,
+					"cc_addr":       m.CcAddr,
+					"date":          m.Date,
+					"in_reply_to":   m.InReplyTo,
+					"references":    m.ReferencesHeader,
+					"body_plain":    bodyOut,
+					"body_hydrated": entry.hydrated,
+					"is_patch":      m.IsPatch,
+					"tags":          mergedTags,
+				})
+			}
+		} else {
+			for _, m := range msgs {
+				hydrated := s.tryHydrateFromLocalDisk(m)
+				bodyOut := m.BodyPlain
+				if !includeDiff {
+					bodyOut = StripUnifiedDiff(bodyOut)
+				}
+				folders := make([]string, 0, 1)
+				if m.FolderName != "" {
+					folders = append(folders, m.FolderName)
+				}
+				folderIDs := make([]int64, 0, 1)
+				if m.FolderID > 0 {
+					folderIDs = append(folderIDs, m.FolderID)
+				}
+				results = append(results, map[string]interface{}{
+					"id":            m.ID,
+					"message_id":    m.MessageID,
+					"folder_name":   m.FolderName,
+					"folders":       folders,
+					"folder_ids":    folderIDs,
+					"subject":       m.Subject,
+					"from_name":     m.FromName,
+					"from_addr":     m.FromAddr,
+					"to_addr":       m.ToAddr,
+					"cc_addr":       m.CcAddr,
+					"date":          m.Date,
+					"in_reply_to":   m.InReplyTo,
+					"references":    m.ReferencesHeader,
+					"body_plain":    bodyOut,
+					"body_hydrated": hydrated,
+					"is_patch":      m.IsPatch,
+					"tags":          database.ExtractUserTagsFromFlags(m.Flags),
+				})
+			}
 		}
 	}
 
 	durMs := time.Since(t0).Seconds() * 1000.0
-	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_thread_context(message_id=%q) -> %d messages in thread (%.1fms)",
-		msgID, len(results), durMs))
+	s.writeAccessLog("INFO", fmt.Sprintf("MCP access: get_thread_context(message_id=%q, include_diff=%v, deduplicate=%v) -> %d messages in thread (%.1fms)",
+		msgID, includeDiff, deduplicate, len(results), durMs))
 
 	return results, nil
 }
@@ -1981,6 +2458,19 @@ func (s *Server) HandleSTDIO(ctx context.Context, r io.Reader, w io.Writer) erro
 
 			result, err := s.CallTool(ctx, p.Name, p.Arguments)
 			if err != nil {
+				var invalidErr *InvalidParamsError
+				if errors.As(err, &invalidErr) {
+					resp := jsonRPCResponse{
+						JSONRPC: "2.0",
+						ID:      req.ID,
+						Error: &jsonRPCError{
+							Code:    -32602,
+							Message: invalidErr.Message,
+						},
+					}
+					s.writeJSON(w, resp)
+					continue
+				}
 				// Tool not found or execution failure
 				resp := jsonRPCResponse{
 					JSONRPC: "2.0",
