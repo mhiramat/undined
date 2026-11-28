@@ -6,7 +6,7 @@
 
 import { store } from "../store.js";
 import { parseFilterQuery, buildFilterQuery } from "../filter.js";
-import { getTags, isTagMatch } from "../tags.js";
+import { getTags, isTagMatch, sortTagEntries } from "../tags.js";
 import { sanitizeHexColor } from "../linkify.js";
 
 let activeModal = null;
@@ -46,7 +46,7 @@ export async function openFilterDialog() {
 
   // Build tag items list HTML
   let tagItemsHtml = "";
-  for (const [key, val] of Object.entries(tags)) {
+  for (const [key, val] of sortTagEntries(tags)) {
     const isSelected = isTagMatch(key, val, initialTags);
     const safeColor = sanitizeHexColor(val.color, "#94a3b8");
     tagItemsHtml += `

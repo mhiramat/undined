@@ -5,7 +5,7 @@
 
 import { applyPatchSeries, cancelAiReview, delegatePatchworkPatchToMe, deleteMessage, fetchFolders, fetchMessageDetail, fetchMessages, fetchPatchworkInfo, fetchRawHeaders, fetchTags, getCachedMessageDetail, importB4Thread, markMessageRead, openEditor, setMessageTag, triggerAiReview, updatePatchworkPatch, fetchMessageMboxPath, downloadAttachment, translateMessage, getCachedTranslation, getInFlightTranslation } from "../api.js";
 import { store } from "../store.js";
-import { getTags, getMessageTags, hasMessageTag } from "../tags.js";
+import { getTags, getMessageTags, hasMessageTag, sortTagEntries } from "../tags.js";
 import { renderSideDiff, renderSavedNoteRowHtml } from "./SideDiff.js";
 import { openReplyForMessage, openForwardForMessage, openEditForMessage, openNewMessage } from "./InternalEditor.js";
 import { openApplyPatchDialog } from "./ApplyPatchDialog.js";
@@ -1217,7 +1217,7 @@ export function renderViewerPane(container) {
             <div style="height: 1px; background-color: var(--border-color); margin: 3px 0;"></div>
           `;
           let idx = 1;
-          for (const [key, val] of Object.entries(availableTags)) {
+          for (const [key, val] of sortTagEntries(availableTags)) {
             const isCl = key.startsWith("$cl_");
             const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
             const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";

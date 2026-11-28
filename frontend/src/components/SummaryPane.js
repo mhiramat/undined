@@ -5,7 +5,7 @@
 
 import { store } from "../store.js";
 import { cancelFolderSync, deleteMessagesBatch, fetchFolders, fetchMessages, markMessageRead, setMessagesTagBatch } from "../api.js";
-import { getTags, getMessageTags } from "../tags.js";
+import { getTags, getMessageTags, sortTagEntries } from "../tags.js";
 import { sanitizeCssSlug, sanitizeHexColor } from "../linkify.js";
 import { openFilterDialog } from "./FilterDialog.js";
 import { isDraftFolder, triggerNewMessage } from "./ViewerPane.js";
@@ -164,7 +164,7 @@ export function renderSummaryPane(container) {
             <div style="height: 1px; background-color: var(--border-color); margin: 3px 0;"></div>
           `;
           let idx = 1;
-          for (const [key, val] of Object.entries(availableTags)) {
+          for (const [key, val] of sortTagEntries(availableTags)) {
             const isCl = key.startsWith("$cl_");
             const num = isCl ? parseInt(key.slice(4), 10) : (key.startsWith("$label") ? parseInt(key.slice(6), 10) : idx++);
             const shortcutHint = (num >= 1 && num <= 9) ? `${num}` : "";

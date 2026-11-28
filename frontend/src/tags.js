@@ -30,11 +30,29 @@ export const DEFAULT_TAGS = {
 let cachedTags = null;
 
 /**
+ * Return [key, tagDef] entries ordered by numeric priority rank:
+ * $cl_1..$cl_10 -> 1..10, $label1..$label5 -> 11..15, custom tags -> 50 (lexicographic tie-break).
+ */
+export function sortTagEntries(tags) {
+  if (!tags || typeof tags !== "object") return [];
+  return Object.entries(tags).sort(([ka], [kb]) => {
+    const ra = getTagPriorityRank(ka);
+    const rb = getTagPriorityRank(kb);
+    if (ra !== rb) return ra - rb;
+    return String(ka || "").localeCompare(String(kb || ""));
+  });
+}
+
+function normalizeTagMap(tags) {
+  return Object.fromEntries(sortTagEntries(tags));
+}
+
+/**
  * Update the shared tag definitions cache (e.g. from backend config or API response).
  */
 export function setCachedTags(tags) {
   if (tags && typeof tags === "object") {
-    cachedTags = { ...tags };
+    cachedTags = normalizeTagMap(tags);
   }
 }
 
@@ -54,7 +72,7 @@ export async function fetchAndCacheTags() {
   try {
     const res = await fetchTags();
     if (res && typeof res === "object") {
-      cachedTags = { ...res };
+      cachedTags = normalizeTagMap(res);
       return cachedTags;
     }
   } catch (err) {
