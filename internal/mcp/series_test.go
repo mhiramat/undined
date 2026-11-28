@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -509,6 +510,124 @@ Acked-by: Maintainer <maintainer@kernel.org>
 			"output_path": symlinkPath,
 		}); err == nil {
 			t.Errorf("expected symlink output_path escaping allowed dirs to be rejected")
+		}
+	}
+}
+
+func TestExportThreadMboxStripsLeadingEnvelopeFromForGitAm(t *testing.T) {
+	server, db, store, _, _, _ := setupTestMCPEnv(t)
+	todoFolder, err := db.GetOrCreateFolder(constants.FolderTODO, false)
+	if err != nil {
+		t.Fatalf("GetOrCreateFolder failed: %v", err)
+	}
+
+	// Patch 1 mimics a Patchwork-synced mbox file starting with "From patchwork ..."
+	patchworkRaw := "From patchwork Sat Nov 28 10:00:00 2026\r\n" +
+		"Return-Path: <dev@kernel.org>\r\n" +
+		"From: Kernel Developer <dev@kernel.org>\r\n" +
+		"To: linux-kernel@vger.kernel.org\r\n" +
+		"Subject: [PATCH 1/2] demo: update line one\r\n" +
+		"Message-ID: <pw-p1@kernel.org>\r\n" +
+		"Date: Sat, 28 Nov 2026 10:00:00 +0000\r\n\r\n" +
+		"Update line one.\n\n" +
+		"Signed-off-by: Kernel Developer <dev@kernel.org>\n" +
+		"---\n" +
+		" demo.txt | 2 +-\n" +
+		" 1 file changed, 1 insertion(+), 1 deletion(-)\n\n" +
+		"diff --git a/demo.txt b/demo.txt\n" +
+		"--- a/demo.txt\n" +
+		"+++ b/demo.txt\n" +
+		"@@ -1,2 +1,2 @@\n" +
+		"-line1\n" +
+		"+line1-updated\n" +
+		" line2\n"
+
+	// Patch 2 mimics a b4/lore-synced mboxrd file starting with "From mboxrd@z ..."
+	mboxrdRaw := "From mboxrd@z Thu Jan  1 00:00:00 1970\n" +
+		"From: Kernel Developer <dev@kernel.org>\n" +
+		"To: linux-kernel@vger.kernel.org\n" +
+		"Subject: [PATCH 2/2] demo: update line two\n" +
+		"Message-ID: <pw-p2@kernel.org>\n" +
+		"In-Reply-To: <pw-p1@kernel.org>\n" +
+		"References: <pw-p1@kernel.org>\n" +
+		"Date: Sat, 28 Nov 2026 10:01:00 +0000\n\n" +
+		"Update line two.\n\n" +
+		"Signed-off-by: Kernel Developer <dev@kernel.org>\n" +
+		"---\n" +
+		" demo.txt | 2 +-\n" +
+		" 1 file changed, 1 insertion(+), 1 deletion(-)\n\n" +
+		"diff --git a/demo.txt b/demo.txt\n" +
+		"--- a/demo.txt\n" +
+		"+++ b/demo.txt\n" +
+		"@@ -1,2 +1,2 @@\n" +
+		" line1-updated\n" +
+		"-line2\n" +
+		"+line2-updated\n"
+
+	for _, raw := range []string{patchworkRaw, mboxrdRaw} {
+		p, addErr := store.AddMessage(constants.FolderTODO, []byte(raw), "")
+		if addErr != nil {
+			t.Fatalf("AddMessage failed: %v", addErr)
+		}
+		if _, idxErr := db.IndexEmailFile(todoFolder.ID, p); idxErr != nil {
+			t.Fatalf("IndexEmailFile failed: %v", idxErr)
+		}
+	}
+
+	outPath := filepath.Join(t.TempDir(), "clean-series.mbx")
+	res, err := server.CallTool(context.Background(), "export_thread_mbox", map[string]interface{}{
+		"message_id":  "pw-p1@kernel.org",
+		"output_path": outPath,
+	})
+	if err != nil {
+		t.Fatalf("export_thread_mbox failed: %v", err)
+	}
+	if got := res.(map[string]interface{})["patch_count"].(int); got != 2 {
+		t.Fatalf("patch_count = %d, want 2", got)
+	}
+
+	mboxBytes, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read exported mbox: %v", err)
+	}
+	mbox := string(mboxBytes)
+	if strings.Contains(mbox, "From patchwork ") {
+		t.Errorf("exported mbox retained duplicate Patchwork envelope From line:\n%s", mbox)
+	}
+	if strings.Contains(mbox, "From mboxrd@z ") {
+		t.Errorf("exported mbox retained duplicate mboxrd envelope From line:\n%s", mbox)
+	}
+
+	// Verify git am applies both patches cleanly without "Patch is empty."
+	if _, lookErr := exec.LookPath("git"); lookErr == nil {
+		repoDir := t.TempDir()
+		runGit := func(args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", args...)
+			cmd.Dir = repoDir
+			out, runErr := cmd.CombinedOutput()
+			if runErr != nil {
+				t.Fatalf("git %v failed: %v\noutput:\n%s", args, runErr, string(out))
+			}
+		}
+		runGit("init")
+		runGit("config", "user.name", "Kernel Developer")
+		runGit("config", "user.email", "dev@example.com")
+		if err := os.WriteFile(filepath.Join(repoDir, "demo.txt"), []byte("line1\nline2\n"), 0644); err != nil {
+			t.Fatalf("write seed file: %v", err)
+		}
+		runGit("add", "demo.txt")
+		runGit("commit", "-m", "initial")
+
+		runGit("am", outPath)
+
+		gotContent, err := os.ReadFile(filepath.Join(repoDir, "demo.txt"))
+		if err != nil {
+			t.Fatalf("read patched file: %v", err)
+		}
+		wantContent := "line1-updated\nline2-updated\n"
+		if string(gotContent) != wantContent {
+			t.Errorf("patched demo.txt = %q, want %q", string(gotContent), wantContent)
 		}
 	}
 }

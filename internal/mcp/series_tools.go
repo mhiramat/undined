@@ -766,10 +766,26 @@ func injectTrailersIntoRawEmail(raw []byte, trailers []string) []byte {
 	return []byte(headers + strings.Join(resultLines, "\n"))
 }
 
+func stripLeadingMboxFromLines(normalized []byte) []byte {
+	rest := normalized
+	for {
+		rest = bytes.TrimLeft(rest, "\n")
+		if !bytes.HasPrefix(rest, []byte("From ")) {
+			break
+		}
+		nl := bytes.IndexByte(rest, '\n')
+		if nl == -1 {
+			return nil
+		}
+		rest = rest[nl+1:]
+	}
+	return rest
+}
+
 func formatMboxEntry(m *database.Message, raw []byte) []byte {
-	sender := strings.TrimSpace(m.FromAddr)
-	if sender == "" {
-		sender = "MAILER-DAEMON"
+	sender := "MAILER-DAEMON"
+	if fields := strings.Fields(m.FromAddr); len(fields) > 0 {
+		sender = fields[0]
 	}
 	ts := time.Now().UTC()
 	if m.EpochTimestamp > 0 {
@@ -778,6 +794,7 @@ func formatMboxEntry(m *database.Message, raw []byte) []byte {
 	fromLine := fmt.Sprintf("From %s %s\n", sender, ts.Format(time.ANSIC))
 
 	normalized := bytes.ReplaceAll(raw, []byte("\r\n"), []byte("\n"))
+	normalized = stripLeadingMboxFromLines(normalized)
 	sepIdx := bytes.Index(normalized, []byte("\n\n"))
 	var out bytes.Buffer
 	out.WriteString(fromLine)
