@@ -456,10 +456,14 @@ agy mcp add undine ./bin/undined --mcp-stdio
 #### Available MCP Tools:
 | Tool Name | Parameters | Description |
 |---|---|---|
-| `list_recent_emails` | `folder`, `limit` | List recent email summaries filtered by mailbox folder. |
-| `search_emails` | `query`, `limit` | Full-text search emails using SQLite FTS5. |
-| `get_email` (`get_message`) | `message_id` | Retrieve full metadata, plaintext body, and attachment metadata for an email. |
-| `get_thread_context` | `message_id` | Retrieve complete thread hierarchy and diff contents. |
+| `list_recent_emails` | `folder`, `limit`, `offset`, `exclude_from`, `has_tags`, `without_tags`, `is_patch` | List recent email summaries with pagination, sender/tag/patch filters, `tags`, and `thread_id`. |
+| `list_threads` | `folder`, `limit`, `cursor`, `exclude_from`, `patches_only`, `has_tags`, `without_tags`, `sort` | Aggregate folder emails into threads/patch series with cursor pagination and triage metadata. |
+| `search_emails` | `query`, `limit`, `folder`, `has_tags`, `without_tags` | Full-text search emails using SQLite FTS5 with folder/tag filtering, `folder_name`, and `tags`. |
+| `get_email` (`get_message`) | `message_id`, `include_diff` | Retrieve locally cached email metadata, `tags`, `body_hydrated`, `trailers`, `diffstat`, attachments, and body (no IMAP fetch). |
+| `get_thread_context` | `message_id`, `include_diff`, `deduplicate` | Retrieve locally cached thread hierarchy with optional diff stripping and cross-folder deduplication. |
+| `update_email_tags` | `message_ids`, `add_tags`, `remove_tags`, `replace_tags`, `scope`, `folder`, `dry_run` | Add, remove, or replace RFC 3501 keyword tags across messages/threads with cross-folder sync, `imap_sync_queue`, and SSE updates. |
+| `list_tags` | `folder` | List configured color labels and known custom tags with optional per-folder counts. |
+| `get_user_identity` | *(none)* | Return configured user `display_name`, `primary_email`, and `aliases` (no secrets). |
 | `import_patch_series_b4` | `message_id_or_url` | Download thread from lore.kernel.org via `b4` into Maildir. |
 | `export_thread_mbox` | `message_id`, `output_path`, `patches_only` | Export a local thread/series as a `git am`-ready mbox with collected review trailers. |
 | `write_draft_message` (`write_draft`, `save_draft`) | `body`, `in_reply_to`, `to`, `cc`, `subject`, `inline_notes`, `attachments` | Stage a reply or standalone draft (with optional attachments) into Maildir `Drafts`. |
@@ -473,7 +477,7 @@ agy mcp add undine ./bin/undined --mcp-stdio
 | `post_diff_comment` | `...` | Alias for `post_review_comment`. |
 | `add_diff_comment` | `...` | Alias for `post_review_comment`. |
 
-*MCP tools strictly enforce a **Zero-SMTP-Transmission** draft-only boundary (human review and sending happen exclusively in the Web UI). All MCP tool calls write structured audit logs to `~/.cache/undined/undined.log`.*
+*MCP tools strictly enforce **Zero-SMTP-Transmission**, **Zero-Deletion / Zero-Move**, and **Local-Cache-Only** (no on-demand IMAP `FETCH`) invariants. All MCP tool calls write structured audit logs to `~/.cache/undined/undined.log`.*
 
 ---
 

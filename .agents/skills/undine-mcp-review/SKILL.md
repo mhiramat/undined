@@ -13,9 +13,11 @@ This skill serves as the independent technical reference manual for UndineD's em
 
 UndineD exposes an MCP server named `undine` that allows AI agents (such as Google Antigravity, Gemini CLI, Claude, and custom LLM review agents) to interact programmatically with the local Linux kernel email archive, patch database, and review workflow engine.
 
-### Core Safety Invariant: Zero SMTP Transmission from MCP
+### Core Safety Invariants: Zero SMTP Transmission, Zero Deletion/Move & Local-Cache-Only
 - **MCP tools MUST NEVER send email over SMTP.**
-- Agents may only read archives, export `git am`-ready mbox files, post inline review comments, update Patchwork metadata, and stage strict plain-text drafts into Maildir `Drafts` (and SQLite `patch_series_drafts` / `patch_series_items`).
+- **MCP tools MUST NEVER delete/expunge emails or move them between folders.** Processed/superseded `TODO` items are marked via `$cl_5` tags rather than moved.
+- **Local-Cache-Only reads**: MCP read tools (`get_email`, `get_thread_context`, `list_threads`) MUST NEVER trigger on-demand IMAP `FETCH`. Uncached IMAP messages return `body_hydrated: false`.
+- Agents may only read local archives, export `git am`-ready mbox files, post inline review comments, manage keyword tags (`update_email_tags`), update Patchwork metadata, and stage strict plain-text drafts into Maildir `Drafts` (and SQLite `patch_series_drafts` / `patch_series_items`).
 - Final human review, editing, and SMTP transmission happen exclusively through the UndineD Web UI.
 
 ### Relationship to `undine-review`
@@ -99,13 +101,14 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
 ### 3.2 `get_email`
 **Aliases**: `get_message`, `fetch_email`, `read_email`
 
-Finds a specific email by Message-ID (or database ID) and retrieves its complete metadata and plaintext body. If the message body is not cached in the database, Undine automatically hydrates it directly from local storage.
+Finds a specific email by Message-ID (or database ID) and retrieves its metadata, tags, trailers, diffstat, and locally cached plaintext body. Strictly local-cache-only: reads local Maildir file if present, never issues on-demand IMAP `FETCH`.
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `message_id` | `str` | Yes | — | Canonical Message-ID (with or without angle brackets `<...>`), or numeric database ID. |
 | `id` | `str` | No | `None` | Alias for `message_id`. |
+| `include_diff` | `bool` | No | `true` | If `false`, strips unified diff hunks (`diff --git ...`) from `body_plain`, returning commit message, trailers, and diffstat only. |
 
 #### Returns:
 ```json
@@ -115,31 +118,37 @@ Finds a specific email by Message-ID (or database ID) and retrieves its complete
   "message_id": "patch.1791745088.git.author@kernel.org",
   "folder_name": "b4-imports",
   "subject": "[PATCH v7 1/2] selftests/ftrace: fix path resolution",
-  "from_name": "Developer Name",
-  "from_addr": "developer@kernel.org",
+  "from_name": "Kernel Developer",
+  "from_addr": "dev@kernel.org",
   "to_addr": "linux-kernel@vger.kernel.org",
   "cc_addr": "maintainer@kernel.org",
   "date": "2026-10-12 03:35:00",
   "in_reply_to": "cover.1791745088.git.author@kernel.org",
   "references": "cover.1791745088.git.author@kernel.org",
   "body_plain": "diff --git a/tools/... b/tools/...\n...",
+  "body_hydrated": true,
   "is_patch": true,
   "is_read": true,
   "is_replied": false,
   "has_notes": false,
-  "file_path": ".../maildir/b4-imports/cur/..."
+  "file_path": ".../maildir/b4-imports/cur/...",
+  "tags": ["$cl_1"],
+  "trailers": { "Fixes": ["123456789abc (\"prev commit\")"] },
+  "diffstat": " tools/testing/selftests/ftrace/test | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)"
 }
 ```
 
 ---
 
 ### 3.3 `get_thread_context`
-Retrieves the complete thread conversation tree and diff content for a given message ID.
+Retrieves the thread conversation tree for a given message ID using locally cached bodies (no on-demand IMAP `FETCH`).
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `message_id` | `str` | Yes | — | Canonical Message-ID (with or without `<...>`) or numeric DB ID of any message in the target thread. |
+| `include_diff` | `bool` | No | `true` | If `false`, strips unified diff hunks from `body_plain` while keeping commit logs, trailers, and diffstat. |
+| `deduplicate` | `bool` | No | `true` | If `true`, merges duplicate copies of the same `Message-ID` across folders, preferring hydrated copies and returning all folder names/IDs in `folders` and `folder_ids`. |
 
 #### Returns:
 Array of messages ordered by hierarchy:
@@ -148,26 +157,19 @@ Array of messages ordered by hierarchy:
   {
     "id": 101,
     "message_id": "cover.1791745088.git.author@kernel.org",
+    "folder_name": "TODO",
+    "folders": ["TODO", "kernel.org/maintainer"],
+    "folder_ids": [3, 7],
     "subject": "[PATCH v7 0/2] selftests/ftrace improvements",
-    "from_name": "Developer Name",
-    "from_addr": "developer@kernel.org",
+    "from_name": "Kernel Developer",
+    "from_addr": "dev@kernel.org",
     "date": "2026-10-12 03:30:00",
     "in_reply_to": null,
     "references": null,
     "body_plain": "This series improves test coverage...",
-    "is_patch": false
-  },
-  {
-    "id": 102,
-    "message_id": "patch.1791745088.git.author@kernel.org",
-    "subject": "[PATCH v7 1/2] selftests/ftrace: fix path resolution",
-    "from_name": "Developer Name",
-    "from_addr": "developer@kernel.org",
-    "date": "2026-10-12 03:35:00",
-    "in_reply_to": "cover.1791745088.git.author@kernel.org",
-    "references": "cover.1791745088.git.author@kernel.org",
-    "body_plain": "diff --git a/tools/... b/tools/...",
-    "is_patch": true
+    "body_hydrated": true,
+    "is_patch": false,
+    "tags": ["$cl_1"]
   }
 ]
 ```
@@ -175,13 +177,18 @@ Array of messages ordered by hierarchy:
 ---
 
 ### 3.4 `list_recent_emails`
-Lists recent email summaries, optionally filtered by folder name.
+Lists recent email summaries with optional folder, pagination, sender exclusion, tag, and patch filters.
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `folder` | `str` | No | `null` | Folder name to filter by (e.g. `"b4-imports"`, `"Drafts"`, `"TODO"`, `"Sent"`). Omit to query across all folders. |
 | `limit` | `int` | No | `20` | Maximum number of message summaries to return. |
+| `offset` | `int` | No | `0` | Pagination offset. |
+| `exclude_from` | `list[str]` | No | `[]` | Email addresses to exclude (`"self"` expands to configured user emails). |
+| `has_tags` | `list[str]` | No | `[]` | Return only messages carrying at least one of these tags. |
+| `without_tags` | `list[str]` | No | `[]` | Exclude messages carrying any of these tags. |
+| `is_patch` | `bool` | No | `null` | Optional filter for patch messages (`true` / `false`). |
 
 #### Returns:
 ```json
@@ -190,11 +197,13 @@ Lists recent email summaries, optionally filtered by folder name.
     "id": 102,
     "message_id": "patch.1791745088.git.author@kernel.org",
     "subject": "[PATCH v7 1/2] selftests/ftrace: fix path resolution",
-    "from_addr": "developer@kernel.org",
-    "from_name": "Developer Name",
+    "from_addr": "dev@kernel.org",
+    "from_name": "Kernel Developer",
     "date": "2026-10-12 03:35:00",
     "is_patch": true,
-    "is_read": false
+    "is_read": false,
+    "tags": ["$cl_1"],
+    "thread_id": "thr_9f2a1c4e"
   }
 ]
 ```
@@ -202,16 +211,72 @@ Lists recent email summaries, optionally filtered by folder name.
 ---
 
 ### 3.5 `search_emails`
-Performs full-text search across indexed kernel emails using SQLite FTS5.
+Performs full-text search across indexed kernel emails using SQLite FTS5, with optional folder and tag filtering.
 
 #### Parameters:
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `query` | `str` | Yes | — | Search query terms or FTS5 syntax (e.g. `"ftrace AND kprobe"`). |
 | `limit` | `int` | No | `20` | Maximum search results to return. |
+| `folder` | `str` | No | `null` | Optional folder name filter. |
+| `has_tags` | `list[str]` | No | `[]` | Return only matches with at least one of these tags. |
+| `without_tags` | `list[str]` | No | `[]` | Exclude matches carrying any of these tags. |
 
 #### Returns:
-Array of matching messages containing matched headline snippets, subject, and sender metadata.
+Array of matching messages containing `folder_name`, `tags`, matched headline snippets, subject, and sender metadata.
+
+---
+
+### 3.5a `list_threads`
+Aggregates messages in a folder into threads / patch series with series-level counts, tag filtering, and cursor pagination.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `folder` | `str` | No | `null` | Folder name to scope threads (e.g. `"TODO"`). |
+| `limit` | `int` | No | `30` | Threads per page (`1`–`200`). |
+| `cursor` | `str` | No | `null` | Opaque pagination cursor returned in `next_cursor`. |
+| `exclude_from` | `list[str]` | No | `[]` | Root author email addresses to exclude (`"self"` expands to user identity emails). |
+| `patches_only` | `bool` | No | `false` | Return only threads containing at least one patch in the target folder. |
+| `has_tags` | `list[str]` | No | `[]` | Return only threads carrying at least one of these tags. |
+| `without_tags` | `list[str]` | No | `[]` | Exclude threads carrying any of these tags (e.g. `["$cl_1","$cl_2","$cl_3","$cl_5"]`). |
+| `sort` | `str` | No | `"latest_date_desc"` | `"latest_date_desc"` or `"latest_date_asc"`. |
+
+#### Returns:
+`{"total_threads": int, "returned": int, "next_cursor": str|null, "threads": [{"thread_id", "root_message_id", "subject", "author_name", "author_addr", "latest_date", "patch_count_in_folder", "total_messages_in_thread", "reply_count", "folder_message_ids", "tags", "tags_consistent", "has_my_reply", "has_unhydrated_replies"}]}`
+
+---
+
+### 3.5b `update_email_tags`
+Adds, removes, or replaces UndineD / IMAP keyword tags (e.g. `$cl_1`–`$cl_3`, `$cl_5`) on existing emails or threads without sending, moving, or deleting mail.
+
+#### Parameters:
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `message_ids` | `list[str]` | Yes | — | `1`–`100` target Message-IDs (with or without `<...>`) or numeric DB IDs. |
+| `add_tags` | `list[str]` | No | `[]` | RFC 3501 `flag-keyword` tags to add (`[A-Za-z0-9$_\-.]`, 1–64 chars). |
+| `remove_tags` | `list[str]` | No | `[]` | Tags to remove (cannot overlap `add_tags` or combine with `replace_tags`). |
+| `replace_tags` | `list[str]` | No | `null` | If non-null, replaces the entire user-tag set (mutually exclusive with `add_tags`/`remove_tags`). |
+| `scope` | `str` | No | `"message"` | `"message"` or `"thread"` (expands to all messages in the thread). |
+| `folder` | `str` | No | `null` | Optional folder guard (e.g. `"TODO"`). Default `null` updates all folder copies sharing the target `Message-ID`(s). |
+| `dry_run` | `bool` | No | `false` | Validates and returns planned tag diffs without mutating DB, `imap_sync_queue`, or SSE. |
+
+#### Returns:
+`{"success": true, "dry_run": bool, "scope": str, "folder_filter": str|null, "updated_count": int, "unchanged_count": int, "imap_sync_queued_count": int, "results": [{"id", "message_id", "folder_name", "before_tags", "after_tags", "changed", "imap_sync_queued"}], "not_found": list[str]}`
+
+---
+
+### 3.5c `list_tags`
+Lists configured UndineD color labels (ordered by priority rank) and known custom tags with optional per-folder message counts.
+- **Parameters**: `folder: Optional[str] = None`
+- **Returns**: `{"color_labels": [{"tag", "display_name", "color", "count"}], "custom_tags": [{"tag", "count"}]}`
+
+---
+
+### 3.5d `get_user_identity`
+Returns the configured user's display name and deduplicated email addresses/aliases for self-authorship filtering (never exposes passwords or tokens).
+- **Parameters**: *(none)*
+- **Returns**: `{"display_name": str, "primary_email": str, "aliases": list[str]}`
 
 ---
 

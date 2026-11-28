@@ -47,29 +47,44 @@ Posts an inline review comment onto a patch email diff at a specified `FILE:LINE
   *Note*: If `target` points to an existing file in the patch diff but outside the hunk context window, `mapped` is `false`, but the comment is still persisted as a draft so review feedback is not lost.
 
 ### 2. `get_email` (and alias `get_message`)
-Finds a specific email by Message-ID (or database ID) and returns its full metadata and plaintext body (`body_plain`).
+Finds a specific email by Message-ID (or database ID) and returns its metadata, `tags`, `body_hydrated`, `trailers`, `diffstat`, and locally cached plaintext body (`body_plain`, never triggering IMAP `FETCH`).
 - **Parameters**:
   - `message_id` (*str*, required): Canonical Message-ID (with or without angle brackets `<...>`), or numeric database ID.
-- **Returns**: Complete email object including `body_plain`, `subject`, `from_name`, `from_addr`, `date`, `is_patch`.
+  - `include_diff` (*bool*, optional, default `true`): Set `false` to strip unified diff hunks while keeping commit log, trailers, and diffstat.
+- **Returns**: Complete email object including `body_plain`, `body_hydrated`, `tags`, `trailers`, `diffstat`, `subject`, `from_name`, `from_addr`, `date`, `is_patch`.
 
 ### 3. `list_recent_emails`
-Lists recent email threads and patch messages.
+Lists recent email summaries with optional pagination and triage filters.
 - **Parameters**:
-  - `folder` (*str*, optional): Filter by folder name (e.g. `"b4-imports"` or `"Inbox"`).
+  - `folder` (*str*, optional): Filter by folder name (e.g. `"b4-imports"`, `"TODO"`, or `"Inbox"`).
   - `limit` (*int*, optional): Maximum number of messages to return (default: `20`).
-- **Returns**: Array of message summaries with `message_id`, `subject`, `from_addr`, `is_patch`, `date`.
+  - `offset` (*int*, optional): Pagination offset (default: `0`).
+  - `exclude_from` (*list[str]*, optional): Exclude senders (`"self"` expands to user identity emails).
+  - `has_tags` / `without_tags` (*list[str]*, optional): Filter by attached tags.
+  - `is_patch` (*bool*, optional): Filter by patch status.
+- **Returns**: Array of message summaries with `message_id`, `subject`, `from_addr`, `is_patch`, `date`, `tags`, `thread_id`.
 
 ### 4. `search_emails`
-Searches indexed email messages using SQLite full-text search (FTS5).
+Searches indexed email messages using SQLite full-text search (FTS5) with optional `folder`, `has_tags`, and `without_tags` filters.
 - **Parameters**:
   - `query` (*str*, required): Search terms or FTS query.
   - `limit` (*int*, optional): Maximum results (default: `20`).
+  - `folder` (*str*, optional): Filter by folder name.
+  - `has_tags` / `without_tags` (*list[str]*, optional): Filter by tags.
 
 ### 5. `get_thread_context`
-Retrieves the complete thread conversation and patch diff content.
+Retrieves the thread conversation and patch content using locally cached bodies (no IMAP `FETCH`).
 - **Parameters**:
   - `message_id` (*str*, required): Root or member message ID of the thread.
-- **Returns**: List of messages in thread hierarchy with full `body_plain` content and patch diffs.
+  - `include_diff` (*bool*, optional, default `true`): Set `false` during lightweight triage to strip unified diffs.
+  - `deduplicate` (*bool*, optional, default `true`): Merge duplicate copies across folders, preferring hydrated copies and returning `folders` / `folder_ids`.
+- **Returns**: List of messages in thread hierarchy with `body_plain`, `body_hydrated`, `tags`, `folders`, `folder_ids`.
+
+### 5a. Triage Tools (`list_threads`, `update_email_tags`, `list_tags`, `get_user_identity`)
+- **`list_threads`**: Aggregates a folder (e.g. `"TODO"`) by patch series/thread with `limit`, `cursor`, `exclude_from` (`"self"`), `patches_only`, `has_tags`, `without_tags`, and `sort`.
+- **`update_email_tags`**: Adds/removes/replaces RFC 3501 keyword tags (e.g. `$cl_1`–`$cl_3` for priority, `$cl_5` for done/superseded) on `message_ids` (`scope: "message" | "thread"`, optional `folder` guard, `dry_run`), syncing across all copies by default and enqueueing IMAP copies without deleting or moving mail.
+- **`list_tags`**: Lists configured color labels and known custom tags with optional per-folder counts.
+- **`get_user_identity`**: Returns configured `display_name`, `primary_email`, and `aliases` (no secrets).
 
 ### 6. `write_draft_message` (and aliases `write_draft`, `save_draft`)
 Writes a complete draft response into the local `Drafts` folder for human review, editing, and transmission.

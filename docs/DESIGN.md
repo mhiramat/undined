@@ -334,21 +334,25 @@ When initializing the database (`db.InitDB()`):
 
 ## **6. Model Context Protocol (MCP) Server (`internal/mcp`)**
 
-Exposes 19 JSON-RPC 2.0 tool entries (13 core tools plus backward-compatible aliases) matching the `undine-mcp-review` skill, strictly enforcing a **Zero-SMTP-Transmission** draft-only boundary:
-1. `list_recent_emails`
-2. `search_emails`
-3. `get_email` (alias: `get_message`)
-4. `get_thread_context`
-5. `import_patch_series_b4`
-6. `write_draft_message` (aliases: `write_draft`, `save_draft`)
-7. `create_review_draft`
-8. `create_mail_draft`
-9. `stage_patch_series`
-10. `export_thread_mbox`
-11. `get_patchwork_patch_info`
-12. `list_my_delegated_patches`
-13. `update_patchwork_patch`
-14. `post_review_comment` (aliases: `post_diff_comment`, `add_diff_comment`)
+Exposes 23 JSON-RPC 2.0 tool entries (18 core tools plus backward-compatible aliases) matching the `undine-mcp-review` skill, strictly enforcing **Zero-SMTP-Transmission**, **Zero-Deletion / Zero-Move**, and **Local-Cache-Only** (no on-demand IMAP `FETCH`) safety boundaries:
+1. `list_recent_emails` (supports `offset`, `exclude_from` with `"self"`, `has_tags`, `without_tags`, `is_patch`; returns `tags`, `thread_id`)
+2. `list_threads` (series/thread-level aggregation, cursor pagination, `exclude_from`, `patches_only`, `has_tags`, `without_tags`, `sort`)
+3. `search_emails` (supports `folder`, `has_tags`, `without_tags`; returns `folder_name`, `tags`)
+4. `get_email` (alias: `get_message`; supports `include_diff`, returns `tags`, `body_hydrated`, `trailers`, `diffstat`)
+5. `get_thread_context` (supports `include_diff`, `deduplicate`, returns `tags`, `folders`, `folder_ids`, `body_hydrated`)
+6. `update_email_tags` (RFC 3501 keyword tag add/remove/replace, `scope=message|thread`, cross-folder sync, `folder` guard, `dry_run`, SQLite `imap_sync_queue`, SSE `email_tags_updated`)
+7. `list_tags` (configured color labels and custom tags with optional folder counts)
+8. `get_user_identity` (configured `display_name`, `primary_email`, `aliases` without secrets)
+9. `import_patch_series_b4`
+10. `write_draft_message` (aliases: `write_draft`, `save_draft`)
+11. `create_review_draft`
+12. `create_mail_draft`
+13. `stage_patch_series`
+14. `export_thread_mbox`
+15. `get_patchwork_patch_info`
+16. `list_my_delegated_patches`
+17. `update_patchwork_patch`
+18. `post_review_comment` (aliases: `post_diff_comment`, `add_diff_comment`)
 
 * **Transports**:
   * **STDIO Mode**: `undined --mcp-stdio`. Standard input/output reserved strictly for JSON-RPC 2.0; logs written to file.

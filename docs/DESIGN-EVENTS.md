@@ -87,6 +87,9 @@ data: {"folder":"INBOX","new_count":3,"timestamp":1761722400}
 | `message.updated` | Mail Store / Tag API | `{"message_id": "string", "folder": "string", "flags": ["string"]}` | Refresh message flags/tags in the active list or detail view.
 
  |
+| `email_tags_updated` | MCP (`update_email_tags`) | `{"updates": [{"id": int, "folder": "string", "message_id": "string", "tags": ["string"]}]}` | Patch matching rows' color tags in-place in `SummaryPane` and invalidate cached message detail.
+
+ |
 | `thread.hydrated` | `b4` Runner (`import-b4`) | `{"root_message_id": "string", "imported_count": int, "timestamp": int64}` | If viewing the affected thread or folder, fetch `GET /api/threads/{id}` and `GET /api/folders`.
 
  |
