@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -524,6 +525,16 @@ func (s *Server) StartDataVersionWatcher(ctx context.Context, checkInterval time
 					s.Events.Publish("system.resync_required", map[string]any{
 						"reason": "external_db_change",
 					})
+					if s.IMAP != nil && ctx.Err() == nil {
+						go func() {
+							if ctx.Err() != nil {
+								return
+							}
+							if _, qErr := s.IMAP.ProcessTagSyncQueue(); qErr != nil {
+								log.Printf("Warning: IMAP tag sync queue flush after external DB change failed: %v", qErr)
+							}
+						}()
+					}
 				}
 			}
 		}

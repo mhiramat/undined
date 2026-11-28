@@ -47,6 +47,7 @@ type Poller struct {
 	Events  *events.Hub
 
 	mu              sync.RWMutex
+	tagSyncMu       sync.Mutex
 	syncProgress    map[int64]*SyncStatus
 	cancelRequested map[int64]bool
 	running         bool
@@ -760,7 +761,7 @@ func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFl
 		for _, f := range removeFlags {
 			flagItems = append(flagItems, f)
 		}
-		if err := c.UidStore(seqSet, imap.RemoveFlags, flagItems, nil); err != nil {
+		if err := c.UidStore(seqSet, imap.FormatFlagsOp(imap.RemoveFlags, true), flagItems, nil); err != nil {
 			return fmt.Errorf("failed to remove flags %v: %w", removeFlags, err)
 		}
 	}
@@ -770,7 +771,7 @@ func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFl
 		for _, f := range addFlags {
 			flagItems = append(flagItems, f)
 		}
-		if err := c.UidStore(seqSet, imap.AddFlags, flagItems, nil); err != nil {
+		if err := c.UidStore(seqSet, imap.FormatFlagsOp(imap.AddFlags, true), flagItems, nil); err != nil {
 			return fmt.Errorf("failed to add flags %v: %w", addFlags, err)
 		}
 	}
@@ -778,9 +779,129 @@ func (p *Poller) UpdateIMAPMessageFlags(folderName string, imapUID uint32, addFl
 	return nil
 }
 
-// PollOnce polls all configured sync_folders once.
+// ProcessTagSyncQueue drains pending tag changes from imap_sync_queue and applies
+// UID STORE +/-FLAGS.SILENT to the remote IMAP server. Concurrent invocations are
+// serialized via tagSyncMu. Failures are recorded on each queue item without aborting
+// local SQLite state.
+func (p *Poller) ProcessTagSyncQueue() (int, error) {
+	if p == nil || p.DB == nil || p.Config == nil || p.Config.IMAP.Username == "" {
+		return 0, nil
+	}
+
+	p.tagSyncMu.Lock()
+	defer p.tagSyncMu.Unlock()
+
+	const (
+		batchLimit  = 100
+		maxAttempts = 5
+	)
+
+	items, err := p.DB.ListPendingIMAPSyncQueue(batchLimit)
+	if err != nil {
+		return 0, fmt.Errorf("list pending imap sync queue: %w", err)
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	c, err := p.Connect()
+	if err != nil {
+		for _, item := range items {
+			if markErr := p.DB.MarkIMAPSyncQueueFailed(item.ID, err.Error(), maxAttempts); markErr != nil {
+				log.Printf("IMAP tag sync: failed to record error for queue item %d: %v", item.ID, markErr)
+			}
+		}
+		return 0, err
+	}
+	defer c.Logout()
+
+	totalSynced := 0
+	selectedFolder := ""
+
+	for len(items) > 0 {
+		batchSynced := 0
+		for _, item := range items {
+			if item.IMAPUID == 0 || item.FolderName == "" || (len(item.AddTags) == 0 && len(item.RemoveTags) == 0) {
+				if markErr := p.DB.MarkIMAPSyncQueueDone(item.ID); markErr != nil {
+					log.Printf("IMAP tag sync: failed to mark no-op queue item %d done: %v", item.ID, markErr)
+				}
+				continue
+			}
+
+			if selectedFolder != item.FolderName {
+				if _, selErr := c.Select(item.FolderName, false); selErr != nil {
+					log.Printf("IMAP tag sync: failed to select folder %s for queue item %d: %v", item.FolderName, item.ID, selErr)
+					if markErr := p.DB.MarkIMAPSyncQueueFailed(item.ID, selErr.Error(), maxAttempts); markErr != nil {
+						log.Printf("IMAP tag sync: failed to record error for queue item %d: %v", item.ID, markErr)
+					}
+					selectedFolder = ""
+					continue
+				}
+				selectedFolder = item.FolderName
+			}
+
+			seqSet := new(imap.SeqSet)
+			seqSet.AddNum(item.IMAPUID)
+
+			var storeErr error
+			if len(item.RemoveTags) > 0 {
+				flagItems := make([]interface{}, 0, len(item.RemoveTags))
+				for _, f := range item.RemoveTags {
+					flagItems = append(flagItems, f)
+				}
+				if err := c.UidStore(seqSet, imap.FormatFlagsOp(imap.RemoveFlags, true), flagItems, nil); err != nil {
+					storeErr = fmt.Errorf("UID STORE -FLAGS.SILENT %v: %w", item.RemoveTags, err)
+				}
+			}
+			if storeErr == nil && len(item.AddTags) > 0 {
+				flagItems := make([]interface{}, 0, len(item.AddTags))
+				for _, f := range item.AddTags {
+					flagItems = append(flagItems, f)
+				}
+				if err := c.UidStore(seqSet, imap.FormatFlagsOp(imap.AddFlags, true), flagItems, nil); err != nil {
+					storeErr = fmt.Errorf("UID STORE +FLAGS.SILENT %v: %w", item.AddTags, err)
+				}
+			}
+
+			if storeErr != nil {
+				log.Printf("IMAP tag sync warning for message %d (UID %d in %s): %v", item.EmailID, item.IMAPUID, item.FolderName, storeErr)
+				if markErr := p.DB.MarkIMAPSyncQueueFailed(item.ID, storeErr.Error(), maxAttempts); markErr != nil {
+					log.Printf("IMAP tag sync: failed to record error for queue item %d: %v", item.ID, markErr)
+				}
+				continue
+			}
+
+			if markErr := p.DB.MarkIMAPSyncQueueDone(item.ID); markErr != nil {
+				log.Printf("IMAP tag sync: failed to mark queue item %d done: %v", item.ID, markErr)
+				continue
+			}
+			batchSynced++
+			totalSynced++
+		}
+
+		if len(items) < batchLimit || batchSynced == 0 {
+			break
+		}
+		items, err = p.DB.ListPendingIMAPSyncQueue(batchLimit)
+		if err != nil {
+			return totalSynced, fmt.Errorf("list next pending imap sync queue batch: %w", err)
+		}
+	}
+
+	return totalSynced, nil
+}
+
+// PollOnce polls all configured sync_folders once and drains any queued IMAP tag updates.
 func (p *Poller) PollOnce() error {
-	if p.Config.IMAP.Username == "" || len(p.Config.IMAP.SyncFolders) == 0 {
+	if p.Config.IMAP.Username == "" {
+		return nil
+	}
+
+	if _, qErr := p.ProcessTagSyncQueue(); qErr != nil {
+		log.Printf("IMAP tag sync queue flush warning: %v", qErr)
+	}
+
+	if len(p.Config.IMAP.SyncFolders) == 0 {
 		return nil
 	}
 

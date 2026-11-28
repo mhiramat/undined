@@ -1005,3 +1005,122 @@ func TestSyncFullFolder_AllMessagesRemovedResetsCheckpoint(t *testing.T) {
 		t.Errorf("expected last_synced_uid to be reset to 0, got %d", fAfter.LastSyncedUID)
 	}
 }
+
+func TestPollerProcessTagSyncQueue(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := database.NewDatabase(filepath.Join(tmpDir, "queue.db"))
+	if err != nil {
+		t.Fatalf("init db: %v", err)
+	}
+	defer db.Close()
+
+	store := maildir.NewMaildirStore(filepath.Join(tmpDir, "Mail"))
+	folder, err := db.GetOrCreateFolder("INBOX", true)
+	if err != nil {
+		t.Fatalf("create folder: %v", err)
+	}
+
+	msgID, err := db.InsertHeaderSummary(folder.ID, 42, []byte(
+		"Message-ID: <q-1@example.com>\r\nFrom: Alice <alice@example.com>\r\nSubject: Queue test\r\nDate: Wed, 18 Nov 2026 10:00:00 +0000\r\n\r\n",
+	), true, `\Seen`)
+	if err != nil {
+		t.Fatalf("insert header: %v", err)
+	}
+
+	queued, err := db.BatchUpdateEmailTags([]database.TagUpdateOp{{
+		EmailID:         msgID,
+		FolderID:        folder.ID,
+		FolderName:      "INBOX",
+		IMAPUID:         42,
+		NewFlags:        `\Seen $cl_1`,
+		AfterTags:       []string{"$cl_1"},
+		AddTags:         []string{"$cl_1"},
+		RemoveTags:      []string{"$cl_2"},
+		EnqueueIMAPSync: true,
+	}})
+	if err != nil || queued != 1 {
+		t.Fatalf("expected 1 queued tag op, got queued=%d err=%v", queued, err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	var mu sync.Mutex
+	var storeCmds []string
+	go func() {
+		for {
+			conn, aErr := ln.Accept()
+			if aErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				_, _ = fmt.Fprintf(c, "* OK Mock IMAP Ready\r\n")
+				scanner := bufio.NewScanner(c)
+				for scanner.Scan() {
+					line := scanner.Text()
+					parts := strings.Fields(line)
+					if len(parts) < 2 {
+						continue
+					}
+					tag := parts[0]
+					cmd := strings.ToUpper(parts[1])
+					switch cmd {
+					case "CAPABILITY":
+						_, _ = fmt.Fprintf(c, "* CAPABILITY IMAP4rev1\r\n%s OK CAPABILITY completed\r\n", tag)
+					case "LOGIN":
+						_, _ = fmt.Fprintf(c, "%s OK LOGIN completed\r\n", tag)
+					case "SELECT":
+						_, _ = fmt.Fprintf(c, "* 1 EXISTS\r\n%s OK [READ-WRITE] SELECT completed\r\n", tag)
+					case "UID":
+						mu.Lock()
+						storeCmds = append(storeCmds, line)
+						mu.Unlock()
+						_, _ = fmt.Fprintf(c, "%s OK UID STORE completed\r\n", tag)
+					case "LOGOUT":
+						_, _ = fmt.Fprintf(c, "* BYE\r\n%s OK LOGOUT completed\r\n", tag)
+						return
+					default:
+						_, _ = fmt.Fprintf(c, "%s OK\r\n", tag)
+					}
+				}
+			}(conn)
+		}
+	}()
+
+	cfg := config.NewDefaultConfig()
+	cfg.IMAP.Host = "127.0.0.1"
+	cfg.IMAP.Port = ln.Addr().(*net.TCPAddr).Port
+	cfg.IMAP.UseSSL = false
+	cfg.IMAP.Username = "dev@example.com"
+	cfg.IMAP.Password = "secret"
+
+	poller := NewPoller(cfg, store, db)
+	synced, err := poller.ProcessTagSyncQueue()
+	if err != nil {
+		t.Fatalf("ProcessTagSyncQueue failed: %v", err)
+	}
+	if synced != 1 {
+		t.Errorf("expected 1 synced queue item, got %d", synced)
+	}
+	pending, _ := db.CountPendingIMAPSyncQueue()
+	if pending != 0 {
+		t.Errorf("expected 0 pending items after flush, got %d", pending)
+	}
+
+	mu.Lock()
+	cmds := append([]string(nil), storeCmds...)
+	mu.Unlock()
+	if len(cmds) != 2 {
+		t.Fatalf("expected 2 UID STORE commands (-FLAGS.SILENT and +FLAGS.SILENT), got %v", cmds)
+	}
+	if !strings.Contains(cmds[0], "-FLAGS.SILENT") || !strings.Contains(cmds[0], "$cl_2") {
+		t.Errorf("expected first command to remove $cl_2 silently, got %q", cmds[0])
+	}
+	if !strings.Contains(cmds[1], "+FLAGS.SILENT") || !strings.Contains(cmds[1], "$cl_1") {
+		t.Errorf("expected second command to add $cl_1 silently, got %q", cmds[1])
+	}
+}

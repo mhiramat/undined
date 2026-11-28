@@ -4,6 +4,7 @@
  */
 
 import { fetchConfig, fetchFolders, fetchMessages, fetchMessageDetail, fetchMessageComments, fetchSeriesList, setCachedMessageDetail, invalidateMessageDetailCache, clearMessageDetailCache, isEventSuppressed } from "./api.js";
+import { getCachedTags, getTagPriorityRank } from "./tags.js";
 
 function showToast(message, type = "info") {
   if (typeof document === "undefined") return;
@@ -196,6 +197,63 @@ export class NotificationChannel {
         }
       } catch (err) {
         console.warn("[UndineD SSE] Error handling message.updated event:", err);
+      }
+    });
+
+    this.es.addEventListener("email_tags_updated", (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const updates = Array.isArray(data?.updates) ? data.updates : [];
+        if (updates.length === 0) return;
+
+        const available = getCachedTags();
+        const lowerMap = new Map();
+        for (const [k, v] of Object.entries(available)) {
+          lowerMap.set(k.toLowerCase(), { key: k, tag: v.tag || k, color: v.color || "" });
+        }
+
+        const rawMsgs = this.store.getState().rawMessages || [];
+        for (const item of updates) {
+          if (!item) continue;
+          const msgDbId = item.id;
+          const cleanMsgId = String(item.message_id || "").replace(/^<|>$/g, "").trim();
+          if (msgDbId != null) invalidateMessageDetailCache(msgDbId);
+          if (cleanMsgId) invalidateMessageDetailCache(cleanMsgId);
+
+          const localMsg = rawMsgs.find(
+            (m) =>
+              (msgDbId != null && m.id === msgDbId) ||
+              (cleanMsgId && (m.message_id || "").replace(/^<|>$/g, "").trim() === cleanMsgId)
+          );
+          if (!localMsg) continue;
+
+          const rawTags = Array.isArray(item.tags) ? item.tags : [];
+          const resolvedTags = rawTags
+            .map((t) => {
+              const k = String(t || "").trim();
+              if (!k) return null;
+              const def = lowerMap.get(k.toLowerCase());
+              return def ? { ...def } : { key: k, tag: k, color: "" };
+            })
+            .filter(Boolean)
+            .sort((a, b) => {
+              const ra = getTagPriorityRank(a.key);
+              const rb = getTagPriorityRank(b.key);
+              if (ra !== rb) return ra - rb;
+              return String(a.key).localeCompare(String(b.key));
+            });
+
+          const primary = resolvedTags[0] || null;
+          this.store.updateMessageTag(
+            localMsg.id,
+            primary ? primary.key : null,
+            primary ? primary.tag : null,
+            primary ? primary.color : null,
+            resolvedTags
+          );
+        }
+      } catch (err) {
+        console.warn("[UndineD SSE] Error handling email_tags_updated event:", err);
       }
     });
 
