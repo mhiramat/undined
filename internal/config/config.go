@@ -28,6 +28,66 @@ type ResolvedTag struct {
 	Color string `json:"color"`
 }
 
+// UserIdentity holds sanitized sender identity information for self-authorship checks.
+type UserIdentity struct {
+	DisplayName  string   `json:"display_name"`
+	PrimaryEmail string   `json:"primary_email"`
+	Aliases      []string `json:"aliases"`
+}
+
+// UserIdentity returns the configured display name, primary email, and deduplicated
+// email aliases without exposing any secrets, tokens, or passwords.
+func (c *Config) UserIdentity() UserIdentity {
+	id := UserIdentity{
+		Aliases: make([]string, 0),
+	}
+	if c == nil {
+		return id
+	}
+
+	id.DisplayName = strings.TrimSpace(c.SMTP.FromName)
+	id.PrimaryEmail = strings.TrimSpace(c.SMTP.FromEmail)
+	if id.PrimaryEmail == "" {
+		id.PrimaryEmail = strings.TrimSpace(c.Patchwork.Email)
+	}
+	if id.PrimaryEmail == "" && strings.Contains(c.IMAP.Username, "@") {
+		id.PrimaryEmail = strings.TrimSpace(c.IMAP.Username)
+	}
+
+	seen := make(map[string]struct{})
+	addAlias := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || !strings.Contains(addr, "@") {
+			return
+		}
+		lower := strings.ToLower(addr)
+		if _, exists := seen[lower]; exists {
+			return
+		}
+		seen[lower] = struct{}{}
+		id.Aliases = append(id.Aliases, addr)
+	}
+
+	addAlias(id.PrimaryEmail)
+	for _, alias := range c.SMTP.Aliases {
+		addAlias(alias)
+	}
+
+	isDefaultPrimary := strings.EqualFold(id.PrimaryEmail, constants.DefaultFromEmail)
+	if pwEmail := strings.TrimSpace(c.Patchwork.Email); pwEmail != "" {
+		if isDefaultPrimary || !strings.EqualFold(pwEmail, constants.DefaultFromEmail) {
+			addAlias(pwEmail)
+		}
+	}
+	if imapUser := strings.TrimSpace(c.IMAP.Username); strings.Contains(imapUser, "@") {
+		if isDefaultPrimary || !strings.EqualFold(imapUser, constants.DefaultFromEmail) {
+			addAlias(imapUser)
+		}
+	}
+
+	return id
+}
+
 // GeneralConfig holds server, storage, and editor settings.
 type GeneralConfig struct {
 	Host                   string `toml:"host" json:"host"`
@@ -106,9 +166,10 @@ type SMTPConfig struct {
 	Username         string `toml:"username" json:"username"`
 	PasswordCmd      string `toml:"password_cmd" json:"password_cmd"`
 	Password         string `toml:"password" json:"password"`
-	FromName         string `toml:"from_name" json:"from_name"`
-	FromEmail        string `toml:"from_email" json:"from_email"`
-	SignatureFile    string `toml:"signature_file" json:"signature_file"`
+	FromName         string   `toml:"from_name" json:"from_name"`
+	FromEmail        string   `toml:"from_email" json:"from_email"`
+	Aliases          []string `toml:"aliases,omitempty" json:"aliases,omitempty"`
+	SignatureFile    string   `toml:"signature_file" json:"signature_file"`
 	ContentType      string `toml:"content_type" json:"content_type"`
 	TransferEncoding string `toml:"transfer_encoding" json:"transfer_encoding"`
 }

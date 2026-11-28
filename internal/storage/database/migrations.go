@@ -116,6 +116,9 @@ func initDB(db *sql.DB) error {
 	if err := reconcileCrossFolderTags(db); err != nil {
 		log.Printf("[database] warning: failed to reconcile cross-folder tags: %v", err)
 	}
+	if err := syncAllEmailTagsFromFlags(db); err != nil {
+		log.Printf("[database] warning: failed to sync email_tags table: %v", err)
+	}
 
 	return nil
 }
@@ -432,6 +435,12 @@ func isMaildirFilePath(filePath string) bool {
 	return strings.Contains(filePath, ":2,") ||
 		strings.Contains(filePath, "/cur/") ||
 		strings.Contains(filePath, "/new/")
+}
+
+// IsStandardSystemFlagToken reports whether tok is a standard IMAP or Maildir
+// system flag token (e.g. \Seen, Seen, S, R, D, F, P, T, or combinations thereof).
+func IsStandardSystemFlagToken(tok string) bool {
+	return isStandardSystemFlagToken(tok)
 }
 
 func isStandardSystemFlagToken(tok string) bool {

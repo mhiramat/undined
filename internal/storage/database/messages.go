@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"undined-go/internal/constants"
 	"undined-go/internal/storage/maildir"
@@ -65,6 +66,7 @@ type Message struct {
 type SearchResult struct {
 	ID               int64        `json:"id"`
 	MessageID        string       `json:"message_id"`
+	FolderName       string       `json:"folder_name,omitempty"`
 	Subject          string       `json:"subject"`
 	FromName         string       `json:"from_name"`
 	FromAddr         string       `json:"from_addr"`
@@ -213,7 +215,6 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert/update message in db: %w", err)
 	}
-	d.MarkInProcessWrite()
 
 	if parsed.ToAddr != "" || parsed.CcAddr != "" {
 		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
@@ -228,9 +229,16 @@ func (d *Database) IndexEmailFile(folderID int64, filePath string, imapUID ...ui
 			folderID, msgID,
 		).Scan(&existingID)
 		if err2 == nil {
-			return existingID, nil
+			id = existingID
 		}
 	}
+	if id > 0 {
+		if syncErr := syncEmailTagsDB(d.DB, id, flags); syncErr != nil {
+			d.MarkInProcessWrite()
+			return id, fmt.Errorf("failed to sync email_tags for message %d: %w", id, syncErr)
+		}
+	}
+	d.MarkInProcessWrite()
 	return id, nil
 }
 
@@ -490,13 +498,25 @@ func (d *Database) SetMessageReplied(id int64, replied bool) error {
 	return err
 }
 
-// SetMessageFlags updates flags string for a message.
+// SetMessageFlags atomically updates the flags column and synchronizes email_tags for a message.
 func (d *Database) SetMessageFlags(id int64, flags string) error {
-	_, err := d.DB.Exec("UPDATE messages SET flags = ? WHERE id = ?;", flags, id)
-	if err == nil {
-		d.MarkInProcessWrite()
+	tx, err := d.DB.Begin()
+	if err != nil {
+		return fmt.Errorf("begin set flags transaction: %w", err)
 	}
-	return err
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("UPDATE messages SET flags = ? WHERE id = ?;", flags, id); err != nil {
+		return fmt.Errorf("update flags for message %d: %w", id, err)
+	}
+	if err := syncEmailTagsTx(tx, id, ExtractUserTagsFromFlags(flags), time.Now().Unix()); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit set flags transaction: %w", err)
+	}
+	d.MarkInProcessWrite()
+	return nil
 }
 
 // SetMessageIsPatch updates the is_patch flag for a message.
@@ -583,79 +603,7 @@ func (d *Database) DeleteMessage(id int64) error {
 
 // Search performs full-text search using SQLite FTS5 with matched snippets.
 func (d *Database) Search(query string, limit int) ([]*SearchResult, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-
-	cleanQuery := strings.TrimSpace(query)
-	if cleanQuery == "" {
-		return []*SearchResult{}, nil
-	}
-
-	sqlQuery := `
-	SELECT
-		m.id,
-		m.message_id,
-		m.subject,
-		COALESCE(m.from_name, ''),
-		m.from_addr,
-		m.date,
-		m.is_patch,
-		m.is_read,
-		m.is_replied,
-		COALESCE(m.flags, ''),
-		COALESCE(m.in_reply_to, ''),
-		COALESCE(m.references_header, ''),
-		snippet(messages_fts, 3, '<mark>', '</mark>', '...', 32) AS matched_snippet
-	FROM messages_fts
-	JOIN messages m ON messages_fts.rowid = m.id
-	WHERE messages_fts MATCH ?
-	ORDER BY rank
-	LIMIT ?;
-	`
-
-	rows, err := d.DB.Query(sqlQuery, cleanQuery, limit)
-	if err != nil {
-		// If query had special characters causing FTS syntax error, try quoted phrase search
-		escaped := fmt.Sprintf(`"%s"`, strings.ReplaceAll(cleanQuery, `"`, `""`))
-		rows, err = d.DB.Query(sqlQuery, escaped, limit)
-		if err != nil {
-			return nil, fmt.Errorf("FTS5 search error: %w", err)
-		}
-	}
-	defer rows.Close()
-
-	results := make([]*SearchResult, 0)
-	for rows.Next() {
-		var r SearchResult
-		var isPatch, isRead, isReplied any
-		if err := rows.Scan(
-			&r.ID,
-			&r.MessageID,
-			&r.Subject,
-			&r.FromName,
-			&r.FromAddr,
-			&r.Date,
-			&isPatch,
-			&isRead,
-			&isReplied,
-			&r.Flags,
-			&r.InReplyTo,
-			&r.ReferencesHeader,
-			&r.Snippet,
-		); err != nil {
-			return nil, err
-		}
-		r.IsPatch = toBool(isPatch)
-		r.IsRead = toBool(isRead)
-		r.IsReplied = toBool(isReplied)
-		r.Tags = []MessageTag{}
-		results = append(results, &r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return d.SearchWithOptions(query, SearchOptions{Limit: limit})
 }
 
 // InsertHeaderSummary inserts or updates a message row using lightweight header bytes without a body or file.
@@ -727,7 +675,6 @@ func (d *Database) InsertHeaderSummary(
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert header summary: %w", err)
 	}
-	d.MarkInProcessWrite()
 
 	if parsed.ToAddr != "" || parsed.CcAddr != "" {
 		_ = d.RecordKnownAddressesFromHeaders(parsed.ToAddr, parsed.CcAddr)
@@ -737,8 +684,15 @@ func (d *Database) InsertHeaderSummary(
 	if err != nil || id == 0 {
 		var existingID int64
 		_ = d.DB.QueryRow("SELECT id FROM messages WHERE folder_id = ? AND message_id = ?;", folderID, msgID).Scan(&existingID)
-		return existingID, nil
+		id = existingID
 	}
+	if id > 0 {
+		if syncErr := syncEmailTagsDB(d.DB, id, flags); syncErr != nil {
+			d.MarkInProcessWrite()
+			return id, fmt.Errorf("failed to sync email_tags for header summary %d: %w", id, syncErr)
+		}
+	}
+	d.MarkInProcessWrite()
 	return id, nil
 }
 

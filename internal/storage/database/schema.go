@@ -95,6 +95,28 @@ CREATE TABLE IF NOT EXISTS patch_series_items (
     PRIMARY KEY (series_id, seq_index)
 );
 
+CREATE TABLE IF NOT EXISTS email_tags (
+    email_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (email_id, tag)
+);
+
+CREATE TABLE IF NOT EXISTS imap_sync_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    folder_name TEXT NOT NULL,
+    imap_uid INTEGER NOT NULL,
+    add_tags TEXT NOT NULL DEFAULT '',
+    remove_tags TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_in_reply_to ON messages(in_reply_to);
 CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(folder_id);
 CREATE INDEX IF NOT EXISTS idx_messages_epoch ON messages(epoch_timestamp DESC);
@@ -119,6 +141,9 @@ CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_key ON patch_series_drafts(se
 CREATE INDEX IF NOT EXISTS idx_patch_series_drafts_status ON patch_series_drafts(status);
 CREATE INDEX IF NOT EXISTS idx_patch_series_items_draft_msg_id ON patch_series_items(draft_msg_id);
 CREATE INDEX IF NOT EXISTS idx_patch_series_items_rfc_msgid ON patch_series_items(rfc_message_id);
+
+CREATE INDEX IF NOT EXISTS idx_email_tags_tag ON email_tags(tag, email_id);
+CREATE INDEX IF NOT EXISTS idx_imap_sync_queue_status ON imap_sync_queue(status, id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     message_id UNINDEXED,

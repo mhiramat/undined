@@ -74,6 +74,7 @@ func getSectionSpecs() []sectionSpec {
 				{key: "password_cmd", getValue: func(c *Config) any { return c.SMTP.PasswordCmd }},
 				{key: "from_name", getValue: func(c *Config) any { return c.SMTP.FromName }},
 				{key: "from_email", getValue: func(c *Config) any { return c.SMTP.FromEmail }},
+				{key: "aliases", getValue: func(c *Config) any { return c.SMTP.Aliases }},
 				{key: "signature_file", isPath: true, getValue: func(c *Config) any { return c.SMTP.SignatureFile }},
 				{key: "content_type", getValue: func(c *Config) any { return c.SMTP.ContentType }},
 				{key: "transfer_encoding", getValue: func(c *Config) any { return c.SMTP.TransferEncoding }},
